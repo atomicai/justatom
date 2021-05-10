@@ -36,3 +36,11 @@ dill # pickle extension for (de-)serialization
 #onnxruntime_tools
 psutil
 sentencepiece
+
+langdetect
+elasticsearch
+python-docx
+tika
+faiss-cpu
+"SPARQLWrapper"
+"pymilvus"
