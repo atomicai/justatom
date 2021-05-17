@@ -42,5 +42,5 @@ elasticsearch
 python-docx
 tika
 faiss-cpu
-"SPARQLWrapper"
-"pymilvus"
+SPARQLWrapper
+pymilvus
