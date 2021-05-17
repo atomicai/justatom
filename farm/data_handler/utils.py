@@ -243,7 +243,7 @@ def read_dpr_json(file, max_samples=None, proxies=None, num_hard_negatives=1, nu
                     random.shuffle(val)
                 for passage in val[:num_positives]:
                     passages.append({
-                        "title": passage["title"],
+                        "title": passage.get("title", ""),
                         "text": passage["text"],
                         "label": "positive",
                         "external_id": passage.get("passage_id", uuid.uuid4().hex.upper()[0:8])
@@ -253,7 +253,7 @@ def read_dpr_json(file, max_samples=None, proxies=None, num_hard_negatives=1, nu
                     random.shuffle(val)
                 for passage in val[:num_hard_negatives]:
                     passages.append({
-                        "title": passage["title"],
+                        "title": passage.get("title", ""),
                         "text": passage["text"],
                         "label": "hard_negative",
                         "external_id": passage.get("passage_id", uuid.uuid4().hex.upper()[0:8])
