@@ -60,11 +60,12 @@ def read_tsv(filename, rename_columns, quotechar='"', delimiter="\t", skiprows=N
     df = pd.read_csv(
         filename,
         sep=delimiter,
-        encoding="utf-8",
+        encoding="utf-8-sig",
         quotechar=quotechar,
         dtype=str,
         skiprows=skiprows,
         header=header,
+        skipinitialspace=True,
         usecols=columns_needed,
     )
     if max_samples:
