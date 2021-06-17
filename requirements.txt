@@ -44,3 +44,4 @@ tika
 faiss-cpu
 SPARQLWrapper
 pymilvus
+emot==2.1
