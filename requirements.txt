@@ -47,3 +47,4 @@ pymilvus
 emot==2.1
 random_name
 pika==1.2.0
+lib-programname==1.1.8
