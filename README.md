@@ -24,11 +24,11 @@ In order to find the correct passage containing the answer you have to understan
 
 ---
 
-> Given the $k$ and the collection of question-answer pairs $C$, «how good the retrieval system is» could be defined mathematically as 
+> Given the `k` and the collection of question-answer pairs `C`, «how good the retrieval system is» could be defined mathematically as 
 
 ![](./docs/math/retriever-eval.svg)
 
-Here $R$ (aka «Retriever») is just a function that returns the "small" subset of documents (e.g. $k=5$)
+Here `R` (aka «Retriever») is just a function that returns the "small" subset of documents (e.g. `k=5`)
 
 ![](./docs/math/def-retriever.svg)
 
