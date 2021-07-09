@@ -38,6 +38,6 @@ class Consumer(Base):
         
     def consume(self):
         channel = self.connection.channel()
-        channel.exchange_declare(exchange=self.config['exchange'], exchange_type=self.config['exchange_type'], durable=True)..
+        channel.exchange_declare(exchange=self.config['exchange'], exchange_type=self.config['exchange_type'], durable=True)
         channel.basic_consume(queue=self.queue_name, on_message_callback=self.report_fn, auto_ack=True)
         channel.start_consuming()
