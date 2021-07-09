@@ -26,27 +26,32 @@ In order to find the correct passage containing the answer you have to understan
 
 > Given the $k$ and the collection of question-answer pairs $C$, «how good the retrieval system is» could be defined mathematically as 
 
-$\varphi(R)_k=\sum_{i=1}^{m} \frac{|R(\vec{q}_i, C)\cap\{c_i\}|}{m}$. 
+![](./docs/math/retriever-eval.svg)
 
 Here $R$ (aka «Retriever») is just a function that returns the "small" subset of documents (e.g. $k=5$)
 
-$R=R(q,C)\mapsto \{d_1, d_2, ..., d_5\}$
+![](./docs/math/def-retriever.svg)
 
 ---
-## Comparison on dataset «RQ» - aka Russian Questions (by `PJSC Sberbank`)
+#### Comparison on dataset «RQ» - aka Russian Questions (by `PJSC Sberbank`)
 
 ![atom_vs_elastic_rq](./docs/atom_vs_elastic_rq.png)
 
-## Comparison on dataset «NQ» - aka Natural Questions (by `Google LLC`)
+---
+
+#### Comparison on dataset «NQ» - aka Natural Questions (by `Google LLC`)
 
 ![atom_vs_elastic_nq](./docs/atom_vs_elastic_nq.png)
 
-## Comparison on dataset «CQ» - aka Custom Questions (by `Igor Tarlinskiy` and `Alexey Schekalkov` and `Korzh Daniil` and `Semen Tarlinskiy`)
+---
+
+#### Comparison on dataset «CQ» - aka Custom Questions (by `Igor Tarlinskiy` and `Alexey Schekalkov` and `Korzh Daniil` and `Semen Tarlinskiy`)
 
 ![atom_vs_elastic_cq](./docs/atom_vs_elastic_cq.png)
 
+---
 
-> Please note that this repository is not Open Source or Free. All rights are reserved and You cannot modify or redistribute this code without explicit permission from the copyright holder.
+Please note that this repository is not Open Source or Free. All rights are reserved and You cannot modify or redistribute this code without explicit permission from the copyright holder.
 
 P.S. Contact us at `justanatom@protonmail.com` and we will build the unique and amazing `AI` solution for you.
 
