@@ -1,51 +1,24 @@
-# basics
-setuptools
-wheel
 # PyTorch
-# Temp. disabled the next line as it gets currently resolved to https://download.pytorch.org/whl/rocm3.8/torch-1.7.1%2Brocm3.8-cp38-cp38-linux_x86_64.whl
-#--find-links=https://download.pytorch.org/whl/torch_stable.html
-torch==1.8.1
-sentencepiece
+torch==2.1.1
+pytorch-lightning==2.1.2
+torchdata==0.7.1
+torchmetrics==1.2.0
 # progress bars in model download and training scripts
 tqdm
 # Accessing files from S3 directly.
-boto3
+boto3==1.34.7
 # Used for downloading models over HTTP
 requests
 # Scipy & sklearn for stats in run_classifier
-scipy>=1.3.2
+scipy>=1.11.4
 sklearn
 # Metrics or logging related
-seqeval
-mlflow<=1.13.1
-wandb==0.10.14
+seqeval==1.2.2
+wandb==0.16.1
 # huggingface repository
-transformers
+transformers==4.30.2
 # accessing dictionary elements with dot notation
-dotmap
-# for inference-rest-apis
-Werkzeug==0.16.1
-flask
-flask-restplus
-flask-cors
-dill # pickle extension for (de-)serialization
-# optional for inference
-#fasttext==0.9.1
-# Inference with ONNX models. Install onnxruntime-gpu for Inference on GPUs
-#onnxruntime
-#onnxruntime_tools
-psutil
-sentencepiece
-
-langdetect
-elasticsearch
-python-docx
-tika
-faiss-cpu
-SPARQLWrapper
-pymilvus
-emot==2.1
-random_name
-pika==1.2.0
-lib-programname==1.1.8
-nicely==0.2.0
+dotmap==1.3.30
+python-dotenv==1.0.0
+loguru==0.7.2
+weaviate-client==3.24.2
