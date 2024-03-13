@@ -1,0 +1,14 @@
+extas:
+  models:
+    - gpt-4-0613
+    - gpt-4-0314
+  save_extas_path: ".dataset/extas"
+
+index:
+  index_name: "polaroidsai"
+  igni_model_path: weights/bs=128_esm=DistanceAcc_margin=1.2
+  batch_size: 16
+  similarity: l2
+  do_index: true
+  do_eval: true
+  igni_filters_path: null
