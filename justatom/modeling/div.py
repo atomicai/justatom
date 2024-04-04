@@ -8,6 +8,20 @@ import copy
 from typing import List, Union, Optional, Dict, Any
 
 
+def _get_clones(module, N):
+    # FIXME: copy.deepcopy() is not defined on nn.module
+    return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
+
+
+class Conv1DBlock(nn.Module):
+    """
+    A Convolutional Block module for transforming N x a onto N x b tensor. Designed to work with textual embeddings (not CV).
+    """
+
+    def __init__(self, kernel_size):
+        super().__init__()
+
+
 class ResBlock(nn.Module):
     """
     A Residual Block module.
@@ -65,11 +79,6 @@ class FFBlock(nn.Module):
     def forward(self, X):
         logits = self.feed_forward(X)
         return logits
-
-
-def _get_clones(module, N):
-    # FIXME: copy.deepcopy() is not defined on nn.module
-    return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
 class IEmbedding(nn.Module):
