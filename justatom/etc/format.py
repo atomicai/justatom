@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 from itertools import islice
 import simplejson as json
+from fastnumbers import try_real
 
 
 def convert_date_to_rfc3339(date: str) -> str:
@@ -22,6 +23,24 @@ def convert_date_to_rfc3339(date: str) -> str:
         converted_date = parsed_datetime.isoformat()
 
     return converted_date
+
+
+def maybe_number(x):
+    y = try_real(x)
+    if type(y) is str:
+        return False
+    else:
+        return y
+
+
+def maybe_json(x):
+    if issubclass(type(x), Path):
+        return True
+    try:
+        json.dumps(x)
+        return True
+    except:
+        return False
 
 
 def get_batches_from_generator(iterable, n):
@@ -104,14 +123,4 @@ def grouper(iterable, n, worker_id=0, total_workers=1):
     return iter(lambda: list(islice(iterable, n)), [])
 
 
-def is_json(x):
-    if issubclass(type(x), Path):
-        return True
-    try:
-        json.dumps(x)
-        return True
-    except:
-        return False
-
-
-__all__ = ["is_json", "convert_date_to_rfc3339", "get_batches_from_generator", "grouper"]
+__all__ = ["convert_date_to_rfc3339", "maybe_number", "maybe_json", "get_batches_from_generator", "grouper"]
