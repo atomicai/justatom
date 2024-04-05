@@ -94,4 +94,11 @@ class DuplicateDocumentError(DocumentStoreError, ValueError):
         super().__init__(message=message)
 
 
+class DeserializationError(IError):
+    """Exception for issues that occur when attempt to deserialize forbidden object"""
+
+    def __init__(self, message: Optional[str] = None):
+        super().__init__(message=message)
+
+
 __all__ = ["FilterError", "DuplicateDocumentError", "DocumentStoreError", "ModelingError"]
