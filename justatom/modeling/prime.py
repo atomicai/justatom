@@ -1,14 +1,11 @@
 from pathlib import Path
 
 import simplejson as json
-from justatom.configuring.prime import Config
 import torch
 import torch.nn as nn
 from torch.functional import F
 from justatom.modeling.mask import ILanguageModel, IBaseModel
 
-from justatom.etc.pattern import singleton
-from justatom.tooling.stl import merge_in_order
 from typing import Union, Optional, Dict, Any
 from justatom.modeling.div import IEmbedding, IAttention, MLAttention
 
@@ -120,22 +117,4 @@ class IRECModel(IBaseModel):
         pass
 
 
-@singleton
-class IInjector:
-
-    def inject(self, model_name, model_props: Optional[Dict] = None) -> IBaseModel:
-        # Update model_props via lazy way through config.yaml
-        model_props = merge_in_order(model_props, Config.model.props)
-        if model_name.is_dir():
-            model = IBaseModel.load(Path(model_name), **model_props)
-        elif str(model_name).lower() in ("ipfbert", "ifpbert", "fipbert"):
-            model = IPFBERTModel(**model_props)
-        else:
-            model = None
-        return model
-
-
-Injector = IInjector()
-
-
-__all__ = ["IPFBERTModel", "E5SMALLModel", "E5Model", "E5LARGEModel", "Injector"]
+__all__ = ["IPFBERTModel", "E5SMALLModel", "E5Model", "E5LARGEModel"]
