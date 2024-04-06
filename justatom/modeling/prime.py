@@ -7,11 +7,10 @@ import torch.nn as nn
 from torch.functional import F
 from justatom.modeling.mask import ILanguageModel, IBaseModel
 
-from sir.tooling.io import chunkify
 from justatom.etc.pattern import singleton
 from justatom.tooling.stl import merge_in_order
 from typing import Union, Optional, Dict, Any
-from sir.modeling.div import IEmbedding, IAttention, MLAttention
+from justatom.modeling.div import IEmbedding, IAttention, MLAttention
 
 
 class E5Model(ILanguageModel):
