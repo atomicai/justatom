@@ -1,5 +1,5 @@
 from typing import Any, Dict, Type
-from justatom.erc.errors import DeserializationError
+from justatom.etc.errors import DeserializationError
 
 
 def generate_qualified_class_name(cls: Type[object]) -> str:
