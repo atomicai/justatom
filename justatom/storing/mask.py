@@ -45,7 +45,7 @@ def scale_to_unit_interval(self, score: float, similarity: Optional[str]) -> flo
         return float(expit(score / 100))
 
 
-class IDBDocStore(abc.ABC):
+class IEVENTDocStore(abc.ABC):
 
     @abc.abstractmethod
     def add_event(self, e):
@@ -65,6 +65,21 @@ class IDBDocStore(abc.ABC):
 
     @abc.abstractmethod
     def del_document(self, uuid):
+        pass
+
+
+class IDFDocStore(abc.ABC):
+
+    @abc.abstractmethod
+    def count_per_col(self):
+        pass
+
+    @abc.abstractmethod
+    def parse_metrics_per_col(self, col):
+        pass
+
+    @abc.abstractmethod
+    def samples_per_col(self, col, n_samples):
         pass
 
 
@@ -198,4 +213,4 @@ class INNDocStore(abc.ABC):
         pass
 
 
-__all__ = ["IDocStore"]
+__all__ = ["IEVENTDocStore", "INNDocStore", "IDFDocStore"]
