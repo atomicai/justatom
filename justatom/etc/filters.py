@@ -10,7 +10,7 @@ from weaviate.collections.classes.filters import Filter, FilterReturn
 
 def convert_filters(filters: Dict[str, Any]) -> FilterReturn:
     """
-    Convert filters from Haystack format to Weaviate format.
+    Convert filters from intuitive format to Weaviate format.
     """
     if not isinstance(filters, dict):
         msg = "Filters must be a dictionary"
