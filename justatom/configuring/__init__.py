@@ -1,4 +1,4 @@
-from sir.configuring.prime import Config
-from sir.configuring.xload import Loader
+from justatom.configuring.prime import Config
+from justatom.configuring.xload import Loader
 
 __all__ = ["Config", "Loader"]
