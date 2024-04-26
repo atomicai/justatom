@@ -6,3 +6,8 @@ class DuplicatePolicy(Enum):
     SKIP = "skip"
     OVERWRITE = "overwrite"
     FAIL = "fail"
+
+
+class SearchPolicy(Enum):
+
+    BM25 = "bm25"
