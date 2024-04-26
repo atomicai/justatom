@@ -3,6 +3,7 @@ from dotmap import DotMap
 from justatom.etc.pattern import singleton
 from pathlib import Path
 import yaml
+import dotenv
 from loguru import logger
 import os
 
@@ -30,6 +31,7 @@ class IConfig:
                 if k.startswith("_"):
                     continue
                 setattr(self, k, v)
+        dotenv.load_dotenv()
 
 
 Config = IConfig()
