@@ -11,8 +11,9 @@ from weaviate.collections.classes.data import DataObject
 from weaviate.config import AdditionalConfig
 from weaviate.embedded import EmbeddedOptions
 from weaviate.util import generate_uuid5
+from weaviate.classes.query import MetadataQuery
 
-from justatom.etc.types import DuplicatePolicy
+from justatom.etc.types import DuplicatePolicy, SearchPolicy
 from justatom.etc.errors import DocumentStoreError, DuplicateDocumentError
 from justatom.etc.filters import convert_filters
 from justatom.etc.serialization import default_from_dict, default_to_dict
@@ -322,16 +323,16 @@ class WeaviateDocStore:
         return Document.from_dict(document_data)
 
     def _query(self) -> List[Dict[str, Any]]:
-        properties = [p.name for p in self._collection.config.get().properties]
+        # properties = [p.name for p in self._collection.config.get().properties]
         try:
-            result = self._collection.iterator(include_vector=True, return_properties=properties)
+            result = self._collection.iterator(include_vector=True, return_properties=None)
         except weaviate.exceptions.WeaviateQueryError as e:
             msg = f"Failed to query documents in Weaviate. Error: {e.message}"
             raise DocumentStoreError(msg) from e
         return result
 
     def _query_with_filters(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        properties = [p.name for p in self._collection.config.get().properties]
+        # properties = [p.name for p in self._collection.config.get().properties]
         # When querying with filters we need to paginate using limit and offset as using
         # a cursor with after is not possible. See the official docs:
         # https://weaviate.io/developers/weaviate/api/graphql/additional-operators#cursor-with-after
@@ -352,7 +353,7 @@ class WeaviateDocStore:
                     include_vector=True,
                     limit=DEFAULT_QUERY_LIMIT,
                     offset=offset,
-                    return_properties=properties,
+                    return_properties=None,
                 )
             except weaviate.exceptions.WeaviateQueryError as e:
                 msg = f"Failed to query documents in Weaviate. Error: {e.message}"
@@ -483,7 +484,7 @@ class WeaviateDocStore:
         ids = [x.properties["_original_id"] for x in it]
         if len(ids) > 0:
             try:
-                self.delete_documents(ids=ids)
+                self.delete_documents(document_ids=ids)
             except:
                 logger.error(
                     f"Error deleting documents for {self._collection_settings.get('class')}, see logs for more details."
@@ -494,38 +495,79 @@ class WeaviateDocStore:
         else:
             logger.info(f"Nothing to delete in {self._collection_settings.get('class')}")
 
-    def _bm25_retrieval(
+    def search_by_keywords(
         self,
         query: str,
+        policy: Optional[SearchPolicy] = SearchPolicy.BM25,
         filters: Optional[Dict[str, Any]] = None,
         top_k: Optional[int] = None,
+        include_vector: Optional[bool] = False,
     ) -> List[Document]:
-        properties = [p.name for p in self._collection.config.get().properties]
-        result = self._collection.query.bm25(
+        # properties = [p.name for p in self._collection.config.get().properties]
+        if policy == SearchPolicy.BM25:
+            result = self._collection.query.bm25(
+                query=query,
+                filters=convert_filters(filters) if filters else None,
+                limit=top_k,
+                include_vector=include_vector,
+                query_properties=["content"],
+                return_properties=None,
+                return_metadata=MetadataQuery(distance=True, score=True, explain_score=True, certainty=True),
+            )
+        else:
+            msg = (
+                f"You specified {str(policy)} that is not compatable with [search_by_keywords]. Only [BM25] is avalaible"
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        return [self._to_document(doc) for doc in result.objects]
+
+    def search(
+        self,
+        query: str,
+        query_embedding: List[float],
+        rank_policy: Optional[str] = None,
+        alpha: Optional[float] = 0.22,
+        filters: Optional[Dict[str, Any]] = None,
+        top_k: Optional[int] = None,
+        return_metadata: Optional[List[str]] = None,
+        include_vector: Optional[bool] = False,
+    ) -> List[Document]:
+        """
+        This method assumes the hybrid search with one of the present `ranking` methods out there.
+        """
+        return_metadata = (
+            MetadataQuery(distance=True, score=True, explain_score=True, certainty=True)
+            if return_metadata is None
+            else return_metadata
+        )
+        result = self._collection.query.hybrid(
             query=query,
-            filters=convert_filters(filters) if filters else None,
+            vector=query_embedding,
+            alpha=alpha,
             limit=top_k,
-            include_vector=True,
+            return_metadata=return_metadata,
+            include_vector=include_vector,
             query_properties=["content"],
-            return_properties=properties,
-            return_metadata=["score"],
         )
 
         return [self._to_document(doc) for doc in result.objects]
 
-    def _embedding_retrieval(
+    def search_by_embedding(
         self,
         query_embedding: List[float],
         filters: Optional[Dict[str, Any]] = None,
         top_k: Optional[int] = None,
         distance: Optional[float] = None,
         certainty: Optional[float] = None,
+        return_metadata: Optional[List[str]] = None,
     ) -> List[Document]:
         if distance is not None and certainty is not None:
             msg = "Can't use 'distance' and 'certainty' parameters together"
             raise ValueError(msg)
-
-        properties = [p.name for p in self._collection.config.get().properties]
+        return_metadata = ["certainty"] if return_metadata is None else return_metadata
+        # properties = [p.name for p in self._collection.config.get().properties]
         result = self._collection.query.near_vector(
             near_vector=query_embedding,
             distance=distance,
@@ -533,8 +575,8 @@ class WeaviateDocStore:
             include_vector=True,
             filters=convert_filters(filters) if filters else None,
             limit=top_k,
-            return_properties=properties,
-            return_metadata=["certainty"],
+            return_properties=None,
+            return_metadata=return_metadata,
         )
 
         return [self._to_document(doc) for doc in result.objects]
