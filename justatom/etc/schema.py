@@ -79,8 +79,8 @@ class Document:
                     " See https://github.com/deepset-ai/haystack/pull/1910 for details)"
                 )
 
-        if embedding is not None:
-            embedding = np.asarray(embedding)
+        # if embedding is not None:
+        #     embedding = np.asarray(embedding)
         self.embedding = embedding
 
         # Create a unique ID (either new one, or one from user input)

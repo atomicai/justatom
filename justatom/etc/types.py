@@ -11,3 +11,11 @@ class DuplicatePolicy(Enum):
 class SearchPolicy(Enum):
 
     BM25 = "bm25"
+
+
+class LineSmoothChoice(Enum):
+
+    NONE = "none"
+    MAVG = "moving_average"
+    LOESS = "loess"
+    POLY = "poly"
