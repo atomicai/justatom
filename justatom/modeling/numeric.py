@@ -6,7 +6,7 @@ import scipy as sc
 @singleton
 class NUMGenerator:
 
-    SHAPES = "sphere"
+    SHAPES = ["sphere"]
 
     def __init__(self):
         pass
