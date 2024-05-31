@@ -13,6 +13,15 @@ def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
+def loss_per_head_sum(loss_per_head: List[torch.Tensor], global_step: Optional[int] = None, batch: Optional[Dict] = None):
+    """
+    Sums up the loss of each prediction head.
+
+    :param loss_per_head: List of losses.
+    """
+    return sum(loss_per_head)
+
+
 class Conv1DBlock(nn.Module):
     """
     A Convolutional Block module for transforming N x a onto N x b tensor. Designed to work with textual embeddings (not CV).
