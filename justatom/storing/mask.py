@@ -3,7 +3,6 @@ from typing import Dict, List, Optional
 from loguru import logger
 import numpy as np
 
-from justatom.etc.filter import FilterType
 from justatom.etc.schema import Document
 from justatom.etc.errors import DuplicateDocumentError
 
@@ -71,7 +70,7 @@ class IEVENTDocStore(abc.ABC):
 class IDFDocStore(abc.ABC):
 
     @abc.abstractmethod
-    def count_per_col(self):
+    def count_per_col(self, col):
         pass
 
     @abc.abstractmethod
