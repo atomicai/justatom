@@ -1,7 +1,7 @@
 from pathlib import Path
 import os
 from loguru import logger
-import lightning as L
+import pytorch_lightning as L
 from justatom.etc import delete_folder
 
 
