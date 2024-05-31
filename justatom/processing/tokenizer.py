@@ -56,7 +56,7 @@ class WHITESPACETokenizer(ITokenizer):
 
     @classmethod
     def load(cls, config, where):
-        vocab = ignite_vocabulary(where)
+        vocab = ignite_vocab_tokens(where)
         tokens = ignite_special_tokens(where)
         props = merge_in_order(tokens, config)
         return cls(vocab=vocab, **props)
@@ -112,7 +112,7 @@ def ignite_hf_tokenizer(
     )
 
 
-def ignite_vocabulary(where) -> Dict[str, int]:
+def ignite_vocab_tokens(where) -> Dict[str, int]:
     fp = Path(where) / "vocab.json"
     if not fp.exists():
         msg = f"The vocab file {str(fp)} doesn't exist. Did you save it by calling `save_pretrained(...)` ?"
