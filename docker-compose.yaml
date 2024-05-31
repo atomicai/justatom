@@ -8,9 +8,10 @@ services:
       - '2211'
       - --scheme
       - http
-    image: semitechnologies/weaviate:1.22.8
+    image: cr.weaviate.io/semitechnologies/weaviate:1.24.5
     ports:
       - 2211:2211
+      - 50051:50051
     volumes:
       - weaviatedb:/var/lib/weaviate
     restart: on-failure:0
