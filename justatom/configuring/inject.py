@@ -6,7 +6,7 @@ from justatom.etc.pattern import singleton
 from justatom.modeling.mask import IBaseModel
 from justatom.modeling.prime import IPFBERTModel, E5Model, E5LARGEModel, E5SMALLModel
 from justatom.processing.mask import IProcessor
-from justatom.processing.prime import M1LMProcessor, M2LMProcessor, ATOMICProcessor
+from justatom.processing.prime import M1Processor, M2Processor, ATOMICProcessor, INFERProcessor
 from justatom.configuring.prime import Config
 
 
@@ -40,10 +40,10 @@ class IInjector:
             processor_props = merge_in_order(props, Config.processor.props)
             if component_name.is_dir():
                 component = IProcessor.load(Path(component_name), **processor_props)
-            elif str(component_name).upper() in ("M1LM"):
-                component = M1LMProcessor(**processor_props)
-            elif str(component_name).upper() in ("M2LM"):
-                component = M2LMProcessor(**processor_props)
+            elif str(component_name).upper() in ("M1"):
+                component = M1Processor(**processor_props)
+            elif str(component_name).upper() in ("M2"):
+                component = M2Processor(**processor_props)
             elif str(component_name).upper() in ("ATOMIC"):
                 component = ATOMICProcessor(**processor_props)
             else:
