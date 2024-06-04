@@ -1,24 +1,53 @@
 from pathlib import Path
-
+from tqdm.autonotebook import tqdm
 import simplejson as json
+from typing import Union, Optional, Dict, Any, List, Callable
+from collections.abc import Iterator
+
 import torch
+from torch import Tensor
+from transformers import AutoModel, AutoTokenizer
+import numpy as np
 import torch.nn as nn
 from torch.functional import F
-from justatom.modeling.mask import ILanguageModel, IBaseModel
 
-from typing import Union, Optional, Dict, Any
+from justatom.modeling.mask import ILanguageModel, IBaseModel, IDocEmbedder
 from justatom.modeling.div import IEmbedding, IAttention, MLAttention
 
 
 class E5Model(ILanguageModel):
+    """Base E5 family semantic model from hugging face"""
+
     pass
 
 
-class E5SMALLModel(ILanguageModel):
+class E5SModel(ILanguageModel):
+    """Small E5 family semantic model from huggingface"""
+
     pass
 
 
-class E5LARGEModel(ILanguageModel):
+class E5LModel(ILanguageModel):
+    """Large E5 family semantic model from huggingface"""
+
+    pass
+
+
+class ATOMICModel(ILanguageModel):
+    """A Transformer Orchestration Model Involving Classification module. Base version for both inferene and high quality."""
+
+    pass
+
+
+class ATOMICSModel(ILanguageModel):
+    """A Transformer Orchestration Model Involving Classification module. Small version optimized for fast inference."""
+
+    pass
+
+
+class ATOMICLModel(ILanguageModel):
+    """A Transformer Orchestration Model Involving Classification module. Large version designed for the best quality."""
+
     pass
 
 
@@ -104,6 +133,82 @@ class IPFBERTModel(IBaseModel):
         return response
 
 
+def mean_tokens(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
+    last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+    return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
+
+
+class HFDocEmbedder(IDocEmbedder):
+    """General class for HuggingFace embedder."""
+
+    def __init__(
+        self,
+        model_name_or_path: str,
+        pooling_mode: Callable[[Tensor, Tensor], Tensor] | str = "mean",
+        prefix: str = "",
+        device: str = "cpu",
+    ):
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        self.model = AutoModel.from_pretrained(model_name_or_path)
+        self.prefix = prefix
+        self.device = device
+
+        if pooling_mode == "mean":
+            pooling_mode_func = mean_tokens
+        elif isinstance(pooling_mode, Callable[[Tensor, Tensor], Tensor]):
+            pooling_mode_func = pooling_mode
+        self._pooling_mode_func = pooling_mode_func
+
+    def encode(
+        self,
+        texts: List[str],
+        batch_size: int = 256,
+        max_length: int = 512,
+        padding: bool = True,
+        truncation: bool = True,
+        normalize_embeddings: bool = True,
+        device: str = None,
+        verbose: bool = False,
+        prefix: str = "",
+        **kwargs,
+    ) -> Iterator[np.ndarray]:
+        device = device or self.device
+        prefix = prefix or self.prefix
+
+        self.model = self.model.to(device).eval()
+
+        batch_gen = range(0, len(texts), batch_size)
+        if verbose:
+            batch_gen = tqdm(batch_gen)
+
+        for batch_begin in batch_gen:
+            batch_texts = texts[batch_begin : batch_begin + batch_size]
+            batch_texts = [f"{prefix}{text}" for text in batch_texts]
+
+            batch_inputs = self.tokenizer(
+                batch_texts,
+                max_length=max_length,
+                padding=padding,
+                truncation=truncation,
+                return_tensors="pt",
+                **kwargs,
+            )
+
+            batch_inputs = {k: vals.to(device) for k, vals in batch_inputs.items()}
+
+            with torch.no_grad():
+                outputs = self.model(**batch_inputs)
+
+            outputs = outputs.last_hidden_state.cpu()
+
+            embeddings = self._pooling_mode_func(outputs, batch_inputs["attention_mask"])
+
+            if normalize_embeddings:
+                embeddings = F.normalize(embeddings, p=2, dim=1)
+
+            yield embeddings.numpy()
+
+
 class IRECModel(IBaseModel):
     """
     RECurrent based model processing tokens sequentially one by one.
@@ -117,4 +222,4 @@ class IRECModel(IBaseModel):
         pass
 
 
-__all__ = ["IPFBERTModel", "E5SMALLModel", "E5Model", "E5LARGEModel"]
+__all__ = ["IPFBERTModel", "E5SModel", "E5Model", "HFDocEmbedder", "E5LModel"]
