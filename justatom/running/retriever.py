@@ -8,7 +8,7 @@ from justatom.etc.pattern import singleton
 from justatom.storing.mask import INNDocStore
 
 
-class AtomicRetriever(IRetrieverRunner):
+class ATOMICRetriever(IRetrieverRunner):
 
     def __init__(self, store: INNDocStore, model: ATOMICLMRunner):
         super().__init__()
@@ -52,23 +52,26 @@ class KWARGRetriever(IRetrieverRunner):
 
 
 @singleton
-class IFinder:
+class ByName:
 
-    def find(self, name: str, **kwargs) -> IRetrieverRunner:
+    def named(self, name: str, **kwargs):
+        OPS = ["keywords", "emebedding", "justatom"]
+
         if name == "keywords":
-            return KWARGRetriever(**kwargs)
+            klass = KWARGRetriever
         elif name == "embedding":
-            return EmbeddingRetriever(**kwargs)
+            klass = EmbeddingRetriever
         elif name == "justatom":
-            return AtomicRetriever(**kwargs)
+            klass = ATOMICRetriever
         else:
-            ops = ["keywords", "embedding", "justatom"]
-            msg = f"Unexpected name [{name}] passed down to {self.__name__} call. Please use one of [{','.join(ops)}]"
+            msg = f"Unknown name=[{name}] to init IRetrieverRunner instance. Use one of {','.join(OPS)}"
             logger.error(msg)
             raise ValueError(msg)
 
+        return klass(**kwargs)
 
-Finder = IFinder()
+
+API = ByName()
 
 
-__all__ = ["KWARGRetriever", "EmbeddingRetriever", "Finder"]
+__all__ = ["KWARGRetriever", "EmbeddingRetriever", "API"]
