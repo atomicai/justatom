@@ -3,7 +3,9 @@ from quart import Quart, request, session
 from quart_session import Session
 import simplejson as json
 from justatom.storing.weaviate import Finder as StoreFinder
-from justatom.running.retriever import Finder as RetrieverFinder
+from justatom.running.retriever import API as RetrieverApi
+from justatom.running.indexer import API as IndexerApi
+from justatom.storing.dataset import API as DatasetApi
 from loguru import logger
 
 from pathlib import Path
@@ -40,8 +42,27 @@ async def search():
         data.get("top_k", 2),
     )
     store = StoreFinder.find(collection_name)
-    retriever = RetrieverFinder.find(search_by, store=store)
+    retriever = RetrieverApi.named(search_by, store=store)
     session["query"] = query
     response = retriever.retrieve_topk(queries=[query], top_k=top_k)
     logger.info(response)
     return json.dumps({"docs": response}, ensure_ascii=False).encode("utf-8")
+
+
+@app.post("/indexing")
+async def index():
+    data = await request.get_data(parse_form_data=True)
+    data = data.decode("utf-8")
+    data = json.loads(data)
+    collection_name, dataset_name_or_url, index_by = (
+        data.get("collection_name", "Default").strip(),
+        data.get("dataset_name", "justatom"),
+        data.get("index_by", "keywords"),
+    )
+    store = StoreFinder.find(collection_name)
+    indexer = IndexerApi.named(index_by, store=store)
+    docs = list(DatasetApi.named(dataset_name_or_url).iterator())
+
+    await indexer.index(docs)
+
+    return json.dumps({"total_docs": store.count_documents()})
