@@ -1,5 +1,5 @@
 import abc
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Generator
 from loguru import logger
 import numpy as np
 
@@ -90,37 +90,26 @@ class INNDocStore(abc.ABC):
     ids_iterator = None
 
     @abc.abstractclassmethod
-    def write_documents(self, docs, index: str = None):
+    def write_documents(self, docs, **kwargs):
         pass
 
     @abc.abstractclassmethod
-    def get_document_by_id(
-        self, id: str, index: Optional[str] = None, headers: Optional[Dict[str, str]] = None
-    ) -> Optional[Document]:
+    def get_document_by_id(self, id: str, headers: Optional[Dict[str, str]] = None) -> Optional[Document]:
         pass
 
     @abc.abstractmethod
-    def get_document_count(
-        self,
-        filters: Optional[FilterType] = None,
-        index: Optional[str] = None,
-        only_documents_without_embedding: bool = False,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> int:
+    def delete_all_documents(self) -> bool:
         pass
 
-    def __iter__(self):
-        if not self.ids_iterator:
-            self.ids_iterator = [x.id for x in self.get_all_documents()]
-        return self
+    @abc.abstractmethod
+    def count_documents(self) -> int:
+        pass
 
-    def describe_documents(self, index=None):
+    def describe_documents(self):
         """
         Statistics of the documents
         """
-        if index is None:
-            index = self.index
-        docs = self.get_all_documents(index)
+        docs = self.get_all_documents()
         lens = [len(d.content) for d in docs]
         response = dict(
             count=len(docs),
@@ -200,15 +189,22 @@ class INNDocStore(abc.ABC):
         return documents
 
     @abc.abstractmethod
-    def nn_search(self, **props):
+    def search_by_embedding(self, **props):
         pass
 
     @abc.abstractmethod
-    def sp_search(self, **props):
+    def search_by_keywords(self, **props):
         pass
 
     @abc.abstractmethod
-    def ai_search(self, **props):
+    def search(self, **props):
+        pass
+
+
+class IDataset:
+
+    @abc.abstractmethod
+    def iterator(self, **kwargs) -> Generator:
         pass
 
 
