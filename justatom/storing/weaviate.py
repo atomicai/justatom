@@ -1,7 +1,9 @@
 import base64
 import datetime
 import json
+import os
 from dataclasses import asdict
+from justatom.etc.pattern import singleton
 from justatom.tooling.stl import merge_in_order
 from typing import Any, Dict, List, Optional, Generator
 
@@ -55,7 +57,6 @@ DOCUMENT_COLLECTION_PROPERTIES = [
         "name": "meta",
         "dataType": ["object"],
         "nestedProperties": [
-            {"dataType": ["text[]"], "name": "images"},
             {"dataType": ["text[]"], "name": "queries"},
         ],
     },
@@ -580,6 +581,23 @@ class WeaviateDocStore:
         )
 
         return [self._to_document(doc) for doc in result.objects]
+
+
+@singleton
+class IFinder:
+
+    store: Dict[str, WeaviateDocStore] = dict()
+
+    def find(self, collection_name: str, **kwargs):
+        if collection_name not in self.store:
+            self.store[collection_name] = WeaviateDocStore(
+                collection_name=collection_name,
+                url=f"http://{os.environ.get('WEAVIATE_HOST')}:{os.environ.get('WEAVIATE_PORT')}",
+            )
+        return self.store[collection_name]
+
+
+Finder = IFinder()
 
 
 __all__ = ["WeaviateDocStore"]
