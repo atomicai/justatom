@@ -5,11 +5,12 @@ import simplejson as json
 import copy
 import numpy as np
 from bertopic.backend import BaseEmbedder
+from justatom.etc.schema import Document
 from justatom.modeling.prime import IDocEmbedder
 from typing import Union, List, Dict, Tuple
 
 
-class IRunner:
+class IMODELRunner:
     """
     Base Class for implementing M1/M2/M3 etc... models with frameworks like PyTorch and co.
     """
@@ -128,4 +129,11 @@ class IRetrieverRunner(abc.ABC):
 
     @abc.abstractmethod
     def retrieve_topk(self, queries: Union[str, List[str]], top_k: int = 5):
+        pass
+
+
+class IIndexerRunner(abc.ABC):
+
+    @abc.abstractmethod
+    def index(self, documents: List[Document], **kwargs):
         pass
