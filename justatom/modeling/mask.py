@@ -2,6 +2,7 @@ import abc
 import copy
 from loguru import logger
 from pathlib import Path
+from collections.abc import Iterator
 from justatom.etc.errors import ModelingError
 from typing import Any, Dict, List, Optional, Union
 
@@ -13,7 +14,16 @@ import torch.nn as nn
 #: Names of the attributes in various model configs which refer to the number of dimensions in the output vectors
 OUTPUT_DIM_NAMES = ["dim", "hidden_size", "d_model"]
 
-GRANTED_MODEL_NAMES = ["IPFBERT", "IGLOVE", "E5Model", "E5SMALLModel", "E5LARGEModel"]
+GRANTED_MODEL_NAMES = [
+    "IPFBERT",
+    "IGLOVE",
+    "E5Model",
+    "E5SModel",
+    "E5LModel",
+    "ATOMICModel",
+    "ATOMICSModel",
+    "ATOMICLModel",
+]
 
 
 class IBaseModel(nn.Module, abc.ABC):
@@ -305,8 +315,8 @@ class IVisionModel(nn.Module, abc.ABC):
 
 class IHead(nn.Module, abc.ABC):
     """
-    Takes word embeddings from a `IEmbeddingModel` and generates logits for a given task. Can also convert logits
-    to loss and and logits to predictions.
+    Takes embeddings from one of [ILanguageModel | [IVisionModel] and
+    generates logits for a given task. Can also convert logits to loss and and logits to predictions.
     """
 
     subclasses = {}  # type: Dict
@@ -402,15 +412,16 @@ class IMetric(abc.ABC):
         return self.compute() if self.compute_on_call else value
 
 
-class IPREProjector(abc.ABC):
+class IDocEmbedder(abc.ABC):
+    """Abstract class for document embedder."""
 
     @abc.abstractmethod
-    def fit(self, X):
+    def __init__(self, *args, **kwargs):
         pass
 
     @abc.abstractmethod
-    def transform(self, X):
+    def encode(self, texts: List[str], **kwargs) -> Iterator[np.ndarray]:
         pass
 
 
-__all__ = ["IBaseModel", "IVisionModel", "ILanguageModel", "IHead", "IMetric", "IPREProjector", "GRANTED_MODEL_NAMES"]
+__all__ = ["IBaseModel", "IVisionModel", "ILanguageModel", "IHead", "IMetric", "IDocEmbedder", "GRANTED_MODEL_NAMES"]
