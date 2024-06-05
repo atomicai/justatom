@@ -4,7 +4,7 @@ from pathlib import Path
 from loguru import logger
 from justatom.etc.pattern import singleton
 from justatom.modeling.mask import IBaseModel
-from justatom.modeling.prime import IPFBERTModel, E5Model, E5LARGEModel, E5SMALLModel
+from justatom.modeling.prime import IPFBERTModel, E5Model, E5LModel, E5SModel, ATOMICLModel, ATOMICModel, ATOMICSModel
 from justatom.processing.mask import IProcessor
 from justatom.processing.prime import M1Processor, M2Processor, ATOMICProcessor, INFERProcessor
 from justatom.configuring.prime import Config
@@ -28,13 +28,13 @@ class IInjector:
             elif str(component_name).lower() in ("ipfbert", "ifpbert", "fipbert"):
                 component = IPFBERTModel(**model_props)
             elif str(component_name).lower() in ("e5large"):
-                component = E5LARGEModel(**model_props)
+                component = E5LModel(**model_props)
             elif str(component_name).lower() in ("e5small"):
-                component = E5SMALLModel(**model_props)
+                component = E5SModel(**model_props)
             elif str(component_name).lower() in "e5":
                 component = E5Model(**model_props)
             else:
-                logger.error(f"Could not inject component [{component_name}] of type [model]")
+                logger.error(f"Could not inject component model=[{component_name}]")
                 component = None
         elif component_type == "processor":
             processor_props = merge_in_order(props, Config.processor.props)
