@@ -282,6 +282,48 @@ class ILanguageModel(nn.Module, abc.ABC):
         return pooled_vecs
 
 
+class IRemoteLargeLanguageModel(abc.ABC):
+    """
+    The parent class for any kind of remote LLM that can generate sequence of tokens.
+    These models receive prefix string and return generated sequence via API.
+    """
+
+    subclasses = {}
+
+    def __init_subclass__(cls, **kwargs):
+        """This automatically keeps track of all available subclasses.
+        Enables generic load() or all specific LanguageModel implementation.
+        """
+        super().__init_subclass__(**kwargs)
+        cls.subclasses[cls.__name__] = cls
+
+    def __init__(self):
+        super().__init__()
+
+    @abc.abstractmethod
+    def generate(self, prompt: str, history: List[str], **kwargs):
+        pass
+
+
+class ILargeLanguageModel(abc.ABC):
+    """
+    The parent class for any kind of local LLM that can generate sequence of tokens.
+    These models receive tokenized string (prefix) and return generated sequence via forward pass.
+    """
+
+    subclasses = {}
+
+    def __init_subclass__(cls, **kwargs):
+        """This automatically keeps track of all available subclasses.
+        Enables generic load() or all specific LanguageModel implementation.
+        """
+        super().__init_subclass__(**kwargs)
+        cls.subclasses[cls.__name__] = cls
+
+    def __init__(self):
+        super().__init__()
+
+
 class IVisionModel(nn.Module, abc.ABC):
     """
     The parent class for any kind of model that can embed image into a semantic vector space.
@@ -424,4 +466,14 @@ class IDocEmbedder(abc.ABC):
         pass
 
 
-__all__ = ["IBaseModel", "IVisionModel", "ILanguageModel", "IHead", "IMetric", "IDocEmbedder", "GRANTED_MODEL_NAMES"]
+__all__ = [
+    "IBaseModel",
+    "IVisionModel",
+    "ILanguageModel",
+    "ILargeLanguageModel",
+    "IRemoteLargeLanguageModel",
+    "IHead",
+    "IMetric",
+    "IDocEmbedder",
+    "GRANTED_MODEL_NAMES",
+]
