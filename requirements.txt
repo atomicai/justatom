@@ -36,6 +36,7 @@ lazy-imports==0.3.1
 fastnumbers==5.1.0
 datasets==2.18.0
 tenacity==8.2.3
+mmh3==4.1.0
 # package(s) for extra info(s)
 googletrans==4.0.0-rc1
 random-name==0.1.1
