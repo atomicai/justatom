@@ -70,7 +70,7 @@ class IEVENTDocStore(abc.ABC):
 class IDFDocStore(abc.ABC):
 
     @abc.abstractmethod
-    def count_per_col(self, col):
+    def counts_per_col(self, col):
         pass
 
     @abc.abstractmethod
