@@ -2,6 +2,7 @@ from justatom.running.mask import IRetrieverRunner
 from justatom.running.atomic import ATOMICLMRunner
 from justatom.running.m1 import M1LMRunner
 from justatom.running.m2 import M2LMRunner
+from justatom.processing.mask import IProcessor
 from typing import List, Union
 from loguru import logger
 from justatom.etc.pattern import singleton
@@ -21,9 +22,10 @@ class ATOMICRetriever(IRetrieverRunner):
 
 class EmbeddingRetriever(IRetrieverRunner):
 
-    def __init__(self, store: INNDocStore, model: Union[M1LMRunner, M2LMRunner]):
+    def __init__(self, store: INNDocStore, model: Union[M1LMRunner, M2LMRunner], processor: IProcessor):
         super().__init__()
         self.store = store
+        self.processor = processor
         self.model = model.eval()
 
     def retrieve_topk(
@@ -47,7 +49,7 @@ class KWARGRetriever(IRetrieverRunner):
         answers = []
         for query in queries:
             response = self.store.search_by_keywords(query=query, top_k=top_k)
-            answers.append([res.content for res in response])
+            answers.extend(response)
         return answers
 
 
