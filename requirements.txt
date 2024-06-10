@@ -32,7 +32,6 @@ polars==0.19.19
 weaviate-client==4.5.4
 docx2txt==0.8
 simplejson==3.19.2
-typer==0.12.0
 lazy-imports==0.3.1
 fastnumbers==5.1.0
 datasets==2.18.0
@@ -40,6 +39,7 @@ tenacity==8.2.3
 mmh3==4.1.0
 more-itertools==10.1.0
 smart-open==6.4.0
+plotly==5.22.0
 # package(s) for extra info(s)
 random-name==0.1.1
 altair==5.3.0
@@ -49,5 +49,3 @@ vega-datasets==0.9.0
 redis==5.0.4
 quart==0.19.6
 quart-session==3.0.0
-# GoogleTranslatorAPi
-googletrans==3.1.0a0
