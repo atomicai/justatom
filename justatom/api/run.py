@@ -46,7 +46,19 @@ async def search():
     session["query"] = query
     response = retriever.retrieve_topk(queries=[query], top_k=top_k)
     logger.info(response)
-    return json.dumps({"docs": response}, ensure_ascii=False).encode("utf-8")
+    return json.dumps(
+        {
+            "docs": [
+                dict(
+                    content=di.content,
+                    content_type=di.content_type,
+                    score=di.score,
+                )
+                for di in response
+            ]
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
 
 
 @app.post("/indexing")
