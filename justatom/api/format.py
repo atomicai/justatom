@@ -1,9 +1,8 @@
 from loguru import logger
-from typing import Union, List, Optional
-from typer import Typer
+from typing import Union, List, Optional, Dict
 import io
 import os
-
+import fire
 import polars as pl
 import copy
 from justatom.tooling import stl
@@ -13,8 +12,6 @@ from pathlib import Path
 
 with LazyImport("Run 'pip install docx2txt'") as docx_import:
     import docx2txt
-
-cli = Typer()
 
 """
 This API point labels incoming .docx document correctly as long as it follows the structure:
@@ -83,6 +80,10 @@ class IState:
     @property
     def belongs_to(self):
         return self.name
+    
+    @property
+    def derives_as(self):
+        return None
 
     def next(self, data=None):
         # Can we yield each state here sequentially?
@@ -153,13 +154,20 @@ class QUERYBufferState(IState):
     # QUERYBufferState is the optional state which means you may or may not enter it. Triggering case is upon reading the query line
     #  <query:What are the\n // QUERYState
     #  rules of the hunger games> // QUERYBufferState
+    
+    group = "QUERYState"
 
     def __init__(self):
         super().__init__(name=self.__class__.__name__)
         self.transitions = dict(CONTEXTState=CONTEXTState, QUERYBufferState=QUERYBufferState)
 
+    @property
     def belongs_to(self):
         return "BUFFER"
+    
+    @property
+    def derives_as(self):
+        return QUERYState
 
 
 class CONTEXTState(IState):
@@ -179,13 +187,20 @@ class CONTEXTBufferState(IState):
     # CONTEXTBufferState is the optional state meaning you may or may not enter it. Triggering case is upon reading context line
     # <context:The rules of the\n // CONTEXTState
     # hunger games are simple. In punishment ... > // CONTEXTBufferState
+    
+    group = "CONTEXTState"
 
     def __init__(self):
         super().__init__(name=self.__class__.__name__)
         self.transitions = dict(ANSWERState=ANSWERState, CONTEXTBufferState=CONTEXTBufferState)
 
+    @property
     def belongs_to(self):
         return "BUFFER"
+    
+    @property
+    def derives_as(self):
+        return CONTEXTState
 
 
 class ANSWERState(IState):
@@ -206,14 +221,20 @@ class ANSWERBufferState(IState):
     # <answer: In punishment for the uprising, each of the twelve districts must provide one girl and one boy,\n // ANSWERState
     # called tributes, to participate. The 24 tributes will be imprisoned in a vast outdoor arena\n // ANSWERBUfferState
     # that could hold anything from a burning desert to a frozen wasteland. // ANSWERBufferState
+    group = "ANSWERState"
 
     def __init__(self):
         super().__init__(name=self.__class__.__name__)
         self.transitions = dict(ENUMState=ENUMState, ANSWERBufferState=ANSWERBufferState)
 
+    @property
     def belongs_to(self) -> str:
         return "BUFFER"
 
+    @property
+    def derives_as(self) -> str:
+        return ANSWERState
+
 
 def make_one_full_state_chunk():
     pass
@@ -222,6 +243,21 @@ def make_one_full_state_chunk():
 def make_one_full_state_chunk():
     pass
 
+def check_and_flush(cur_state: IState, arr: List[str], sample: Dict, schema_mapping: Dict):
+    """
+    This is triggered upon next state followed by any of `state_i`: `state_i`.belongs_to == "BUFFER"
+    """
+    if cur_state.derives_as is None:
+        return sample
+    assert len(arr) > 0, f"The buffer is empty even though you've entered [BUFFER] as [{cur_state}]"
+    
+    sch_key = schema_mapping[cur_state.group]
+    value = "\n".join(arr)
+    sample[sch_key] = value
+    # flush `arr` to begin next sample clear
+    arr.clear()
+    return sample
+    
 
 def main(one_iterator):
     cur_state: IState = STARTState()
@@ -230,6 +266,7 @@ def main(one_iterator):
         QUERYState="query", CONTEXTState="context", ANSWERState="answer", TYPEState="format", TITLEState="title"
     )
     cur_state_sample = dict()
+    cur_state_buffer = []
     while one_iterator.has_next():
         chunk = one_iterator.next()
         chunk = chunk.strip()
@@ -237,33 +274,31 @@ def main(one_iterator):
             continue
         formatted_data, next_state = cur_state.next(data=chunk)
         if next_state.belongs_to == "BUFFER":
-            # WHILE HERE NOT BUFFER ENDS ... parse all the info.
-            # `cur_state` is either `QUERYState` | `CONTEXTState` | `ANSWERState`
-
-            buffer, _the_data = [cur_state_sample[str]], formatted_data
-            while next_state.belongs_to == "BUFFER":
-                buffer.append(_the_data)
-                _the_data, next_state = next_state.next(data=chunk)
-            # `cur_state` is either <QUERYState> | <CONTEXTState> | <ANSWERState>
-            key, data = state_to_sample[str(cur_state)], " ".join([x.strip() for x in buffer])
-            cur_state_sample[key] = data
+            if len(cur_state_buffer) <= 0:
+                cur_state_buffer.append(cur_state_sample[state_to_sample[str(cur_state)]])
+            cur_state_buffer.append(formatted_data)
 
         if next_state.belongs_to == "QUERYState":
             # previous state was `TYPEState`
             key, data = state_to_sample[str(next_state)], formatted_data
             cur_state_sample[key] = data
+            #
+            cur_state_sample = check_and_flush(cur_state, cur_state_buffer, cur_state_sample, state_to_sample)
         elif next_state.belongs_to == "CONTEXTState":
             key, data = state_to_sample[str(next_state)], formatted_data
             cur_state_sample[key] = data
+            cur_state_sample = check_and_flush(cur_state, arr=cur_state_buffer, sample=cur_state_sample, schema_mapping=state_to_sample)
         elif next_state.belongs_to == "ANSWERState":
             key, data = state_to_sample[str(next_state)], formatted_data
             cur_state_sample[key] = data
+            cur_state_sample = check_and_flush(cur_state, arr=cur_state_buffer, sample=cur_state_sample, schema_mapping=state_to_sample)
         elif next_state.belongs_to == "TITLEState":
             key, data = state_to_sample[str(next_state)], formatted_data
             cur_state_sample.clear()
             cur_state_sample[key] = data
         elif next_state.belongs_to == "ENUMState":
             # ... Flush the pipeline to append new sample ...
+            cur_state_sample = check_and_flush(cur_state, arr=cur_state_buffer, sample=cur_state_sample, schema_mapping=state_to_sample)
             if cur_state_sample.keys() == set(state_to_sample.values()):
                 # This `if` is needed to handle cases when new title has just came in
                 # but no samples had been yet processes. E.g.
@@ -280,6 +315,7 @@ def main(one_iterator):
         cur_state = next_state
 
     if cur_state_sample.keys() == set(state_to_sample.values()):
+        cur_state_sample = check_and_flush(cur_state, arr=cur_state_buffer, sample=cur_state_sample, schema_mapping=state_to_sample)
         samples.append(copy.deepcopy(cur_state_sample))
 
     return samples
@@ -327,7 +363,6 @@ def ignite_io_loaders(fpaths: List[Union[str, Path]]) -> stl.NIterator:
     return stl.NIterator(stl.merge_iterators(*iterators))
 
 
-@cli.command()
 def parse(filepath_or_dir, extensions: Optional[List[str]] = None, out_path: Optional[str] = None):
     AVAILABLE_EXTENSIONS = [".docx", ".txt"]
     fpath_or_dir = Path(filepath_or_dir)
@@ -374,4 +409,4 @@ def parse(filepath_or_dir, extensions: Optional[List[str]] = None, out_path: Opt
 
 
 if __name__ == "__main__":
-    cli()
+    fire.Fire(parse)
