@@ -365,7 +365,7 @@ def ignite_io_loaders(fpaths: List[Union[str, Path]]) -> stl.NIterator:
 
 def parse(filepath_or_dir, extensions: Optional[List[str]] = None, out_path: Optional[str] = None):
     AVAILABLE_EXTENSIONS = [".docx", ".txt"]
-    fpath_or_dir = Path(filepath_or_dir)
+    fpath_or_dir = Path(filepath_or_dir) 
     if fpath_or_dir.is_dir():
         extensions = set([extensions] if isinstance(extensions, str) else extensions)
         okay_paths = [p for p in fpath_or_dir.iterdir() if p.suffix in extensions]
