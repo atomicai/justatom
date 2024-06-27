@@ -136,7 +136,7 @@ class IPFBERTModel(IBaseModel):
 def mean_tokens(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
     last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
     return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
-
+ 
 
 class HFDocEmbedder(IDocEmbedder):
     """General class for HuggingFace embedder."""
@@ -158,6 +158,11 @@ class HFDocEmbedder(IDocEmbedder):
         elif isinstance(pooling_mode, Callable[[Tensor, Tensor], Tensor]):
             pooling_mode_func = pooling_mode
         self._pooling_mode_func = pooling_mode_func
+    
+    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+
+        return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
     def encode(
         self,
@@ -198,10 +203,8 @@ class HFDocEmbedder(IDocEmbedder):
 
             with torch.no_grad():
                 outputs = self.model(**batch_inputs)
-
-            outputs = outputs.last_hidden_state.cpu()
-
-            embeddings = self._pooling_mode_func(outputs, batch_inputs["attention_mask"])
+                embeds = self.average_pool(outputs.last_hidden_state, batch_inputs["attention_mask"])
+            embeddings = embeds.cpu()
 
             if normalize_embeddings:
                 embeddings = F.normalize(embeddings, p=2, dim=1)
