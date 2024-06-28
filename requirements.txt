@@ -40,6 +40,7 @@ mmh3==4.1.0
 more-itertools==10.1.0
 smart-open==6.4.0
 plotly==5.22.0
+kaleido==0.2.1
 fire==0.6.0
 # package(s) for extra info(s)
 random-name==0.1.1
