@@ -4,7 +4,7 @@ extern:
     - gpt-4-0314
   save_extern_path: ".data/external"
 
-indexing:
+index:
   index_name: Default
   dataset_name_or_url: justatom
   index_by: keywords
@@ -12,6 +12,32 @@ indexing:
   batch_size: 16
   similarity: l2
   filters_path: null
+
+train:
+  max_seq_len: 512
+  dataset_path: .data
+  model:
+    model_name_or_path: intfloat/multilingual-e5-base
+    props:
+      dropout: 0.1
+  do_scale: false
+  max_epochs: 5
+  save_top_k: 2
+  loss: triplet
+  loss_props:
+    margin: 1.2
+  log_every_n_steps: 10
+  val_check_interval: 30
+  devices: auto
+  batch_size: 64
+  early_stopping:
+    metric: DistanceSm
+    size: 250
+    mode: max
+  save_model_path: weights
+  val_check_interval: 30
+
+
 
 clustering:
   embedder:
