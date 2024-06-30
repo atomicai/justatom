@@ -1,36 +1,161 @@
-from pathlib import Path
-from tqdm.autonotebook import tqdm
-import simplejson as json
-from typing import Union, Optional, Dict, Any, List, Callable
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Union
 
-import torch
-from torch import Tensor
-from transformers import AutoModel, AutoTokenizer
 import numpy as np
+import simplejson as json
+import torch
 import torch.nn as nn
+from torch import Tensor
 from torch.functional import F
+from tqdm.autonotebook import tqdm
+from transformers import AutoModel, AutoTokenizer
 
-from justatom.modeling.mask import ILanguageModel, IBaseModel, IDocEmbedder
-from justatom.modeling.div import IEmbedding, IAttention, MLAttention
+from justatom.etc.pattern import cached_call, singleton
+from justatom.modeling.div import IAttention, IEmbedding, MLAttention
+from justatom.modeling.mask import IBaseModel, IDocEmbedder, ILanguageModel
 
 
-class E5Model(ILanguageModel):
+class E5GeneralWrapper(ILanguageModel):
+
+    def __init__(self):
+        super().__init__()
+
+    def average_pool(
+        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(
+            ~attention_mask[..., None].bool(), 0.0
+        )
+
+        return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
+
+
+class E5Model(E5GeneralWrapper):
     """Base E5 family semantic model from hugging face"""
 
-    pass
+    def __init__(
+        self,
+        model_name_or_instance: Union[str, nn.Module] = "intfloat/multilingual-e5-base",
+        device="cpu",
+        **kwargs,
+    ):
+        super().__init__()
+        self.model = (
+            AutoModel.from_pretrained(model_name_or_instance)
+            if isinstance(model_name_or_instance, str)
+            else model_name_or_instance
+        )
+        self.name = "intfloat/multilingual-e5-base"
+        self.model.to(device)
+
+    @classmethod
+    def load(cls, model_name_or_path: str, **kwargs):
+        model = AutoModel.from_pretrained(model_name_or_path)
+        return cls(model, **kwargs)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        group_ids: torch.Tensor = None,
+        norm: bool = True,
+        average: bool = True,
+    ):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        if average:
+            embeddings = self.average_pool(
+                outputs.last_hidden_state, attention_mask=attention_mask
+            )
+        if norm:
+            response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
+        return response
 
 
-class E5SModel(ILanguageModel):
+class E5SModel(E5GeneralWrapper):
     """Small E5 family semantic model from huggingface"""
 
-    pass
+    def __init__(
+        self,
+        model_name_or_instance: Union[
+            str, nn.Module
+        ] = "intfloat/multilingual-e5-small",
+        device="cpu",
+        **kwargs,
+    ):
+        super().__init__()
+        self.model = (
+            AutoModel.from_pretrained(model_name_or_instance)
+            if isinstance(model_name_or_instance, str)
+            else model_name_or_instance
+        )
+        self.name = "intfloat/multilingual-e5-small"
+        self.model.to(device)
+
+    @classmethod
+    def load(cls, model_name_or_path: str, **kwargs):
+        model = AutoModel.from_pretrained(model_name_or_path)
+        return cls(model, **kwargs)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        group_ids: torch.Tensor = None,
+        norm: bool = True,
+        average: bool = True,
+    ):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        if average:
+            embeddings = self.average_pool(
+                outputs.last_hidden_state, attention_mask=attention_mask
+            )
+        if norm:
+            response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
+        return response
 
 
-class E5LModel(ILanguageModel):
+class E5LModel(E5GeneralWrapper):
     """Large E5 family semantic model from huggingface"""
 
-    pass
+    def __init__(
+        self,
+        model_name_or_instance: Union[
+            str, nn.Module
+        ] = "intfloat/multilingual-e5-large",
+        device="cpu",
+        **kwargs,
+    ):
+        super().__init__()
+        self.model = (
+            AutoModel.from_pretrained(model_name_or_instance)
+            if isinstance(model_name_or_instance, str)
+            else model_name_or_instance
+        )
+        self.name = "intfloat/multilingual-e5-large"
+        self.model.to(device)
+
+    @classmethod
+    def load(cls, model_name_or_path: str, **kwargs):
+        model = AutoModel.from_pretrained(model_name_or_path)
+        return cls(model, **kwargs)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        group_ids: torch.Tensor = None,
+        norm: bool = True,
+        average: bool = True,
+    ):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        if average:
+            embeddings = self.average_pool(
+                outputs.last_hidden_state, attention_mask=attention_mask
+            )
+        if norm:
+            response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
+        return response
 
 
 class ATOMICModel(ILanguageModel):
@@ -56,7 +181,9 @@ class IPFBERTModel(IBaseModel):
     Positional Free Bidirectional Encoder Representation from Transformers
     """
 
-    def __init__(self, embedding: nn.Module = None, attention: nn.Module = None, **props):
+    def __init__(
+        self, embedding: nn.Module = None, attention: nn.Module = None, **props
+    ):
         super(IPFBERTModel, self).__init__()
         if embedding is not None and attention is not None:
             self.embedding = embedding
@@ -95,7 +222,9 @@ class IPFBERTModel(IBaseModel):
 
         return cls(embedding=emb, attention=att)
 
-    def save(self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None):
+    def save(
+        self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None
+    ):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
@@ -110,8 +239,12 @@ class IPFBERTModel(IBaseModel):
         # (3). Generate and save the config
         self.generate_config().save_config(save_dir)
 
-    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+    def average_pool(
+        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(
+            ~attention_mask[..., None].bool(), 0.0
+        )
 
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
@@ -136,7 +269,7 @@ class IPFBERTModel(IBaseModel):
 def mean_tokens(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
     last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
     return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
- 
+
 
 class HFDocEmbedder(IDocEmbedder):
     """General class for HuggingFace embedder."""
@@ -158,9 +291,13 @@ class HFDocEmbedder(IDocEmbedder):
         elif isinstance(pooling_mode, Callable[[Tensor, Tensor], Tensor]):
             pooling_mode_func = pooling_mode
         self._pooling_mode_func = pooling_mode_func
-    
-    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+
+    def average_pool(
+        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(
+            ~attention_mask[..., None].bool(), 0.0
+        )
 
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
@@ -203,7 +340,9 @@ class HFDocEmbedder(IDocEmbedder):
 
             with torch.no_grad():
                 outputs = self.model(**batch_inputs)
-                embeds = self.average_pool(outputs.last_hidden_state, batch_inputs["attention_mask"])
+                embeds = self.average_pool(
+                    outputs.last_hidden_state, batch_inputs["attention_mask"]
+                )
             embeddings = embeds.cpu()
 
             if normalize_embeddings:
@@ -223,6 +362,38 @@ class IRECModel(IBaseModel):
     @classmethod
     def load(cls, pretrained_model_name_or_path):
         pass
+
+
+@singleton
+class ILMFinder:
+
+    store: Dict[str, ILanguageModel] = dict()
+
+    def find(self, model_name_or_path: str, **kwargs):
+        key = cached_call(model_name_or_path, **kwargs)
+        if key not in self.store:
+            self.store[key] = ILanguageModel.load(model_name_or_path, **kwargs)
+        return self.store[key]
+
+
+@singleton
+class ILLMFinder:
+    pass
+
+
+@singleton
+class ICVFinder:
+    pass
+
+
+LMFinder = ILMFinder()
+
+
+HF_CLASS_MAPPING = {
+    "intfloat/multilingual-e5-base": E5Model,
+    "intfloat/multilingual-e5-small": E5SModel,
+    "intfloat/multilingual-e5-large": E5LModel,
+}
 
 
 __all__ = ["IPFBERTModel", "E5SModel", "E5Model", "HFDocEmbedder", "E5LModel"]
