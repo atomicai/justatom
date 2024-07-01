@@ -1,15 +1,16 @@
 import abc
 import copy
-from loguru import logger
-from pathlib import Path
 from collections.abc import Iterator
-from justatom.etc.errors import ModelingError
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import simplejson as json
 import torch
 import torch.nn as nn
+from loguru import logger
+
+from justatom.etc.errors import ModelingError
 
 #: Names of the attributes in various model configs which refer to the number of dimensions in the output vectors
 OUTPUT_DIM_NAMES = ["dim", "hidden_size", "d_model"]
@@ -46,7 +47,14 @@ class IBaseModel(nn.Module, abc.ABC):
         self._output_dims = None
 
     @classmethod
-    def load(cls, pretrained_model_name_or_path, revision=None, n_added_tokens=0, language_model_class=None, **kwargs):
+    def load(
+        cls,
+        pretrained_model_name_or_path,
+        revision=None,
+        n_added_tokens=0,
+        language_model_class=None,
+        **kwargs,
+    ):
         config_file = Path(pretrained_model_name_or_path) / "model_config.json"
         assert config_file.exists(), "The config is not found, couldn't load the model"
         logger.info(f"Model found locally at {pretrained_model_name_or_path}")
@@ -70,7 +78,9 @@ class IBaseModel(nn.Module, abc.ABC):
         with open(str(save_filename), "w") as f:
             f.write(json.dumps(config))
 
-    def save(self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None):
+    def save(
+        self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None
+    ):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
@@ -80,7 +90,9 @@ class IBaseModel(nn.Module, abc.ABC):
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         # Save Weights
         save_name = Path(save_dir) / "pytorch_model.bin"
-        model_to_save = self.model.module if hasattr(self.model, "module") else self.model  # Only save the model itself
+        model_to_save = (
+            self.model.module if hasattr(self.model, "module") else self.model
+        )  # Only save the model itself
 
         if not state_dict:
             state_dict = model_to_save.state_dict()  # type: ignore [union-attr]
@@ -108,14 +120,30 @@ class ILanguageModel(nn.Module, abc.ABC):
         self._output_dims = None
 
     @classmethod
-    def load(cls, pretrained_model_name_or_path, revision=None, n_added_tokens=0, language_model_class=None, **kwargs):
-        config_file = Path(pretrained_model_name_or_path) / "language_model_config.json"
-        assert config_file.exists(), "The config is not found, couldn't load the model"
-        logger.info(f"Model found locally at {pretrained_model_name_or_path}")
-        # it's a local directory in FARM format
-        with open(config_file) as f:
-            config = json.load(f)
-        language_model = cls.subclasses[config["klass"]].load(pretrained_model_name_or_path)
+    def load(
+        cls,
+        model_name_or_path,
+        revision=None,
+        n_added_tokens=0,
+        language_model_class=None,
+        **kwargs,
+    ):
+        config_file = Path(model_name_or_path) / "config.json"
+        # assert config_file.exists(), "The config is not found, couldn't load the model"
+        if config_file.exists():
+            logger.info(f"Model found locally at {model_name_or_path}")
+            # it's a local directory in FARM format
+            with open(config_file) as f:
+                config = json.load(f)
+            language_model = cls.subclasses[config["klass"]].load(
+                model_name_or_path, **kwargs
+            )
+        else:
+            from justatom.modeling.prime import HF_CLASS_MAPPING
+
+            logger.info(f'Loading from huggingface hub via "{model_name_or_path}"')
+            klass = HF_CLASS_MAPPING[model_name_or_path]
+            language_model = klass.load(model_name_or_path, **kwargs)
         return language_model
 
     @property
@@ -127,7 +155,9 @@ class ILanguageModel(nn.Module, abc.ABC):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        segment_ids: Optional[torch.Tensor],  # DistilBERT does not use them, see DistilBERTLanguageModel
+        segment_ids: Optional[
+            torch.Tensor
+        ],  # DistilBERT does not use them, see DistilBERTLanguageModel
         output_hidden_states: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         return_dict: bool = False,
@@ -163,24 +193,29 @@ class ILanguageModel(nn.Module, abc.ABC):
                     self._output_dims = value
                     return value
             except AttributeError:
-                raise ModelingError("Can't get the output dimension before loading the model.")
+                raise ModelingError(
+                    "Can't get the output dimension before loading the model."
+                )
 
-        raise ModelingError("Could not infer the output dimensions of the language model.")
+        raise ModelingError(
+            "Could not infer the output dimensions of the language model."
+        )
 
     def save_config(self, save_dir: Union[Path, str]):
         """
         Save the configuration of the language model in format.
         """
-        save_filename = Path(save_dir) / "language_model_config.json"
+        save_filename = Path(save_dir) / "config.json"
         setattr(self.model.config, "name", self.name)  # type: ignore [union-attr]
-        setattr(self.model.config, "language", self.language)  # type: ignore [union-attr]
         config = self.model.config.to_dict()
         config["klass"] = self.__class__.__name__
         # string = json.sto_json_string()  # type: ignore [union-attr,operator]
         with open(str(save_filename), "w") as f:
             f.write(json.dumps(config))
 
-    def save(self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None):
+    def save(
+        self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None
+    ):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
@@ -190,7 +225,9 @@ class ILanguageModel(nn.Module, abc.ABC):
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         # Save Weights
         save_name = Path(save_dir) / "language_model.bin"
-        model_to_save = self.model.module if hasattr(self.model, "module") else self.model  # Only save the model itself
+        model_to_save = (
+            self.model.module if hasattr(self.model, "module") else self.model
+        )  # Only save the model itself
 
         if not state_dict:
             state_dict = model_to_save.state_dict()  # type: ignore [union-attr]
@@ -198,7 +235,11 @@ class ILanguageModel(nn.Module, abc.ABC):
         self.save_config(save_dir)
 
     def formatted_preds(
-        self, logits, samples, ignore_first_token: bool = True, padding_mask: Optional[torch.Tensor] = None
+        self,
+        logits,
+        samples,
+        ignore_first_token: bool = True,
+        padding_mask: Optional[torch.Tensor] = None,
     ) -> List[Dict[str, Any]]:
         """
         Extracting vectors from a language model (for example, for extracting sentence embeddings).
@@ -217,7 +258,9 @@ class ILanguageModel(nn.Module, abc.ABC):
         :param kwargs: kwargs
         :return: A list of dictionaries containing predictions, for example: [{"context": "some text", "vec": [-0.01, 0.5 ...]}].
         """
-        if not hasattr(self, "extraction_layer") or not hasattr(self, "extraction_strategy"):
+        if not hasattr(self, "extraction_layer") or not hasattr(
+            self, "extraction_strategy"
+        ):
             raise ModelingError(
                 "`extraction_layer` or `extraction_strategy` not specified for LM. "
                 "Make sure to set both, e.g. via Inferencer(extraction_strategy='cls_token', extraction_layer=-1)`"
@@ -241,11 +284,17 @@ class ILanguageModel(nn.Module, abc.ABC):
 
         elif self.extraction_strategy == "reduce_mean":
             vecs = self._pool_tokens(
-                sequence_output, padding_mask, self.extraction_strategy, ignore_first_token=ignore_first_token
+                sequence_output,
+                padding_mask,
+                self.extraction_strategy,
+                ignore_first_token=ignore_first_token,
             )
         elif self.extraction_strategy == "reduce_max":
             vecs = self._pool_tokens(
-                sequence_output, padding_mask, self.extraction_strategy, ignore_first_token=ignore_first_token
+                sequence_output,
+                padding_mask,
+                self.extraction_strategy,
+                ignore_first_token=ignore_first_token,
             )
         elif self.extraction_strategy == "cls_token":
             vecs = sequence_output[:, 0, :].cpu().numpy()
@@ -263,7 +312,11 @@ class ILanguageModel(nn.Module, abc.ABC):
         return preds
 
     def _pool_tokens(
-        self, sequence_output: torch.Tensor, padding_mask: torch.Tensor, strategy: str, ignore_first_token: bool
+        self,
+        sequence_output: torch.Tensor,
+        padding_mask: torch.Tensor,
+        strategy: str,
+        ignore_first_token: bool,
     ):
         token_vecs = sequence_output.cpu().numpy()
         # we only take the aggregated value of non-padding tokens
@@ -275,9 +328,13 @@ class ILanguageModel(nn.Module, abc.ABC):
         ignore_mask_3d = np.zeros(token_vecs.shape, dtype=bool)
         ignore_mask_3d[:, :, :] = ignore_mask_2d[:, :, np.newaxis]
         if strategy == "reduce_max":
-            pooled_vecs = np.ma.array(data=token_vecs, mask=ignore_mask_3d).max(axis=1).data
+            pooled_vecs = (
+                np.ma.array(data=token_vecs, mask=ignore_mask_3d).max(axis=1).data
+            )
         if strategy == "reduce_mean":
-            pooled_vecs = np.ma.array(data=token_vecs, mask=ignore_mask_3d).mean(axis=1).data
+            pooled_vecs = (
+                np.ma.array(data=token_vecs, mask=ignore_mask_3d).mean(axis=1).data
+            )
 
         return pooled_vecs
 
@@ -344,7 +401,14 @@ class IVisionModel(nn.Module, abc.ABC):
         self._output_dims = None
 
     @classmethod
-    def load(cls, pretrained_model_name_or_path, revision=None, n_added_tokens=0, language_model_class=None, **kwargs):
+    def load(
+        cls,
+        pretrained_model_name_or_path,
+        revision=None,
+        n_added_tokens=0,
+        language_model_class=None,
+        **kwargs,
+    ):
         config_file = Path(pretrained_model_name_or_path) / "cv_model_config.json"
         assert config_file.exists(), "The config is not found, couldn't load the model"
         logger.info(f"Model found locally at {pretrained_model_name_or_path}")

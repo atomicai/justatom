@@ -14,6 +14,9 @@ from transformers import AutoModel, AutoTokenizer
 from justatom.etc.pattern import cached_call, singleton
 from justatom.modeling.div import IAttention, IEmbedding, MLAttention
 from justatom.modeling.mask import IBaseModel, IDocEmbedder, ILanguageModel
+from justatom.processing import IProcessor
+from justatom.processing.loader import NamedDataLoader
+from justatom.processing.silo import igniset
 
 
 class E5GeneralWrapper(ILanguageModel):
@@ -276,36 +279,21 @@ class HFDocEmbedder(IDocEmbedder):
 
     def __init__(
         self,
-        model_name_or_path: str,
-        pooling_mode: Callable[[Tensor, Tensor], Tensor] | str = "mean",
+        model: ILanguageModel,
+        processor: IProcessor,
         prefix: str = "",
         device: str = "cpu",
     ):
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        self.model = AutoModel.from_pretrained(model_name_or_path)
+        self.processor = processor
+        self.model = model
         self.prefix = prefix
         self.device = device
 
-        if pooling_mode == "mean":
-            pooling_mode_func = mean_tokens
-        elif isinstance(pooling_mode, Callable[[Tensor, Tensor], Tensor]):
-            pooling_mode_func = pooling_mode
-        self._pooling_mode_func = pooling_mode_func
-
-    def average_pool(
-        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(
-            ~attention_mask[..., None].bool(), 0.0
-        )
-
-        return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
-
+    @torch.no_grad()
     def encode(
         self,
         texts: List[str],
-        batch_size: int = 256,
-        max_length: int = 512,
+        batch_size: int = 1,
         padding: bool = True,
         truncation: bool = True,
         normalize_embeddings: bool = True,
@@ -319,34 +307,26 @@ class HFDocEmbedder(IDocEmbedder):
 
         self.model = self.model.to(device).eval()
 
+        dataset, tensor_names = igniset(
+            [{"content": t, "meta": {"prefix": prefix}} for t in texts],
+            processor=self.processor,
+            batch_size=batch_size,
+        )
+
+        loader = NamedDataLoader(
+            dataset=dataset, batch_size=batch_size, tensor_names=tensor_names
+        )
+
         batch_gen = range(0, len(texts), batch_size)
         if verbose:
             batch_gen = tqdm(batch_gen)
 
-        for batch_begin in batch_gen:
+        for batch_begin, batch_features in zip(batch_gen, loader):
             batch_texts = texts[batch_begin : batch_begin + batch_size]
-            batch_texts = [f"{prefix}{text}" for text in batch_texts]
 
-            batch_inputs = self.tokenizer(
-                batch_texts,
-                max_length=max_length,
-                padding=padding,
-                truncation=truncation,
-                return_tensors="pt",
-                **kwargs,
-            )
+            batch = {k: v.to(device) for k, v in batch_features.items()}
 
-            batch_inputs = {k: vals.to(device) for k, vals in batch_inputs.items()}
-
-            with torch.no_grad():
-                outputs = self.model(**batch_inputs)
-                embeds = self.average_pool(
-                    outputs.last_hidden_state, batch_inputs["attention_mask"]
-                )
-            embeddings = embeds.cpu()
-
-            if normalize_embeddings:
-                embeddings = F.normalize(embeddings, p=2, dim=1)
+            embeddings = self.model(**batch).cpu()
 
             yield embeddings.numpy()
 
