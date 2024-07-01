@@ -15,7 +15,7 @@ from torch.utils.data import ConcatDataset
 from transformers.optimization import Adafactor, AdafactorSchedule
 
 import wandb
-from justatom.configuring import Config, Loader
+from justatom.configuring import Config
 
 # Model IO and Prediction Head Flow
 from justatom.modeling.head import ANNHead
@@ -23,17 +23,18 @@ from justatom.modeling.mask import ILanguageModel
 from justatom.modeling.prime import E5Model
 from justatom.processing import IProcessor, ITokenizer, igniset
 from justatom.processing.loader import NamedDataLoader
-from justatom.processing.prime import TRIOProcessor
-from justatom.processing.silo import igniset
+from justatom.processing.prime import TRILMProcessor
 from justatom.running.m1 import M1LMRunner
 from justatom.tooling import stl
 from justatom.tooling.stl import merge_in_order
 
 # Training pipeline
 from justatom.training.core import ILTrainer
-from justatom.training.loss import BCE_TYPE_LOSS, TripletLoss
+from justatom.training.loss import TripletLoss
 
 dotenv.load_dotenv()
+
+logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK')}")
 
 
 def to_numpy(container):
@@ -71,9 +72,7 @@ def random_split(ds: ConcatDataset, lengths: List[int]):
     :param lengths: Lengths of splits to be produced.
     """
     if sum(lengths) != len(ds):
-        raise ValueError(
-            "Sum of input lengths does not equal the length of the input dataset!"
-        )
+        raise ValueError("Sum of input lengths does not equal the length of the input dataset!")
 
     try:
         import numpy as np
@@ -88,8 +87,7 @@ def random_split(ds: ConcatDataset, lengths: List[int]):
         )
 
     assert idx_dataset >= 1, (
-        "Dev_split ratio is too large, there is no data in train set. Please lower split ="
-        f" {str(lengths)}"
+        "Dev_split ratio is too large, there is no data in train set. Please lower split =" f" {str(lengths)}"
     )
 
     train = ConcatDataset(ds.datasets[:idx_dataset])  # type: Dataset
@@ -128,11 +126,7 @@ def ignite_loaders(
     torch.utils.data.DataLoader,
     torch.utils.data.DataLoader,
 ]:
-    train_filepath = (
-        Path(train_filepath) / "train.csv"
-        if Path(train_filepath).is_dir()
-        else train_filepath
-    )
+    train_filepath = Path(train_filepath) / "train.csv" if Path(train_filepath).is_dir() else train_filepath
     train_fpath = check_and_raise(train_filepath, "TRAIN", allowed_suffixes=[".csv"])
 
     logger.info(
@@ -148,17 +142,13 @@ def ignite_loaders(
         }
         for x in pl_train_view.to_dicts()
     ]
-    dataset, tensor_names = igniset(
-        train_docs, processor=processor, batch_size=batch_size, shuffle=shuffle
-    )
+    dataset, tensor_names = igniset(train_docs, processor=processor, batch_size=batch_size, shuffle=shuffle)
 
     split_ratio = 0.2 if dev_filepath is None and split_ratio is None else split_ratio
 
     dev_fpath = check_and_raise(dev_filepath, "DEV", allowed_suffixes=[".csv"])
 
-    if (
-        dev_fpath
-    ):  # Implication is that `dev_fpath` exists hereby not equal to None => no need to split
+    if dev_fpath:  # Implication is that `dev_fpath` exists hereby not equal to None => no need to split
         pl_dev_view = pl.read_csv(dev_fpath)
         dev_docs = [
             {
@@ -170,9 +160,7 @@ def ignite_loaders(
             }
             for x in pl_dev_view.to_dicts()
         ]
-        dev_dataset, _ = igniset(
-            dev_docs, processor=processor, batch_size=batch_size, shuffle=shuffle
-        )
+        dev_dataset, _ = igniset(dev_docs, processor=processor, batch_size=batch_size, shuffle=shuffle)
     else:  # Exception was not raised => perform split by ratio from train
         dev_size = int(len(dataset) * split_ratio)
         tra_size = len(dataset) - dev_size
@@ -194,17 +182,13 @@ def ignite_loaders(
             }
             for x in pl_test_view.to_dicts()
         ]
-        test_dataset, _ = igniset(
-            test_docs, processor=processor, batch_size=batch_size, shuffle=shuffle
-        )
+        test_dataset, _ = igniset(test_docs, processor=processor, batch_size=batch_size, shuffle=shuffle)
     else:  # Was NONE
         test_dataset = dev_dataset
 
     # TODO: DRY. Replace boilerplate codes for <name>_fpath checking with one method.
     return (
-        NamedDataLoader(
-            train_dataset, batch_size=batch_size, tensor_names=tensor_names
-        ),
+        NamedDataLoader(train_dataset, batch_size=batch_size, tensor_names=tensor_names),
         NamedDataLoader(dev_dataset, batch_size=batch_size, tensor_names=tensor_names),
         NamedDataLoader(test_dataset, batch_size=batch_size, tensor_names=tensor_names),
         tensor_names,
@@ -242,14 +226,8 @@ class ILRunner(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         # TODO: Fix Focal Loss ?
-        xs = {
-            k: batch[k].to(self.device)
-            for k in batch
-            if not k.endswith(self.label_suffix)
-        }
-        ys = {
-            k: batch[k].to(self.device) for k in batch if k.endswith(self.label_suffix)
-        }
+        xs = {k: batch[k].to(self.device) for k in batch if not k.endswith(self.label_suffix)}
+        ys = {k: batch[k].to(self.device) for k in batch if k.endswith(self.label_suffix)}
 
         # TODO: How to perform `loss.FocalLoss` using this `group_ids` architecture ?
 
@@ -274,9 +252,7 @@ class ILRunner(L.LightningModule):
                 self.log("POS distance", dist_p, logger=True)
                 self.log("NEG distance", dist_n, logger=True)
             else:
-                raise ValueError(
-                    f"Unexpected LOSS {self.loss} of UNKNOWN type for ANN tuning"
-                )
+                raise ValueError(f"Unexpected LOSS {self.loss} of UNKNOWN type for ANN tuning")
             all_losses.append(loss)
         per_sample_loss = self.runner.loss_aggregation_fn(all_losses)
         L = self.adjust_loss(per_sample_loss)
@@ -305,14 +281,8 @@ class ILRunner(L.LightningModule):
 
     @torch.no_grad
     def validation_step(self, batch, batch_idx):
-        xs = {
-            k: batch[k].to(self.device)
-            for k in batch
-            if not k.endswith(self.label_suffix)
-        }
-        ys = {
-            k: batch[k].to(self.device) for k in batch if k.endswith(self.label_suffix)
-        }
+        xs = {k: batch[k].to(self.device) for k in batch if not k.endswith(self.label_suffix)}
+        ys = {k: batch[k].to(self.device) for k in batch if k.endswith(self.label_suffix)}
         output = self.runner(xs, average=True)  # num_heads x batch_size x embedding_dim
 
         for head, logits in zip(self.runner.prediction_heads, output):
@@ -381,19 +351,17 @@ def main(
     early_stopping_size = int(early_stopping_size or Config.train.early_stopping.size)
     max_epochs = max_epochs or Config.train.max_epochs
     # Add scaling
-    do_scale, do_scale_unit = do_scale or Config.train.do_scale, int(
-        do_scale_unit or Config.train.do_scale_unit
-    )
+    do_scale, do_scale_unit = do_scale or Config.train.do_scale, int(do_scale_unit or Config.train.do_scale_unit)
     if do_scale is True and not do_scale_unit:
-        raise ValueError(
-            f"Error in configuring scaling per batch size. You set `do_scale` but `do_scale_unit` is not."
-        )
+        do_scale_unit = 1.0
+    else:
+        do_scale_unit *= 1.0
     # TODO: maybe_scale()
 
-    log_every_n_steps = log_every_n_steps or Config.train.log_every_n_steps
+    log_every_n_steps = int((log_every_n_steps or Config.train.log_every_n_steps) / do_scale_unit)
     save_top_k = save_top_k or Config.train.save_top_k
     devices = devices or Config.train.devices
-    val_check_interval = val_check_interval or Config.train.val_check_interval
+    val_check_interval = int((val_check_interval or Config.train.val_check_interval) / do_scale_unit)
     save_model_path = Path(save_model_path or Config.train.save_model_path)
     # Snapshot for naming given correct hyperparams
     snap_opts = merge_in_order(loss_props, opts)
@@ -404,7 +372,7 @@ def main(
     # TODO: Add other props via general `opts: Dict` => `merge_in_order(opts, loss_props)` =>
     # and make snapshot of `opts`
     tokenizer = ITokenizer.from_pretrained(model_name_or_path)
-    processor = TRIOProcessor(tokenizer=tokenizer, max_seq_len=max_seq_len)
+    processor = TRILMProcessor(tokenizer=tokenizer, max_seq_len=max_seq_len)
     device = maybe_cuda_or_mps()
     runner = M1LMRunner(
         model=model,
@@ -424,14 +392,10 @@ def main(
     )
 
     # ML Logger
-    ml_logger = WandbLogger(
-        project="POLAROIDS.AI", name=f"LOSS={loss.upper()} {snap_name}"
-    )
+    ml_logger = WandbLogger(project="POLAROIDS.AI", name=f"LOSS={loss.upper()} {snap_name}")
 
     # Callback(s)...
-    es_callback = EarlyStopping(
-        monitor=early_stopping_metric, patience=early_stopping_size
-    )
+    es_callback = EarlyStopping(monitor=early_stopping_metric, patience=early_stopping_size)
     mc_callback = ModelCheckpoint(
         monitor=early_stopping_metric,
         mode=early_stopping_mode,
@@ -455,9 +419,7 @@ def main(
 
     # Early stopping on which metric ?
 
-    pipeline.fit(
-        model=pl_runner, train_dataloaders=train_loader, val_dataloaders=dev_loader
-    )
+    pipeline.fit(model=pl_runner, train_dataloaders=train_loader, val_dataloaders=dev_loader)
     pipeline.test(model=pl_runner, dataloaders=test_loader)
 
     # Save the model and (index) ?
@@ -467,13 +429,14 @@ def main(
 
 
 if __name__ == "__main__":
-    for bs in (64, 32, 128, 256):
+    for bs in (128, 256):
         for margin in np.arange(0.4, 1.5, 0.4):
             main(
                 loss="triplet",
-                do_scale=False,
-                do_scale_unit=32,
+                shuffle=True,
+                do_scale=True,
+                do_scale_unit=bs * 1.0 / 32,
                 loss_props={"margin": np.round(margin, 2)},
-                opts={"bs": bs, "esm": "DistanceSm", "dataset": "polaroids.ai"},
+                opts={"bs": bs, "esm": "DistanceAcc", "dataset": "polaroids.ai"},
                 batch_size=bs,
             )
