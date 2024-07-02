@@ -86,9 +86,70 @@ class ILineChart(IChart):
 
 class PlotlyScatterChart(IChart):
 
-    def view(self, data: Union[pl.DataFrame, pd.DataFrame], **props) -> Any:
-        self.chart = px.scatter(data, **props)
-        return self.chart
+    def view(
+        self,
+        data: Union[pl.DataFrame, pd.DataFrame],
+        label_to_view: str = "title",
+        max_label_length: int = 22,
+        logo_path: Optional[str] = None,
+        **props,
+    ) -> Any:
+        pl_data = data.rename({"label": label_to_view})
+        pl_data = pl_data.with_columns(
+            pl.col(label_to_view).apply(
+                lambda x: (
+                    (x[:max_label_length] + "...") if len(x) > max_label_length else x
+                )
+            )
+        )
+        pd_data = pl_data.to_pandas()
+        fig = px.scatter(
+            pd_data,
+            x="x",
+            y="y",
+            color=label_to_view,
+            hover_data={label_to_view: True, "text": False},
+        )
+        fig.update_layout(
+            plot_bgcolor="black", paper_bgcolor="black", font=dict(color="white")
+        )
+
+        if logo_path is not None:
+            fig.add_layout_image(
+                dict(
+                    source=str(
+                        Path(os.getcwd()) / ".data" / "polaroids.ai.logo.png"
+                    ),  # Path to your logo file
+                    xref="paper",
+                    yref="paper",
+                    x=1,
+                    y=1,
+                    sizex=0.1,
+                    sizey=0.1,
+                    xanchor="right",
+                    yanchor="bottom",
+                )
+            )
+
+        # # Add a "Powered by" text next to the logo
+        # fig.add_annotation(
+        # dict(
+        #     x=0.98,
+        #     y=1.1,
+        #     xref='paper',
+        #     yref='paper',
+        #     text="Powered by",
+        #     showarrow=False,
+        #     font=dict(
+        #         family="Arial",
+        #         size=12,
+        #         color="yellow"
+        #     ),
+        #     align="right"
+        # )
+        # )
+
+        return fig
 
     def save(self, filename, **kwargs):
         self.chart.write_image(filename, **kwargs)
