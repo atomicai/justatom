@@ -1,13 +1,15 @@
 import abc
-from pathlib import Path
-from loguru import logger
-import simplejson as json
 import copy
+from pathlib import Path
+from typing import Dict, List, Tuple, Union
+
 import numpy as np
+import simplejson as json
 from bertopic.backend import BaseEmbedder
+from loguru import logger
+
 from justatom.etc.schema import Document
 from justatom.modeling.prime import IDocEmbedder
-from typing import Union, List, Dict, Tuple
 
 
 class IMODELRunner:
@@ -39,7 +41,9 @@ class IMODELRunner:
         :return: An instance of the specified processor.
         """
         config_file = Path(data_dir) / "runner_config.json"
-        assert config_file.exists(), "The config is not found, couldn't load the processor"
+        assert (
+            config_file.exists()
+        ), "The config is not found, couldn't load the processor"
         logger.info(f"Runner config found locally at {data_dir}")
         with open(config_file) as f:
             config = json.load(f)
@@ -86,7 +90,9 @@ class IMODELRunner:
             head.label_tensor_name = tasks[head.task_name]["label_tensor_name"]
             label_list = tasks[head.task_name]["label_list"]
             if not label_list and require_labels:
-                raise Exception(f"The task '{head.task_name}' is missing a valid set of labels")
+                raise Exception(
+                    f"The task '{head.task_name}' is missing a valid set of labels"
+                )
             label_list = tasks[head.task_name]["label_list"]
             head.label_list = label_list
             head.metric = tasks[head.task_name]["metric"]
@@ -121,7 +127,9 @@ class ICLUSTERINGRunner(abc.ABC):
         self.model = model
 
     @abc.abstractmethod
-    def fit_transform(self, docs, **kwargs) -> Tuple[List[int], Union[np.ndarray, None]]:
+    def fit_transform(
+        self, docs, **kwargs
+    ) -> Tuple[List[int], Union[np.ndarray, None]]:
         pass
 
 
@@ -136,4 +144,20 @@ class IIndexerRunner(abc.ABC):
 
     @abc.abstractmethod
     def index(self, documents: List[Document], **kwargs):
+        pass
+
+
+class IEvaluatorRunner(abc.ABC):
+
+    def __init__(self, ir: IRetrieverRunner):
+        self.ir = ir
+
+    @abc.abstractmethod
+    def evaluate_topk(
+        self,
+        queries: Union[str, List[str]],
+        index_name: str,
+        metrics: List[Union[str, Callable]],
+        top_k: int = 5,
+    ):
         pass
