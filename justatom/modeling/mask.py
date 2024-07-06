@@ -206,7 +206,6 @@ class ILanguageModel(nn.Module, abc.ABC):
         Save the configuration of the language model in format.
         """
         save_filename = Path(save_dir) / "config.json"
-        setattr(self.model.config, "name", self.name)  # type: ignore [union-attr]
         config = self.model.config.to_dict()
         config["klass"] = self.__class__.__name__
         # string = json.sto_json_string()  # type: ignore [union-attr,operator]
@@ -224,7 +223,7 @@ class ILanguageModel(nn.Module, abc.ABC):
         """
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         # Save Weights
-        save_name = Path(save_dir) / "language_model.bin"
+        save_name = Path(save_dir) / "pytorch_model.bin"
         model_to_save = (
             self.model.module if hasattr(self.model, "module") else self.model
         )  # Only save the model itself
