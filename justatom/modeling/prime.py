@@ -246,8 +246,8 @@ class IPFBERTModel(IModel):
         return response
 
 
-class HFDocEmbedder(IDocEmbedder):
-    """General class for HuggingFace embedder."""
+class DocEmbedder(IDocEmbedder):
+    """General class for embedding any NLP textual document"""
 
     def __init__(
         self,
