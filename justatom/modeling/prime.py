@@ -1,19 +1,18 @@
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import simplejson as json
 import torch
 import torch.nn as nn
-from torch import Tensor
 from torch.functional import F
 from tqdm.autonotebook import tqdm
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel
 
 from justatom.etc.pattern import cached_call, singleton
 from justatom.modeling.div import IAttention, IEmbedding, MLAttention
-from justatom.modeling.mask import IBaseModel, IDocEmbedder, ILanguageModel
+from justatom.modeling.mask import IDocEmbedder, ILanguageModel, IModel
 from justatom.processing import IProcessor
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.silo import igniset
@@ -24,12 +23,8 @@ class E5GeneralWrapper(ILanguageModel):
     def __init__(self):
         super().__init__()
 
-    def average_pool(
-        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(
-            ~attention_mask[..., None].bool(), 0.0
-        )
+    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
 
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
@@ -67,9 +62,7 @@ class E5Model(E5GeneralWrapper):
     ):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         if average:
-            embeddings = self.average_pool(
-                outputs.last_hidden_state, attention_mask=attention_mask
-            )
+            embeddings = self.average_pool(outputs.last_hidden_state, attention_mask=attention_mask)
         if norm:
             response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
         return response
@@ -80,9 +73,7 @@ class E5SModel(E5GeneralWrapper):
 
     def __init__(
         self,
-        model_name_or_instance: Union[
-            str, nn.Module
-        ] = "intfloat/multilingual-e5-small",
+        model_name_or_instance: Union[str, nn.Module] = "intfloat/multilingual-e5-small",
         device="cpu",
         **kwargs,
     ):
@@ -110,9 +101,7 @@ class E5SModel(E5GeneralWrapper):
     ):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         if average:
-            embeddings = self.average_pool(
-                outputs.last_hidden_state, attention_mask=attention_mask
-            )
+            embeddings = self.average_pool(outputs.last_hidden_state, attention_mask=attention_mask)
         if norm:
             response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
         return response
@@ -123,9 +112,7 @@ class E5LModel(E5GeneralWrapper):
 
     def __init__(
         self,
-        model_name_or_instance: Union[
-            str, nn.Module
-        ] = "intfloat/multilingual-e5-large",
+        model_name_or_instance: Union[str, nn.Module] = "intfloat/multilingual-e5-large",
         device="cpu",
         **kwargs,
     ):
@@ -153,9 +140,7 @@ class E5LModel(E5GeneralWrapper):
     ):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         if average:
-            embeddings = self.average_pool(
-                outputs.last_hidden_state, attention_mask=attention_mask
-            )
+            embeddings = self.average_pool(outputs.last_hidden_state, attention_mask=attention_mask)
         if norm:
             response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
         return response
@@ -179,14 +164,12 @@ class ATOMICLModel(ILanguageModel):
     pass
 
 
-class IPFBERTModel(IBaseModel):
+class IPFBERTModel(IModel):
     """
     Positional Free Bidirectional Encoder Representation from Transformers
     """
 
-    def __init__(
-        self, embedding: nn.Module = None, attention: nn.Module = None, **props
-    ):
+    def __init__(self, embedding: nn.Module = None, attention: nn.Module = None, **props):
         super(IPFBERTModel, self).__init__()
         if embedding is not None and attention is not None:
             self.embedding = embedding
@@ -225,9 +208,7 @@ class IPFBERTModel(IBaseModel):
 
         return cls(embedding=emb, attention=att)
 
-    def save(
-        self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None
-    ):
+    def save(self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
@@ -242,12 +223,8 @@ class IPFBERTModel(IBaseModel):
         # (3). Generate and save the config
         self.generate_config().save_config(save_dir)
 
-    def average_pool(
-        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(
-            ~attention_mask[..., None].bool(), 0.0
-        )
+    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
 
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
@@ -267,11 +244,6 @@ class IPFBERTModel(IBaseModel):
         if norm:
             response = F.normalize(out, p=2, dim=len(out.shape) - 1)
         return response
-
-
-def mean_tokens(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
-    last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
-    return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
 
 class HFDocEmbedder(IDocEmbedder):
@@ -313,16 +285,13 @@ class HFDocEmbedder(IDocEmbedder):
             batch_size=batch_size,
         )
 
-        loader = NamedDataLoader(
-            dataset=dataset, batch_size=batch_size, tensor_names=tensor_names
-        )
+        loader = NamedDataLoader(dataset=dataset, batch_size=batch_size, tensor_names=tensor_names)
 
         batch_gen = range(0, len(texts), batch_size)
         if verbose:
             batch_gen = tqdm(batch_gen)
 
         for batch_begin, batch_features in zip(batch_gen, loader):
-            batch_texts = texts[batch_begin : batch_begin + batch_size]
 
             batch = {k: v.to(device) for k, v in batch_features.items()}
 
@@ -331,7 +300,7 @@ class HFDocEmbedder(IDocEmbedder):
             yield embeddings.numpy()
 
 
-class IRECModel(IBaseModel):
+class IRECModel(IModel):
     """
     RECurrent based model processing tokens sequentially one by one.
     """
@@ -374,6 +343,8 @@ HF_CLASS_MAPPING = {
     "intfloat/multilingual-e5-small": E5SModel,
     "intfloat/multilingual-e5-large": E5LModel,
 }
+
+COMMON_CLASS_MAPPING = {"pfbert": IPFBERTModel, "rec": IRECModel}
 
 
 __all__ = ["IPFBERTModel", "E5SModel", "E5Model", "HFDocEmbedder", "E5LModel"]
