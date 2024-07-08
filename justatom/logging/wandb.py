@@ -12,8 +12,6 @@ from loguru import logger
 with LazyImport("Run 'pip install wandb==0.16.1'") as wb_import:
     import wandb
 
-from justatom.running.mask import IRunner
-
 
 class WandbLogger(ILogger):
     """Wandb logger for parameters, metrics, images and other artifacts.
