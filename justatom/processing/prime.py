@@ -1,8 +1,10 @@
-from justatom.processing.mask import IProcessor
-from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
-from typing import Optional, List, Union
-import torch
 from functools import partial
+from typing import Dict, List, Optional, Union
+
+import torch
+from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
+
+from justatom.processing.mask import IProcessor, ITokenizer
 from justatom.processing.sample import Sample, SampleBasket
 
 
@@ -39,10 +41,17 @@ class M1Processor(IProcessor):
             indices = []
         baskets = []
         docs = [
-            self.do_prefix(x["content"].lower()) if self.do_lower_case else self.do_prefix(x["content"]) for x in dicts
+            (
+                self.do_prefix(x["content"].lower())
+                if self.do_lower_case
+                else self.do_prefix(x["content"])
+            )
+            for x in dicts
         ]
 
-        tokenized_batch = self.tokenizer(docs, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_batch = self.tokenizer(
+            docs, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
 
         input_ids_batch = tokenized_batch["input_ids"]
         atten_ids_batch = tokenized_batch["attention_mask"]
@@ -51,8 +60,12 @@ class M1Processor(IProcessor):
             tokenized = {}
             features = dict(input_ids=input_ids, attention_mask=att_ids)
 
-            cur_sample = Sample(id="", clear_text=sample, tokenized=tokenized, features=[features])
-            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            cur_sample = Sample(
+                id="", clear_text=sample, tokenized=tokenized, features=[features]
+            )
+            cur_basket = SampleBasket(
+                id_internal=None, raw=sample, id_external=None, samples=[cur_sample]
+            )
 
             baskets.append(cur_basket)
 
@@ -72,30 +85,58 @@ class TRIOProcessor(IProcessor):
     for separating samples at least by `margin` distance using both `negative`, `positive` samples.
     """
 
-    def __init__(self, tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast], max_seq_len: int = 512, **kwargs):
+    def __init__(
+        self,
+        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
+        max_seq_len: int = 512,
+        prefix: str = "",
+        **kwargs,
+    ):
         super().__init__()
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
+        self.prefix = prefix
 
-    def dataset_from_dicts(self, dicts, indices=None, return_baskets=False, debug=False):
+    @classmethod
+    def load(cls, where, config: Dict, **props):
+        tokenizer = ITokenizer.from_pretrained(where)
+        return cls(tokenizer=tokenizer, **config)
+
+    def dataset_from_dicts(
+        self, dicts, indices=None, return_baskets=False, debug=False
+    ):
         if indices is None:
             indices = []
         baskets = []
-        docs = [x["content"] for x in dicts]
+        docs = [
+            self.add_prefix_to_content(x["content"], pref=self.prefix) for x in dicts
+        ]
         groups = [hash(x.get("meta", {}).get("group", 0)) for x in dicts]
         # ---
-        tokenized_batch = self.tokenizer(docs, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_batch = self.tokenizer(
+            docs, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
         # ---
         input_ids_batch = tokenized_batch["input_ids"]
         atten_ids_batch = tokenized_batch["attention_mask"]
         # ---
-        for sample, input_ids, att_ids, group_ids in zip(docs, input_ids_batch, atten_ids_batch, groups):
+        for sample, input_ids, att_ids, group_ids in zip(
+            docs, input_ids_batch, atten_ids_batch, groups
+        ):
             tokenized = {}
             # TODO: Convert `group_id` to compatable format
-            features = dict(input_ids=input_ids, attention_mask=att_ids, group_ids=torch.tensor(group_ids))
+            features = dict(
+                input_ids=input_ids,
+                attention_mask=att_ids,
+                group_ids=torch.tensor(group_ids),
+            )
 
-            cur_sample = Sample(id="", clear_text=sample, tokenized=tokenized, features=[features])
-            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            cur_sample = Sample(
+                id="", clear_text=sample, tokenized=tokenized, features=[features]
+            )
+            cur_basket = SampleBasket(
+                id_internal=None, raw=sample, id_external=None, samples=[cur_sample]
+            )
             baskets.append(cur_basket)
 
         problematic_ids = set()
