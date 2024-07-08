@@ -78,9 +78,9 @@ class M1Processor(IProcessor):
             return dataset, tensornames, problematic_ids
 
 
-class TRIOProcessor(IProcessor):
+class TRILMProcessor(IProcessor):
     """
-    TRIplet Object separation for different encoder(s) processor that performs grouping for similarity fine-tuning.
+    TRIplet Language Model separation for different encoder(s) LM processor that performs grouping for similarity fine-tuning.
     Preprocess samples for `justatom.training.loss.TripletLoss` loss function
     for separating samples at least by `margin` distance using both `negative`, `positive` samples.
     """
