@@ -3,27 +3,24 @@ import datetime
 import json
 import os
 from dataclasses import asdict
-from justatom.etc.pattern import singleton
-from justatom.tooling.stl import merge_in_order
-from typing import Any, Dict, List, Optional, Generator
+from typing import Any, Dict, Generator, List, Optional
 
 import weaviate
-
+from loguru import logger
+from weaviate.classes.query import MetadataQuery
 from weaviate.collections.classes.data import DataObject
 from weaviate.config import AdditionalConfig
 from weaviate.embedded import EmbeddedOptions
 from weaviate.util import generate_uuid5
-from weaviate.classes.query import MetadataQuery
 
-from justatom.etc.types import DuplicatePolicy, SearchPolicy
+from justatom.etc.auth import AuthCredentials
 from justatom.etc.errors import DocumentStoreError, DuplicateDocumentError
 from justatom.etc.filters import convert_filters
-from justatom.etc.serialization import default_from_dict, default_to_dict
-from loguru import logger
-
+from justatom.etc.pattern import singleton
 from justatom.etc.schema import Document
-from justatom.etc.auth import AuthCredentials
-
+from justatom.etc.serialization import default_from_dict, default_to_dict
+from justatom.etc.types import DuplicatePolicy, SearchPolicy
+from justatom.tooling.stl import merge_in_order
 
 # See https://weaviate.io/developers/weaviate/config-refs/datatypes#:~:text=DataType%3A%20object%20%E2%80%8B&text=The%20object%20type%20allows%20you,be%20nested%20to%20any%20depth.&text=As%20of%201.22%20%2C%20object%20and,not%20indexed%20and%20not%20vectorized.
 
@@ -157,11 +154,15 @@ class WeaviateDocStore:
         # startup_period has been removed
         self._client = weaviate.WeaviateClient(
             connection_params=(
-                weaviate.connect.base.ConnectionParams.from_url(url=url, grpc_port=grpc_port, grpc_secure=grpc_secure)
+                weaviate.connect.base.ConnectionParams.from_url(
+                    url=url, grpc_port=grpc_port, grpc_secure=grpc_secure
+                )
                 if url
                 else None
             ),
-            auth_client_secret=(auth_client_secret.resolve_value() if auth_client_secret else None),
+            auth_client_secret=(
+                auth_client_secret.resolve_value() if auth_client_secret else None
+            ),
             additional_config=additional_config,
             additional_headers=additional_headers,
             embedded_options=embedded_options,
@@ -180,9 +181,13 @@ class WeaviateDocStore:
             }
         else:
             # Set the class if not set
-            collection_settings = merge_in_order(collection_settings, {"class": collection_name.capitalize()})
+            collection_settings = merge_in_order(
+                collection_settings, {"class": collection_name.capitalize()}
+            )
             # Set the properties if they're not set
-            collection_settings["properties"] = collection_settings.get("properties", DOCUMENT_COLLECTION_PROPERTIES)
+            collection_settings["properties"] = collection_settings.get(
+                "properties", DOCUMENT_COLLECTION_PROPERTIES
+            )
 
         if not self._client.collections.exists(collection_settings["class"]):
             self._client.collections.create_from_dict(collection_settings)
@@ -202,16 +207,22 @@ class WeaviateDocStore:
         :returns:
             Dictionary with serialized data.
         """
-        embedded_options = asdict(self._embedded_options) if self._embedded_options else None
+        embedded_options = (
+            asdict(self._embedded_options) if self._embedded_options else None
+        )
         additional_config = (
-            json.loads(self._additional_config.model_dump_json(by_alias=True)) if self._additional_config else None
+            json.loads(self._additional_config.model_dump_json(by_alias=True))
+            if self._additional_config
+            else None
         )
 
         return default_to_dict(
             self,
             url=self._url,
             collection_settings=self._collection_settings,
-            auth_client_secret=(self._auth_client_secret.to_dict() if self._auth_client_secret else None),
+            auth_client_secret=(
+                self._auth_client_secret.to_dict() if self._auth_client_secret else None
+            ),
             additional_headers=self._additional_headers,
             embedded_options=embedded_options,
             additional_config=additional_config,
@@ -227,12 +238,24 @@ class WeaviateDocStore:
         :returns:
             The deserialized component.
         """
-        if (auth_client_secret := data["init_parameters"].get("auth_client_secret")) is not None:
-            data["init_parameters"]["auth_client_secret"] = AuthCredentials.from_dict(auth_client_secret)
-        if (embedded_options := data["init_parameters"].get("embedded_options")) is not None:
-            data["init_parameters"]["embedded_options"] = EmbeddedOptions(**embedded_options)
-        if (additional_config := data["init_parameters"].get("additional_config")) is not None:
-            data["init_parameters"]["additional_config"] = AdditionalConfig(**additional_config)
+        if (
+            auth_client_secret := data["init_parameters"].get("auth_client_secret")
+        ) is not None:
+            data["init_parameters"]["auth_client_secret"] = AuthCredentials.from_dict(
+                auth_client_secret
+            )
+        if (
+            embedded_options := data["init_parameters"].get("embedded_options")
+        ) is not None:
+            data["init_parameters"]["embedded_options"] = EmbeddedOptions(
+                **embedded_options
+            )
+        if (
+            additional_config := data["init_parameters"].get("additional_config")
+        ) is not None:
+            data["init_parameters"]["additional_config"] = AdditionalConfig(
+                **additional_config
+            )
         return default_from_dict(
             cls,
             data,
@@ -326,7 +349,9 @@ class WeaviateDocStore:
     def _query(self) -> List[Dict[str, Any]]:
         # properties = [p.name for p in self._collection.config.get().properties]
         try:
-            result = self._collection.iterator(include_vector=True, return_properties=None)
+            result = self._collection.iterator(
+                include_vector=True, return_properties=None
+            )
         except weaviate.exceptions.WeaviateQueryError as e:
             msg = f"Failed to query documents in Weaviate. Error: {e.message}"
             raise DocumentStoreError(msg) from e
@@ -347,7 +372,9 @@ class WeaviateDocStore:
         partial_result = None
         result = []
         # Keep querying until we get all documents matching the filters
-        while partial_result is None or len(partial_result.objects) == DEFAULT_QUERY_LIMIT:
+        while (
+            partial_result is None or len(partial_result.objects) == DEFAULT_QUERY_LIMIT
+        ):
             try:
                 partial_result = self._collection.query.fetch_objects(
                     filters=convert_filters(filters),
@@ -363,7 +390,9 @@ class WeaviateDocStore:
             offset += DEFAULT_QUERY_LIMIT
         return result
 
-    def filter_documents(self, filters: Optional[Dict[str, Any]] = None) -> List[Document]:
+    def filter_documents(
+        self, filters: Optional[Dict[str, Any]] = None
+    ) -> List[Document]:
         """
         Returns the documents that match the filters provided.
 
@@ -410,7 +439,10 @@ class WeaviateDocStore:
                 mapped_objects[id_] = obj.message
 
             msg = "\n".join(
-                [f"Failed to write object with id '{id_}'. Error: '{message}'" for id_, message in mapped_objects.items()]
+                [
+                    f"Failed to write object with id '{id_}'. Error: '{message}'"
+                    for id_, message in mapped_objects.items()
+                ]
             )
             raise DocumentStoreError(msg)
 
@@ -432,7 +464,9 @@ class WeaviateDocStore:
                 msg = f"Expected a Document, got '{type(doc)}' instead."
                 raise ValueError(msg)
 
-            if policy == DuplicatePolicy.SKIP and self._collection.data.exists(uuid=generate_uuid5(doc.id)):
+            if policy == DuplicatePolicy.SKIP and self._collection.data.exists(
+                uuid=generate_uuid5(doc.id)
+            ):
                 # This Document already exists, we skip it
                 continue
 
@@ -452,7 +486,9 @@ class WeaviateDocStore:
             raise DuplicateDocumentError(msg)
         return written
 
-    def write_documents(self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE) -> int:
+    def write_documents(
+        self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE
+    ) -> int:
         """
         Writes documents to Weaviate using the specified policy.
         We recommend using a OVERWRITE policy as it's faster than other policies for Weaviate since it uses
@@ -478,7 +514,9 @@ class WeaviateDocStore:
         :param document_ids: The object_ids to delete.
         """
         weaviate_ids = [generate_uuid5(doc_id) for doc_id in document_ids]
-        self._collection.data.delete_many(where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids))
+        self._collection.data.delete_many(
+            where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids)
+        )
 
     def delete_all_documents(self) -> bool:
         it = self.get_all_documents()
@@ -494,7 +532,9 @@ class WeaviateDocStore:
             else:
                 return True
         else:
-            logger.info(f"Nothing to delete in {self._collection_settings.get('class')}")
+            logger.info(
+                f"Nothing to delete in {self._collection_settings.get('class')}"
+            )
 
     def search_by_keywords(
         self,
@@ -513,12 +553,12 @@ class WeaviateDocStore:
                 include_vector=include_vector,
                 query_properties=["content"],
                 return_properties=None,
-                return_metadata=MetadataQuery(distance=True, score=True, explain_score=True, certainty=True),
+                return_metadata=MetadataQuery(
+                    distance=True, score=True, explain_score=True, certainty=True
+                ),
             )
         else:
-            msg = (
-                f"You specified {str(policy)} that is not compatable with [search_by_keywords]. Only [BM25] is avalaible"
-            )
+            msg = f"You specified {str(policy)} that is not compatable with [search_by_keywords]. Only [BM25] is avalaible"
             logger.error(msg)
             raise ValueError(msg)
 
@@ -590,9 +630,15 @@ class IFinder:
 
     def find(self, collection_name: str, **kwargs):
         if collection_name not in self.store:
+            WEAVIATE_HOST = kwargs.get("WEAVIATE_HOST") or os.environ.get(
+                "WEAVIATE_HOST"
+            )
+            WEAVIATE_PORT = kwargs.get("WEAVIATE_PORT") or os.environ.get(
+                "WEAVIATE_PORT"
+            )
             self.store[collection_name] = WeaviateDocStore(
                 collection_name=collection_name,
-                url=f"http://{os.environ.get('WEAVIATE_HOST')}:{os.environ.get('WEAVIATE_PORT')}",
+                url=f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}",
             )
         return self.store[collection_name]
 
