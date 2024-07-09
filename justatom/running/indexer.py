@@ -4,11 +4,12 @@ import torch
 from loguru import logger
 from more_itertools import chunked
 from tqdm.autonotebook import tqdm
-
+import copy
 from justatom.configuring import Config
 from justatom.etc.pattern import singleton
 from justatom.etc.schema import Document
-from justatom.processing import igniset, loader
+from justatom.processing import igniset
+from justatom.processing.loader import NamedDataLoader
 from justatom.processing.mask import IProcessor
 from justatom.running.atomic import ATOMICLMRunner
 from justatom.running.m1 import M1LMRunner
@@ -22,11 +23,11 @@ class NNIndexer(IIndexerRunner):
     def __init__(
         self,
         store: INNDocStore,
-        model: Union[M1LMRunner, M2LMRunner],
+        runner: Union[M1LMRunner, M2LMRunner],
         processor: IProcessor,
     ):
         self.store = store
-        self.model = model.eval()
+        self.model = runner.eval()
         self.processor = processor
 
     @torch.no_grad()
@@ -36,20 +37,12 @@ class NNIndexer(IIndexerRunner):
         batch_size: int = 1,
         device: str = "cpu",
     ):
-        documents_as_dicts = [
-            d.to_dict() if isinstance(d, Document) else d for d in documents
-        ]
-        dataset, tensor_names = igniset(
-            dicts=documents_as_dicts, processor=self.processor, batch_size=batch_size
-        )
-        loader = NamedDataLoader(
-            dataset=dataset, tensor_names=tensor_names, batch_size=batch_size
-        )
-        for i, (docs, batch) in tqdm(
-            enumerate(zip(chunked(documents_as_dicts, n=batch_size), loader))
-        ):
+        documents_as_dicts = [d.to_dict() if isinstance(d, Document) else d for d in documents]
+        dataset, tensor_names = igniset(dicts=documents_as_dicts, processor=self.processor, batch_size=batch_size)
+        loader = NamedDataLoader(dataset=dataset, tensor_names=tensor_names, batch_size=batch_size)
+        for i, (docs, batch) in tqdm(enumerate(zip(chunked(documents_as_dicts, n=batch_size), loader))):
             batches = {k: v.to(device) for k, v in batch.items()}
-            vectors = self.model(batch=batches)[0].cpu()
+            vectors = self.runner(batch=batches)[0].cpu()
             _docs = copy.deepcopy(docs)
             for doc, vec in zip(_docs, vectors):
                 doc["embedding"] = vec
@@ -67,12 +60,7 @@ class KWARGIndexer(IIndexerRunner):
             )
         ):
             docs = [
-                (
-                    Document.from_dict(dict(content=ci))
-                    if isinstance(ci, str)
-                    else Document.from_dict(ci)
-                )
-                for ci in chunk
+                (Document.from_dict(dict(content=ci)) if isinstance(ci, str) else Document.from_dict(ci)) for ci in chunk
             ]
             self.store.write_documents(docs)
             logger.info(f"{self.__class__.__name__} - index - {i / len(documents)}")
@@ -100,7 +88,7 @@ class ByName:
         if name == "keywords":
             klass = KWARGIndexer
         elif name == "embedding":
-            klass = EmbeddingIndexer
+            klass = NNIndexer
         elif name == "justatom":
             klass = ATOMICIndexer
         else:
