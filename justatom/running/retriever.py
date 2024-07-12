@@ -5,6 +5,10 @@ from justatom.running.m2 import M2LMRunner
 from justatom.processing.mask import IProcessor
 from typing import List, Union
 from loguru import logger
+from more_itertools import chunked
+import torch
+from justatom.processing.silo import igniset
+from justatom.processing.loader import NamedDataLoader
 from justatom.etc.pattern import singleton
 from justatom.storing.mask import INNDocStore
 
@@ -20,22 +24,81 @@ class ATOMICRetriever(IRetrieverRunner):
         pass
 
 
-class EmbeddingRetriever(IRetrieverRunner):
+class HybridRetriever(IRetrieverRunner):
 
-    def __init__(self, store: INNDocStore, model: Union[M1LMRunner, M2LMRunner], processor: IProcessor):
+    def __init__(
+        self,
+        store: INNDocStore,
+        runner: Union[M1LMRunner, M2LMRunner],
+        processor: IProcessor,
+        device="cpu",
+    ):
         super().__init__()
         self.store = store
         self.processor = processor
-        self.model = model.eval()
+        self.runner = runner.eval().to(device)
+        self.device = device
 
+    @torch.no_grad()
+    def retrieve_topk(
+        self,
+        queries: Union[str, List[str]],
+        top_k: int = 5,
+        include_embedding: bool = False,
+        alpha: float = 0.85,
+        include_scores: bool = False,
+    ):
+        queries = [queries] if isinstance(queries, str) else queries
+        queries = [{"content": q} for q in queries]
+        dataset, tensor_names = igniset(queries, processor=self.processor, batch_size=1_000)
+        loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=1)
+        answer = []
+        for query, _batch in zip(queries, loader):
+            batch = {k: v.to(self.device) for k, v in _batch.items()}
+            vector = self.runner(batch=batch)[0].cpu().numpy().tolist()
+            res_topk = self.store.search(vector, top_k=top_k, alpha=alpha)
+            answer.append(res_topk)
+        return answer
+
+
+class EmbeddingRetriever(IRetrieverRunner):
+
+    def __init__(
+        self,
+        store: INNDocStore,
+        runner: Union[M1LMRunner, M2LMRunner, ATOMICLMRunner],
+        processor: IProcessor,
+        device: str = "cpu",
+    ):
+        super().__init__()
+        self.store = store
+        self.processor = processor
+        self.runner = runner.eval()
+        self.device = device
+        self.runner.to(device)
+
+    @torch.no_grad()
     def retrieve_topk(
         self,
         queries: Union[str, List[str]],
         top_k: int = 5,
         include_embedding: bool = False,
         include_scores: bool = False,
+        batch_size: int = 16,
     ):
-        pass
+        queries = [queries] if isinstance(queries, str) else queries
+        queries = [{"content": q} for q in queries]
+        dataset, tensor_names = igniset(queries, processor=self.processor, batch_size=batch_size)
+        loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=batch_size)
+        answer = []
+
+        for _queries, _batches in zip(chunked(queries, n=batch_size), loader):
+            batches = {k: v.to(self.device) for k, v in _batches.items()}
+            vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
+            for vector, query in zip(vectors, _queries):
+                res_topk = self.store.search_by_embedding(vector, top_k=top_k)
+                answer.append(res_topk)
+        return answer
 
 
 class KWARGRetriever(IRetrieverRunner):
@@ -57,12 +120,14 @@ class KWARGRetriever(IRetrieverRunner):
 class ByName:
 
     def named(self, name: str, **kwargs):
-        OPS = ["keywords", "emebedding", "justatom"]
+        OPS = ["keywords", "emebedding", "hybrid", "justatom"]
 
         if name == "keywords":
             klass = KWARGRetriever
         elif name == "embedding":
             klass = EmbeddingRetriever
+        elif name == "hybrid":
+            klass = HybridRetriever
         elif name == "justatom":
             klass = ATOMICRetriever
         else:
@@ -76,4 +141,4 @@ class ByName:
 API = ByName()
 
 
-__all__ = ["KWARGRetriever", "EmbeddingRetriever", "API"]
+__all__ = ["KWARGRetriever", "HybridRetriever", "EmbeddingRetriever", "API"]
