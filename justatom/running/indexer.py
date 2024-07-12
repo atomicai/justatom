@@ -27,7 +27,7 @@ class NNIndexer(IIndexerRunner):
         processor: IProcessor,
     ):
         self.store = store
-        self.model = runner.eval()
+        self.runner = runner.eval()
         self.processor = processor
 
     @torch.no_grad()
@@ -53,7 +53,7 @@ class KWARGIndexer(IIndexerRunner):
     def __init__(self, store: INNDocStore):
         self.store = store
 
-    async def index(self, documents: List[Union[str, Dict]], batch_size: int = 4):
+    async def index(self, documents: List[Union[str, Dict]], batch_size: int = 4, **props):
         for i, chunk in enumerate(
             tqdm(
                 chunked(documents, n=batch_size),
@@ -87,7 +87,7 @@ class ByName:
 
         if name == "keywords":
             klass = KWARGIndexer
-        elif name == "embedding":
+        elif name in ["embedding", "hybrid"]:
             klass = NNIndexer
         elif name == "justatom":
             klass = ATOMICIndexer
@@ -102,4 +102,4 @@ class ByName:
 API = ByName()
 
 
-__all__ = ["KWARGIndexer", "EmbeddingIndexer", "API"]
+__all__ = ["KWARGIndexer", "NNIndexer", "API"]
