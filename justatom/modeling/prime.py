@@ -409,4 +409,4 @@ HF_CLASS_MAPPING = {
 COMMON_CLASS_MAPPING = {"pfbert": IPFBERTModel, "rec": IRECModel}
 
 
-__all__ = ["IPFBERTModel", "E5SModel", "E5Model", "HFDocEmbedder", "E5LModel"]
+__all__ = ["IPFBERTModel", "E5SModel", "E5Model", "DocEmbedder", "E5LModel"]
