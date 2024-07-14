@@ -105,7 +105,7 @@ class M1Processor(IProcessor):
             return dataset, tensornames, problematic_ids
 
 
-class TRILMProcessor(IProcessor):
+class TripletProcessor(IProcessor):
     """
     TRIplet Language Model separation for different encoder(s) LM processor that performs grouping for similarity fine-tuning.
     Preprocess samples for `justatom.training.loss.TripletLoss` loss function
@@ -151,6 +151,89 @@ class TRILMProcessor(IProcessor):
             )
 
             cur_sample = Sample(id="", clear_text=sample, tokenized=tokenized, features=[features])
+            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            baskets.append(cur_basket)
+
+        problematic_ids = set()
+        dataset, tensornames = self._create_dataset(baskets)
+
+        if return_baskets:
+            return dataset, tensornames, problematic_ids, baskets
+        else:
+            return dataset, tensornames, problematic_ids
+
+
+class ContrastiveProcessor(IProcessor):
+    """
+    ContrastiveProcessor separation for different encoder(s) LM processor that performs grouping for similarity fine-tuning.
+    Preprocess samples for `justatom.training.loss.ContrastiveLoss` loss function
+    """
+
+    def __init__(
+        self,
+        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
+        max_seq_len: int = 512,
+        queries_prefix: str = "query:",
+        queries_field: str = "query",
+        pos_queries_field: str = "content",
+        pos_queries_prefix: str = "passage:",
+        **kwargs,
+    ):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.max_seq_len = max_seq_len
+        self.queries_field = queries_field
+        self.queries_prefix = queries_prefix
+        self.pos_queries_prefix = pos_queries_prefix
+        self.pos_queries_field = pos_queries_field
+
+    @classmethod
+    def load(cls, where, config: Dict, **props):
+        tokenizer = ITokenizer.from_pretrained(where)
+        return cls(tokenizer=tokenizer, **config)
+
+    def dataset_from_dicts(self, dicts, indices=None, return_baskets=False, debug=False):
+        if indices is None:
+            indices = []
+        baskets = []
+        queries = [
+            self.do_prefix(x.get(self.queries_field), pref=x.get("meta", {}).get("prefix", self.queries_prefix))
+            for x in dicts
+        ]
+        pos_queries = [
+            self.do_prefix(x.get(self.pos_queries_field), pref=x.get("meta", {}).get("prefix", self.pos_queries_prefix))
+            for x in dicts
+        ]
+        groups = [hash(x.get("meta", {}).get("group", 0)) for x in dicts]
+        # ---
+        tokenized_queries_batch = self.tokenizer(
+            queries, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
+        tokenized_pos_queries_batch = self.tokenizer(
+            pos_queries, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
+        # ---
+        queries_input_ids_batch = tokenized_queries_batch["input_ids"]
+        pos_queries_input_ids_batch = tokenized_pos_queries_batch["input_ids"]
+        queries_atten_ids_batch = tokenized_queries_batch["attention_mask"]
+        pos_queries_atten_ids_batch = tokenized_pos_queries_batch["attention_mask"]
+
+        for sample, pos_sample, queries_input_ids, queries_att_ids, pos_queries_input_ids, pos_queries_att_ids in zip(
+            queries,
+            pos_queries,
+            queries_input_ids_batch,
+            queries_atten_ids_batch,
+            pos_queries_input_ids_batch,
+            pos_queries_atten_ids_batch,
+        ):
+            features = dict(
+                input_ids=queries_input_ids,
+                attention_mask=queries_att_ids,
+                pos_input_ids=pos_queries_input_ids,
+                pos_attention_mask=pos_queries_att_ids,
+            )
+
+            cur_sample = Sample(id="", clear_text=[sample, pos_sample], tokenized={}, features=[features])
             cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
             baskets.append(cur_basket)
 
