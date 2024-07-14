@@ -91,19 +91,38 @@ class E5SModel(E5GeneralWrapper):
         model = AutoModel.from_pretrained(model_name_or_path)
         return cls(model, **kwargs)
 
+    def maybe_norm_or_average(self, xs, attention_mask: torch.Tensor, norm: bool, average: bool):
+        if average:
+            result = self.average_pool(xs, attention_mask=attention_mask)
+            if norm:
+                result = F.normalize(result, p=2, dim=len(result.shape) - 1)
+        elif norm:
+            result = F.normalize(xs, p=2, dim=len(xs.shape) - 1)
+        else:
+            result = xs
+        return result
+
     def forward(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor = None,
         group_ids: torch.Tensor = None,
+        pos_input_ids: torch.Tensor = None,
+        pos_attention_mask: torch.Tensor = None,
         norm: bool = True,
         average: bool = True,
     ):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        if average:
-            embeddings = self.average_pool(outputs.last_hidden_state, attention_mask=attention_mask)
-        if norm:
-            response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
+        response = self.maybe_norm_or_average(outputs.last_hidden_state, attention_mask=attention_mask)
+        # if average:
+        #     embeddings = self.average_pool(outputs.last_hidden_state, attention_mask=attention_mask)
+        # if norm:
+        #     response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
+        if pos_input_ids and pos_attention_mask:
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask)
+            pos_response = self.maybe_norm_or_average(pos_outputs.last_hidden_state, attention_mask=pos_attention_mask)
+            return response, pos_response
+
         return response
 
 
