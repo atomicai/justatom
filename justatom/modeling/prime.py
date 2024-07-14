@@ -23,10 +23,27 @@ class E5GeneralWrapper(ILanguageModel):
     def __init__(self):
         super().__init__()
 
-    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+    def average_pool(
+        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(
+            ~attention_mask[..., None].bool(), 0.0
+        )
 
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
+
+    def maybe_norm_or_average(
+        self, xs, attention_mask: torch.Tensor, norm: bool, average: bool
+    ):
+        if average:
+            result = self.average_pool(xs, attention_mask=attention_mask)
+            if norm:
+                result = F.normalize(result, p=2, dim=len(result.shape) - 1)
+        elif norm:
+            result = F.normalize(xs, p=2, dim=len(xs.shape) - 1)
+        else:
+            result = xs
+        return result
 
 
 class E5Model(E5GeneralWrapper):
@@ -57,12 +74,16 @@ class E5Model(E5GeneralWrapper):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor = None,
         group_ids: torch.Tensor = None,
+        pos_input_ids: torch.Tensor = None,
+        pos_attention_mask: torch.Tensor = None,
         norm: bool = True,
         average: bool = True,
     ):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         if average:
-            embeddings = self.average_pool(outputs.last_hidden_state, attention_mask=attention_mask)
+            embeddings = self.average_pool(
+                outputs.last_hidden_state, attention_mask=attention_mask
+            )
         if norm:
             response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
         return response
@@ -73,7 +94,9 @@ class E5SModel(E5GeneralWrapper):
 
     def __init__(
         self,
-        model_name_or_instance: Union[str, nn.Module] = "intfloat/multilingual-e5-small",
+        model_name_or_instance: Union[
+            str, nn.Module
+        ] = "intfloat/multilingual-e5-small",
         device="cpu",
         **kwargs,
     ):
@@ -91,7 +114,9 @@ class E5SModel(E5GeneralWrapper):
         model = AutoModel.from_pretrained(model_name_or_path)
         return cls(model, **kwargs)
 
-    def maybe_norm_or_average(self, xs, attention_mask: torch.Tensor, norm: bool, average: bool):
+    def maybe_norm_or_average(
+        self, xs, attention_mask: torch.Tensor, norm: bool, average: bool
+    ):
         if average:
             result = self.average_pool(xs, attention_mask=attention_mask)
             if norm:
@@ -113,14 +138,16 @@ class E5SModel(E5GeneralWrapper):
         average: bool = True,
     ):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        response = self.maybe_norm_or_average(outputs.last_hidden_state, attention_mask=attention_mask)
-        # if average:
-        #     embeddings = self.average_pool(outputs.last_hidden_state, attention_mask=attention_mask)
-        # if norm:
-        #     response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
+        response = self.maybe_norm_or_average(
+            outputs.last_hidden_state, attention_mask=attention_mask
+        )
         if pos_input_ids and pos_attention_mask:
-            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask)
-            pos_response = self.maybe_norm_or_average(pos_outputs.last_hidden_state, attention_mask=pos_attention_mask)
+            pos_outputs = self.model(
+                input_ids=pos_input_ids, attention_mask=pos_attention_mask
+            )
+            pos_response = self.maybe_norm_or_average(
+                pos_outputs.last_hidden_state, attention_mask=pos_attention_mask
+            )
             return response, pos_response
 
         return response
@@ -131,7 +158,9 @@ class E5LModel(E5GeneralWrapper):
 
     def __init__(
         self,
-        model_name_or_instance: Union[str, nn.Module] = "intfloat/multilingual-e5-large",
+        model_name_or_instance: Union[
+            str, nn.Module
+        ] = "intfloat/multilingual-e5-large",
         device="cpu",
         **kwargs,
     ):
@@ -154,12 +183,16 @@ class E5LModel(E5GeneralWrapper):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor = None,
         group_ids: torch.Tensor = None,
+        pos_input_ids: torch.Tensor = None,
+        pos_attention_mask: torch.Tensor = None,
         norm: bool = True,
         average: bool = True,
     ):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         if average:
-            embeddings = self.average_pool(outputs.last_hidden_state, attention_mask=attention_mask)
+            embeddings = self.average_pool(
+                outputs.last_hidden_state, attention_mask=attention_mask
+            )
         if norm:
             response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
         return response
@@ -188,7 +221,9 @@ class IPFBERTModel(IModel):
     Positional Free Bidirectional Encoder Representation from Transformers
     """
 
-    def __init__(self, embedding: nn.Module = None, attention: nn.Module = None, **props):
+    def __init__(
+        self, embedding: nn.Module = None, attention: nn.Module = None, **props
+    ):
         super(IPFBERTModel, self).__init__()
         if embedding is not None and attention is not None:
             self.embedding = embedding
@@ -227,7 +262,9 @@ class IPFBERTModel(IModel):
 
         return cls(embedding=emb, attention=att)
 
-    def save(self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None):
+    def save(
+        self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None
+    ):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
@@ -242,8 +279,12 @@ class IPFBERTModel(IModel):
         # (3). Generate and save the config
         self.generate_config().save_config(save_dir)
 
-    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+    def average_pool(
+        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(
+            ~attention_mask[..., None].bool(), 0.0
+        )
 
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
@@ -304,7 +345,9 @@ class DocEmbedder(IDocEmbedder):
             batch_size=batch_size,
         )
 
-        loader = NamedDataLoader(dataset=dataset, batch_size=batch_size, tensor_names=tensor_names)
+        loader = NamedDataLoader(
+            dataset=dataset, batch_size=batch_size, tensor_names=tensor_names
+        )
 
         batch_gen = range(0, len(texts), batch_size)
         if verbose:
