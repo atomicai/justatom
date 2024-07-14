@@ -4,8 +4,9 @@ from typing import Dict, List, Optional, Union
 import torch
 from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 
-from justatom.processing.mask import IProcessor, ITokenizer
+from justatom.processing.mask import IProcessor
 from justatom.processing.sample import Sample, SampleBasket
+from justatom.processing.tokenizer import ITokenizer
 
 
 class INFERProcessor(IProcessor):
@@ -14,7 +15,9 @@ class INFERProcessor(IProcessor):
     (2) It performs only necessary transformation and avoids typical pre-processing bottleneck such as `regex` use.
     """
 
-    def __init__(self, tokenizer, max_seq_len: int = 512, do_lower_case: bool = False, prefix=""):
+    def __init__(
+        self, tokenizer, max_seq_len: int = 512, do_lower_case: bool = False, prefix=""
+    ):
         super(INFERProcessor, self).__init__()
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
@@ -25,19 +28,30 @@ class INFERProcessor(IProcessor):
         tokenizer = ITokenizer.from_pretrained(where)
         return cls(tokenizer=tokenizer, **config)
 
-    def dataset_from_dicts(self, dicts, indices=None, return_baskets=False, debug=False):
+    def dataset_from_dicts(
+        self, dicts, indices=None, return_baskets=False, debug=False
+    ):
         if indices is None:
             indices = []
         baskets = []
-        docs = [self.do_prefix(x["content"], pref=x.get("meta", {}).get("prefix", self.prefix)) for x in dicts]
+        docs = [
+            self.do_prefix(
+                x["content"], pref=x.get("meta", {}).get("prefix", self.prefix)
+            )
+            for x in dicts
+        ]
         groups = [hash(x.get("meta", {}).get("group", 0)) for x in dicts]
         # ---
-        tokenized_batch = self.tokenizer(docs, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_batch = self.tokenizer(
+            docs, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
         # ---
         input_ids_batch = tokenized_batch["input_ids"]
         atten_ids_batch = tokenized_batch["attention_mask"]
         # ---
-        for sample, input_ids, att_ids, group_ids in zip(docs, input_ids_batch, atten_ids_batch, groups):
+        for sample, input_ids, att_ids, group_ids in zip(
+            docs, input_ids_batch, atten_ids_batch, groups
+        ):
             tokenized = {}
             # TODO: Convert `group_id` to compatable format
             features = dict(
@@ -46,8 +60,12 @@ class INFERProcessor(IProcessor):
                 group_ids=torch.tensor(group_ids),
             )
 
-            cur_sample = Sample(id="", clear_text=sample, tokenized=tokenized, features=[features])
-            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            cur_sample = Sample(
+                id="", clear_text=sample, tokenized=tokenized, features=[features]
+            )
+            cur_basket = SampleBasket(
+                id_internal=None, raw=sample, id_external=None, samples=[cur_sample]
+            )
             baskets.append(cur_basket)
 
         problematic_ids = set()
@@ -79,10 +97,17 @@ class M1Processor(IProcessor):
             indices = []
         baskets = []
         docs = [
-            (self.do_prefix(x["content"].lower()) if self.do_lower_case else self.do_prefix(x["content"])) for x in dicts
+            (
+                self.do_prefix(x["content"].lower())
+                if self.do_lower_case
+                else self.do_prefix(x["content"])
+            )
+            for x in dicts
         ]
 
-        tokenized_batch = self.tokenizer(docs, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_batch = self.tokenizer(
+            docs, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
 
         input_ids_batch = tokenized_batch["input_ids"]
         atten_ids_batch = tokenized_batch["attention_mask"]
@@ -91,8 +116,12 @@ class M1Processor(IProcessor):
             tokenized = {}
             features = dict(input_ids=input_ids, attention_mask=att_ids)
 
-            cur_sample = Sample(id="", clear_text=sample, tokenized=tokenized, features=[features])
-            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            cur_sample = Sample(
+                id="", clear_text=sample, tokenized=tokenized, features=[features]
+            )
+            cur_basket = SampleBasket(
+                id_internal=None, raw=sample, id_external=None, samples=[cur_sample]
+            )
 
             baskets.append(cur_basket)
 
@@ -129,19 +158,30 @@ class TripletProcessor(IProcessor):
         tokenizer = ITokenizer.from_pretrained(where)
         return cls(tokenizer=tokenizer, **config)
 
-    def dataset_from_dicts(self, dicts, indices=None, return_baskets=False, debug=False):
+    def dataset_from_dicts(
+        self, dicts, indices=None, return_baskets=False, debug=False
+    ):
         if indices is None:
             indices = []
         baskets = []
-        docs = [self.do_prefix(x["content"], pref=x.get("meta", {}).get("prefix", self.prefix)) for x in dicts]
+        docs = [
+            self.do_prefix(
+                x["content"], pref=x.get("meta", {}).get("prefix", self.prefix)
+            )
+            for x in dicts
+        ]
         groups = [hash(x.get("meta", {}).get("group", 0)) for x in dicts]
         # ---
-        tokenized_batch = self.tokenizer(docs, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_batch = self.tokenizer(
+            docs, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
         # ---
         input_ids_batch = tokenized_batch["input_ids"]
         atten_ids_batch = tokenized_batch["attention_mask"]
         # ---
-        for sample, input_ids, att_ids, group_ids in zip(docs, input_ids_batch, atten_ids_batch, groups):
+        for sample, input_ids, att_ids, group_ids in zip(
+            docs, input_ids_batch, atten_ids_batch, groups
+        ):
             tokenized = {}
             # TODO: Convert `group_id` to compatable format
             features = dict(
@@ -150,8 +190,12 @@ class TripletProcessor(IProcessor):
                 group_ids=torch.tensor(group_ids),
             )
 
-            cur_sample = Sample(id="", clear_text=sample, tokenized=tokenized, features=[features])
-            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            cur_sample = Sample(
+                id="", clear_text=sample, tokenized=tokenized, features=[features]
+            )
+            cur_basket = SampleBasket(
+                id_internal=None, raw=sample, id_external=None, samples=[cur_sample]
+            )
             baskets.append(cur_basket)
 
         problematic_ids = set()
@@ -192,16 +236,24 @@ class ContrastiveProcessor(IProcessor):
         tokenizer = ITokenizer.from_pretrained(where)
         return cls(tokenizer=tokenizer, **config)
 
-    def dataset_from_dicts(self, dicts, indices=None, return_baskets=False, debug=False):
+    def dataset_from_dicts(
+        self, dicts, indices=None, return_baskets=False, debug=False
+    ):
         if indices is None:
             indices = []
         baskets = []
         queries = [
-            self.do_prefix(x.get(self.queries_field), pref=x.get("meta", {}).get("prefix", self.queries_prefix))
+            self.do_prefix(
+                x.get(self.queries_field),
+                pref=x.get("meta", {}).get("prefix", self.queries_prefix),
+            )
             for x in dicts
         ]
         pos_queries = [
-            self.do_prefix(x.get(self.pos_queries_field), pref=x.get("meta", {}).get("prefix", self.pos_queries_prefix))
+            self.do_prefix(
+                x.get(self.pos_queries_field),
+                pref=x.get("meta", {}).get("prefix", self.pos_queries_prefix),
+            )
             for x in dicts
         ]
         groups = [hash(x.get("meta", {}).get("group", 0)) for x in dicts]
@@ -210,7 +262,10 @@ class ContrastiveProcessor(IProcessor):
             queries, truncation=True, max_length=self.max_seq_len, padding="max_length"
         )
         tokenized_pos_queries_batch = self.tokenizer(
-            pos_queries, truncation=True, max_length=self.max_seq_len, padding="max_length"
+            pos_queries,
+            truncation=True,
+            max_length=self.max_seq_len,
+            padding="max_length",
         )
         # ---
         queries_input_ids_batch = tokenized_queries_batch["input_ids"]
@@ -218,7 +273,14 @@ class ContrastiveProcessor(IProcessor):
         queries_atten_ids_batch = tokenized_queries_batch["attention_mask"]
         pos_queries_atten_ids_batch = tokenized_pos_queries_batch["attention_mask"]
 
-        for sample, pos_sample, queries_input_ids, queries_att_ids, pos_queries_input_ids, pos_queries_att_ids in zip(
+        for (
+            sample,
+            pos_sample,
+            queries_input_ids,
+            queries_att_ids,
+            pos_queries_input_ids,
+            pos_queries_att_ids,
+        ) in zip(
             queries,
             pos_queries,
             queries_input_ids_batch,
@@ -233,8 +295,15 @@ class ContrastiveProcessor(IProcessor):
                 pos_attention_mask=pos_queries_att_ids,
             )
 
-            cur_sample = Sample(id="", clear_text=[sample, pos_sample], tokenized={}, features=[features])
-            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            cur_sample = Sample(
+                id="",
+                clear_text=[sample, pos_sample],
+                tokenized={},
+                features=[features],
+            )
+            cur_basket = SampleBasket(
+                id_internal=None, raw=sample, id_external=None, samples=[cur_sample]
+            )
             baskets.append(cur_basket)
 
         problematic_ids = set()
