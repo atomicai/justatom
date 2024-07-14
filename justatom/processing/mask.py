@@ -10,7 +10,6 @@ from torch.utils.data import TensorDataset
 
 from justatom.etc.format import maybe_json
 from justatom.processing.sample import SampleBasket
-from justatom.processing.tokenizer import ITokenizer
 
 GRANTED_PROCESSOR_NAMES = [
     "PFBERTProcessor",
