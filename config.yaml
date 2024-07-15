@@ -13,6 +13,9 @@ index:
   similarity: l2
   filters_path: null
 
+eval:
+  delete_if_not_empty: false
+
 train:
   max_seq_len: 512
   dataset_path: .data
