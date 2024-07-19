@@ -21,9 +21,9 @@ from justatom.configuring import Config
 # Model IO and Prediction Head Flow
 from justatom.modeling.head import ANNHead
 from justatom.modeling.mask import ILanguageModel
-from justatom.processing import IProcessor, ITokenizer, igniset
+from justatom.processing import IProcessor, ITokenizer, igniset, INFERProcessor
 from justatom.processing.loader import NamedDataLoader
-from justatom.processing.prime import TRILMProcessor
+from justatom.processing.prime import TripletProcessor, ContrastiveProcessor
 from justatom.running.m1 import M1LMRunner
 from justatom.etc.schema import Document
 from justatom.tooling import stl
@@ -38,7 +38,9 @@ from justatom.tooling.stl import merge_in_order
 dotenv.load_dotenv()
 
 
-logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', -1)}")
+logger.info(
+    f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', -1)}"
+)
 
 
 def to_numpy(container):
@@ -67,7 +69,9 @@ def random_split(ds: ConcatDataset, lengths: List[int]):
     :param lengths: Lengths of splits to be produced.
     """
     if sum(lengths) != len(ds):
-        raise ValueError("Sum of input lengths does not equal the length of the input dataset!")
+        raise ValueError(
+            "Sum of input lengths does not equal the length of the input dataset!"
+        )
 
     try:
 
@@ -81,7 +85,8 @@ def random_split(ds: ConcatDataset, lengths: List[int]):
         )
 
     assert idx_dataset >= 1, (
-        "Dev_split ratio is too large, there is no data in train set. Please lower split =" f" {str(lengths)}"
+        "Dev_split ratio is too large, there is no data in train set. Please lower split ="
+        f" {str(lengths)}"
     )
 
     train = ConcatDataset(ds.datasets[:idx_dataset])  # type: Dataset
@@ -146,10 +151,20 @@ def igni_runners(store, index_by: str, model_name_or_path, device: str = "cpu"):
             logger.error(msg)
             raise ValueError(msg)
         lm_model = ILanguageModel.load(model_name_or_path)
-        processor = IProcessor.load(model_name_or_path)
+        # processor = IProcessor.load(model_name_or_path)
+        ix_processor = INFERProcessor(
+            ITokenizer.from_pretrained(model_name_or_path), prefix="passage:"
+        )
+        ir_processor = INFERProcessor(
+            ITokenizer.from_pretrained(model_name_or_path), prefix="query:"
+        )
         runner = M1LMRunner(model=lm_model, prediction_heads=[], device=device)
-        ix_runner = IndexerAPI.named(index_by, store=store, runner=runner, processor=processor)
-        ir_runner = RetrieverApi.named(index_by, store=store, runner=runner, processor=processor, device=device)
+        ix_runner = IndexerAPI.named(
+            index_by, store=store, runner=runner, processor=ix_processor
+        )
+        ir_runner = RetrieverApi.named(
+            index_by, store=store, runner=runner, processor=ir_processor, device=device
+        )
 
     return ix_runner, ir_runner
 
@@ -175,12 +190,21 @@ async def maybe_index_and_ir(
     device = maybe_cuda_or_mps(devices=devices)
 
     ix_runner, ir_runner = igni_runners(
-        store=store, index_by=index_by, model_name_or_path=model_name_or_path, device=device
+        store=store,
+        index_by=index_by,
+        model_name_or_path=model_name_or_path,
+        device=device,
     )
-    assert search_field in pl_data.columns, f"Search field [{search_field}] is not present within dataset."
-    assert content_field in pl_data.columns, f"Content field [{content_field}] is not present within dataset."
+    assert (
+        search_field in pl_data.columns
+    ), f"Search field [{search_field}] is not present within dataset."
+    assert (
+        content_field in pl_data.columns
+    ), f"Content field [{content_field}] is not present within dataset."
 
-    docs = wrapper_docs_with_queries(pl_data, search_field=search_field, content_field=content_field)
+    docs = wrapper_docs_with_queries(
+        pl_data, search_field=search_field, content_field=content_field
+    )
     print()
     await ix_runner.index(documents=docs, batch_size=batch_size, device=device)
     print()
@@ -220,23 +244,35 @@ async def main(
         content_field=content_field,
     )
 
-    logger.info(f"Indexing stage is completed. Using evaluation per {ir.store.count_documents()}")
+    logger.info(
+        f"Indexing stage is completed. Using evaluation per {ir.store.count_documents()}"
+    )
 
     el: IEvaluatorRunner = EvaluatorRunner(ir=ir)
 
     queries = pl_data.select(search_field).to_series().to_list()
 
     eval_metrics = el.evaluate_topk(
-        queries=queries, top_k=top_k, metrics=metrics, metrics_top_k=metrics_top_k, eval_top_k=eval_top_k
+        queries=queries,
+        top_k=top_k,
+        metrics=metrics,
+        metrics_top_k=metrics_top_k,
+        eval_top_k=eval_top_k,
     )
     print()
     comp_eval_metrics = {k: list(v.compute()) for k, v in eval_metrics.items()}
     comp_eval_metrics = [
-        {"name": k, "mean": v[0], "std": v[1], "dataset": dataset_name_or_path} for k, v in comp_eval_metrics.items()
+        {"name": k, "mean": v[0], "std": v[1], "dataset": dataset_name_or_path}
+        for k, v in comp_eval_metrics.items()
     ]
     pl_metrics = pl.from_dicts(comp_eval_metrics)
     snap_eval_metrics = [] if eval_metrics is None else eval_metrics
-    snap_name = stl.snapshot({"evaluation": " ".join(snap_eval_metrics), "model": Path(model_name_or_path).stem})
+    snap_name = stl.snapshot(
+        {
+            "evaluation": " ".join(snap_eval_metrics),
+            "model": Path(model_name_or_path).stem,
+        }
+    )
     pl_metrics.write_csv(f"{snap_name}.csv")
 
 
@@ -248,7 +284,9 @@ if __name__ == "__main__":
                 eval_by="embedding",
                 filters={"fields": ["query", "content"]},
                 model_name_or_path=str(
-                    Path(os.getcwd()) / "weights" / "bs=128_esm=DistanceAcc_dataset=polaroids.ai_margin=0.4"
+                    Path(os.getcwd())
+                    / "weights"
+                    / "bs=16_model=E5Base_esm=TrainingLoss_dataset=polaroids.ai_margin=0.4"
                 ),
                 metrics_top_k=["HitRate"],
                 eval_top_k=[2, 5, 10, 15, 20],
