@@ -14,7 +14,7 @@ index:
   filters_path: null
 
 eval:
-  delete_if_not_empty: false
+  delete_if_not_empty: true
 
 train:
   max_seq_len: 512
@@ -34,9 +34,9 @@ train:
   devices: auto
   batch_size: 64
   early_stopping:
-    metric: DistanceSm
+    metric: TrainingLoss
     size: 250
-    mode: max
+    mode: min
   save_model_path: weights
   val_check_interval: 30
 
