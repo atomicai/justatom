@@ -408,7 +408,9 @@ class TripletLoss(nn.Module):
         n = inputs.size(0)  # batch_size samples
         _device = inputs.device
         # pairwise distances
-        dist = pdist(inputs)  # The same as taking inputs @ inputs.T => n x n
+        dist = pdist(
+            inputs
+        )  # The same as taking inputs @ inputs.T - main diagonal => n x n
 
         # find the hardest positive and negative
         mask_pos = targets.expand(n, n).eq(targets.expand(n, n).t())
@@ -519,6 +521,20 @@ class ContrastiveLoss(nn.Module):
         self.reduction = reduction
         self.negative_mode = negative_mode
 
+    def normalize(self, *xs):
+        return [None if x is None else F.normalize(x, dim=-1) for x in xs]
+
+    def transpose(self, x: torch.Tensor):
+        return x.transpose(-2, -1)
+
+    def hit_rate_at_k(self, scores: torch.Tensor, labels: torch.Tensor, k: int = 1):
+        hit_count = 0
+        for i in range(len(labels)):
+            top_k_indices = torch.topk(scores[i], k).indices
+            if i in top_k_indices:
+                hit_count += 1
+        return hit_count / len(labels)
+
     def info_nce(
         self,
         queries,
@@ -564,6 +580,42 @@ class ContrastiveLoss(nn.Module):
                 raise ValueError(
                     "Vectors of <queries> and <neg_queries> should have the same number of components."
                 )
+
+        # Normalize to unit vectors
+
+        queries, pos_queries, neg_queries = self.normalize(
+            queries, pos_queries, neg_queries
+        )
+        if neg_queries is not None:
+            # Explicit negative keys
+
+            # Cosine between positive pairs
+            positive_logit = torch.sum(queries * pos_queries, dim=1, keepdim=True)
+
+            if negative_mode == "unpaired":
+                # Cosine between all query-negative combinations
+                negative_logits = queries @ self.transpose(neg_queries)
+
+        elif negative_mode == "paired":
+            queries = queries.unsqueeze(1)
+            negative_logits = queries @ self.transpose(neg_queries)
+            negative_logits = negative_logits.squeeze(1)
+
+            # First index in last dimension are the positive samples
+            logits = torch.cat([positive_logit, negative_logits], dim=1)
+            labels = torch.zeros(len(logits), dtype=torch.long, device=queries.device)
+        else:
+            # Negative keys are implicitly off-diagonal positive keys.
+
+            # Cosine between all combinations
+            logits = queries @ self.transpose(pos_queries)
+
+            # Positive keys are the entries on the diagonal
+            labels = torch.arange(len(queries), device=queries.device)
+        # TODO: We need to return some per-batch metrics as well.
+        # TODO: e.g. HitRate@1 HitRate@2, ...
+        #
+        return F.cross_entropy(logits / temperature, labels, reduction=reduction)
 
     def forward(self, queries, pos_queries, neg_queries=None):
         return self.info_nce(
