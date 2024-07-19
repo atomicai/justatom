@@ -16,49 +16,44 @@ class INFERProcessor(IProcessor):
     """
 
     def __init__(
-        self, tokenizer, max_seq_len: int = 512, do_lower_case: bool = False, prefix=""
+        self,
+        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
+        max_seq_len: int = 512,
+        do_lower_case: bool = False,
+        content_field: str = "content",
+        prefix_field: str = "prefix",
+        prefix: str = "",
     ):
         super(INFERProcessor, self).__init__()
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
+        self.do_lower_case = do_lower_case
+        self.content_field = content_field
+        self.prefix_field = prefix_field
         self.prefix = prefix
 
-    @classmethod
-    def load(cls, where, config: Dict, **props):
-        tokenizer = ITokenizer.from_pretrained(where)
-        return cls(tokenizer=tokenizer, **config)
-
-    def dataset_from_dicts(
-        self, dicts, indices=None, return_baskets=False, debug=False
-    ):
+    def dataset_from_dicts(self, dicts, indices=None, return_baskets=False):
         if indices is None:
             indices = []
         baskets = []
         docs = [
             self.do_prefix(
-                x["content"], pref=x.get("meta", {}).get("prefix", self.prefix)
+                x.get(self.content_field),
+                pref=x.get("meta", {}).get(self.prefix_field, self.prefix),
             )
             for x in dicts
         ]
-        groups = [hash(x.get("meta", {}).get("group", 0)) for x in dicts]
-        # ---
+
         tokenized_batch = self.tokenizer(
             docs, truncation=True, max_length=self.max_seq_len, padding="max_length"
         )
-        # ---
+
         input_ids_batch = tokenized_batch["input_ids"]
         atten_ids_batch = tokenized_batch["attention_mask"]
-        # ---
-        for sample, input_ids, att_ids, group_ids in zip(
-            docs, input_ids_batch, atten_ids_batch, groups
-        ):
+
+        for sample, input_ids, att_ids in zip(docs, input_ids_batch, atten_ids_batch):
             tokenized = {}
-            # TODO: Convert `group_id` to compatable format
-            features = dict(
-                input_ids=input_ids,
-                attention_mask=att_ids,
-                group_ids=torch.tensor(group_ids),
-            )
+            features = dict(input_ids=input_ids, attention_mask=att_ids)
 
             cur_sample = Sample(
                 id="", clear_text=sample, tokenized=tokenized, features=[features]
@@ -66,6 +61,7 @@ class INFERProcessor(IProcessor):
             cur_basket = SampleBasket(
                 id_internal=None, raw=sample, id_external=None, samples=[cur_sample]
             )
+
             baskets.append(cur_basket)
 
         problematic_ids = set()
@@ -84,23 +80,25 @@ class M1Processor(IProcessor):
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
         max_seq_len: int = 512,
         do_lower_case: bool = False,
+        content_field: str = "content",
+        prefix_field: str = "prefix",
         prefix: str = "",
     ):
         super(M1Processor, self).__init__()
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         self.do_lower_case = do_lower_case
-        self.do_prefix = partial(self.add_prefix_to_content, pref=prefix)
+        self.content_field = content_field
+        self.prefix_field = prefix_field
 
     def dataset_from_dicts(self, dicts, indices=None, return_baskets=False):
         if indices is None:
             indices = []
         baskets = []
         docs = [
-            (
-                self.do_prefix(x["content"].lower())
-                if self.do_lower_case
-                else self.do_prefix(x["content"])
+            self.do_prefix(
+                x.get(self.content_field),
+                pref=x.get("meta", {}).get(self.prefix_field, self.prefix),
             )
             for x in dicts
         ]
@@ -244,19 +242,20 @@ class ContrastiveProcessor(IProcessor):
         baskets = []
         queries = [
             self.do_prefix(
-                x.get(self.queries_field),
-                pref=x.get("meta", {}).get("prefix", self.queries_prefix),
+                x.get(self.queries_field),  # query
+                pref=x.get("meta", {}).get("queries_prefix", self.queries_prefix),
             )
             for x in dicts
         ]
         pos_queries = [
             self.do_prefix(
-                x.get(self.pos_queries_field),
-                pref=x.get("meta", {}).get("prefix", self.pos_queries_prefix),
+                x.get(self.pos_queries_field),  # content
+                pref=x.get("meta", {}).get(
+                    "pos_queries_prefix", self.pos_queries_prefix
+                ),
             )
             for x in dicts
         ]
-        groups = [hash(x.get("meta", {}).get("group", 0)) for x in dicts]
         # ---
         tokenized_queries_batch = self.tokenizer(
             queries, truncation=True, max_length=self.max_seq_len, padding="max_length"
@@ -406,4 +405,4 @@ class ATOMICProcessor(IProcessor):
         pass
 
 
-__all__ = ["TRIOProcessor"]
+__all__ = ["TripletProcessor", "ContrastiveProcessor", "IProcessor"]

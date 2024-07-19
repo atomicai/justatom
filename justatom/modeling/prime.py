@@ -80,13 +80,25 @@ class E5Model(E5GeneralWrapper):
         average: bool = True,
     ):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        if average:
-            embeddings = self.average_pool(
-                outputs.last_hidden_state, attention_mask=attention_mask
+        response = self.maybe_norm_or_average(
+            outputs.last_hidden_state,
+            attention_mask=attention_mask,
+            norm=norm,
+            average=average,
+        )
+        if pos_input_ids is not None and pos_attention_mask is not None:
+            pos_outputs = self.model(
+                input_ids=pos_input_ids, attention_mask=pos_attention_mask
             )
-        if norm:
-            response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
-        return response
+            pos_response = self.maybe_norm_or_average(
+                pos_outputs.last_hidden_state,
+                attention_mask=pos_attention_mask,
+                norm=norm,
+                average=average,
+            )
+            return response, pos_response
+
+        return (response,)
 
 
 class E5SModel(E5GeneralWrapper):
@@ -114,19 +126,6 @@ class E5SModel(E5GeneralWrapper):
         model = AutoModel.from_pretrained(model_name_or_path)
         return cls(model, **kwargs)
 
-    def maybe_norm_or_average(
-        self, xs, attention_mask: torch.Tensor, norm: bool, average: bool
-    ):
-        if average:
-            result = self.average_pool(xs, attention_mask=attention_mask)
-            if norm:
-                result = F.normalize(result, p=2, dim=len(result.shape) - 1)
-        elif norm:
-            result = F.normalize(xs, p=2, dim=len(xs.shape) - 1)
-        else:
-            result = xs
-        return result
-
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -141,16 +140,19 @@ class E5SModel(E5GeneralWrapper):
         response = self.maybe_norm_or_average(
             outputs.last_hidden_state, attention_mask=attention_mask
         )
-        if pos_input_ids and pos_attention_mask:
+        if pos_input_ids is not None and pos_attention_mask is not None:
             pos_outputs = self.model(
-                input_ids=pos_input_ids, attention_mask=pos_attention_mask
+                input_ids=pos_input_ids,
+                attention_mask=pos_attention_mask,
+                norm=norm,
+                average=average,
             )
             pos_response = self.maybe_norm_or_average(
                 pos_outputs.last_hidden_state, attention_mask=pos_attention_mask
             )
             return response, pos_response
 
-        return response
+        return (response,)
 
 
 class E5LModel(E5GeneralWrapper):
@@ -189,13 +191,81 @@ class E5LModel(E5GeneralWrapper):
         average: bool = True,
     ):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        if average:
-            embeddings = self.average_pool(
-                outputs.last_hidden_state, attention_mask=attention_mask
+        response = self.maybe_norm_or_average(
+            outputs.last_hidden_state,
+            attention_mask=attention_mask,
+            norm=norm,
+            average=average,
+        )
+        if pos_input_ids is not None and pos_attention_mask is not None:
+            pos_outputs = self.model(
+                input_ids=pos_input_ids, attention_mask=pos_attention_mask
             )
+            pos_response = self.maybe_norm_or_average(
+                pos_outputs.last_hidden_state,
+                attention_mask=pos_attention_mask,
+                norm=norm,
+                average=average,
+            )
+            return response, pos_response
+
+        return (response,)
+
+
+class MBERTModel(ILanguageModel):
+
+    def __init__(
+        self,
+        model_name_or_instance: Union[
+            str, nn.Module
+        ] = "google-bert/bert-base-multilingual-cased",
+        device: str = "cpu",
+        **kwargs,
+    ):
+        super().__init__()
+        self.model = (
+            AutoModel.from_pretrained(model_name_or_instance)
+            if isinstance(model_name_or_instance, str)
+            else model_name_or_instance
+        )
+        self.name = "google-bert/bert-base-multilingual-cased"
+        self.model.to(device)
+
+    @classmethod
+    def load(cls, model_name_or_path: str, **kwargs):
+        model = AutoModel.from_pretrained(model_name_or_path)
+        return cls(model, **kwargs)
+
+    def maybe_norm(self, xs, norm: bool):
         if norm:
-            response = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
-        return response
+            return F.normalize(xs, p=2, dim=len(xs.shape) - 1)
+        return xs
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        group_ids: torch.Tensor = None,
+        pos_input_ids: torch.Tensor = None,
+        pos_attention_mask: torch.Tensor = None,
+        norm: bool = True,
+        average: bool = True,
+    ):
+        outputs = self.model(
+            input_ids=input_ids, attention_mask=attention_mask
+        ).pooler_output
+
+        outputs = self.maybe_norm(outputs, norm=norm)
+        if pos_input_ids is not None and pos_attention_mask is not None:
+            pos_outputs = self.model(
+                input_ids=pos_input_ids, attention_mask=pos_attention_mask
+            ).pooler_output
+
+            pos_outputs = self.maybe_norm(pos_outputs, norm=norm)
+
+            return outputs, pos_outputs
+
+        return (outputs,)
 
 
 class ATOMICModel(ILanguageModel):
@@ -404,6 +474,7 @@ HF_CLASS_MAPPING = {
     "intfloat/multilingual-e5-base": E5Model,
     "intfloat/multilingual-e5-small": E5SModel,
     "intfloat/multilingual-e5-large": E5LModel,
+    "google-bert/bert-base-multilingual-cased": MBERTModel,
 }
 
 COMMON_CLASS_MAPPING = {"pfbert": IPFBERTModel, "rec": IRECModel}
