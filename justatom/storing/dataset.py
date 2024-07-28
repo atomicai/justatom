@@ -4,6 +4,7 @@ from typing import Generator
 import simplejson as json
 from pathlib import Path
 from loguru import logger
+import polars as pl
 import os
 
 
@@ -23,6 +24,26 @@ class JUSTATOMDataset(IDataset):
                 yield doc
 
 
+class CSVDataset(IDataset):
+
+    def __init__(self, fp):
+        self.fp = fp
+
+    def iterator(self, **kwargs) -> pl.DataFrame:
+        pl_view = pl.read_csv(self.fp, **kwargs)
+        return pl_view
+
+
+class XLSXDataset(IDataset):
+
+    def __init__(self, fp):
+        self.fp = fp
+
+    def iterator(self, **kwargs) -> pl.DataFrame:
+        pl_view = pl.read_excel(self.fp, **kwargs)
+        return pl_view
+
+
 @singleton
 class ByName:
 
@@ -34,10 +55,19 @@ class ByName:
         elif name == "url":
             klass = URLInJSONDataset
         else:
-            msg = f"Unknown name=[{name}] to init IDataset instance. Use one of {','.join(OPS)}"
-            logger.error(msg)
-            raise ValueError(msg)
-
+            fp = Path(name)
+            if not fp.exists():
+                msg = f"Unknown dataset_name_or_path=[{name}] to init IDataset instance. Use one of {','.join(OPS)} or provide valid dataset path"
+                logger.error(msg)
+                raise ValueError(msg)
+            if fp.suffix in [".csv"]:
+                return CSVDataset(fp=name)
+            elif fp.suffix in [".xlsx"]:
+                return XLSXDataset(fp=name)
+            else:
+                msg = f"File exists however loading from the [{fp.suffix}] file is not supported"
+                logger.error(msg)
+                raise ValueError(msg)
         return klass(**kwargs)
 
 
