@@ -25,10 +25,17 @@ class NNIndexer(IIndexerRunner):
         store: INNDocStore,
         runner: Union[M1LMRunner, M2LMRunner],
         processor: IProcessor,
+        device: str = "cpu",
     ):
         self.store = store
         self.runner = runner.eval()
         self.processor = processor
+        self.device = device
+        if runner.device != device:
+            logger.info(
+                f"Callback from {self.__class__.__name__} is fired to move to new device {device}. Old device = {runner.device}"
+            )
+            self.runner.to(device)
 
     @torch.no_grad()
     async def index(
@@ -37,11 +44,19 @@ class NNIndexer(IIndexerRunner):
         batch_size: int = 1,
         device: str = "cpu",
     ):
-        documents_as_dicts = [d.to_dict() if isinstance(d, Document) else d for d in documents]
-        dataset, tensor_names = igniset(dicts=documents_as_dicts, processor=self.processor, batch_size=batch_size)
-        loader = NamedDataLoader(dataset=dataset, tensor_names=tensor_names, batch_size=batch_size)
-        for i, (docs, batch) in tqdm(enumerate(zip(chunked(documents_as_dicts, n=batch_size), loader))):
-            batches = {k: v.to(device) for k, v in batch.items()}
+        documents_as_dicts = [
+            d.to_dict() if isinstance(d, Document) else d for d in documents
+        ]
+        dataset, tensor_names = igniset(
+            dicts=documents_as_dicts, processor=self.processor, batch_size=batch_size
+        )
+        loader = NamedDataLoader(
+            dataset=dataset, tensor_names=tensor_names, batch_size=batch_size
+        )
+        for i, (docs, batch) in tqdm(
+            enumerate(zip(chunked(documents_as_dicts, n=batch_size), loader))
+        ):
+            batches = {k: v.to(self.device) for k, v in batch.items()}
             vectors = self.runner(batch=batches)[0].cpu()
             _docs = copy.deepcopy(docs)
             for doc, vec in zip(_docs, vectors):
@@ -53,14 +68,21 @@ class KWARGIndexer(IIndexerRunner):
     def __init__(self, store: INNDocStore):
         self.store = store
 
-    async def index(self, documents: List[Union[str, Dict]], batch_size: int = 4, **props):
+    async def index(
+        self, documents: List[Union[str, Dict]], batch_size: int = 4, **props
+    ):
         for i, chunk in enumerate(
             tqdm(
                 chunked(documents, n=batch_size),
             )
         ):
             docs = [
-                (Document.from_dict(dict(content=ci)) if isinstance(ci, str) else Document.from_dict(ci)) for ci in chunk
+                (
+                    Document.from_dict(dict(content=ci))
+                    if isinstance(ci, str)
+                    else Document.from_dict(ci)
+                )
+                for ci in chunk
             ]
             self.store.write_documents(docs)
             logger.info(f"{self.__class__.__name__} - index - {i / len(documents)}")
