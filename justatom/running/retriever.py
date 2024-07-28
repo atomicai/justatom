@@ -156,11 +156,11 @@ class KWARGRetriever(IRetrieverRunner):
         include_scores: bool = False,
     ):
         queries = [queries] if isinstance(queries, str) else queries
-        answers = []
+        answer = []
         for query in queries:
             response = self.store.search_by_keywords(query=query, top_k=top_k)
-            answers.extend(response)
-        return answers
+            answer.append(response)
+        return answer
 
 
 @singleton
