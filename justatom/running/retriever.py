@@ -36,28 +36,50 @@ class HybridRetriever(IRetrieverRunner):
         super().__init__()
         self.store = store
         self.processor = processor
-        self.runner = runner.eval().to(device)
+        self.runner = runner.eval()
         self.device = device
+        if runner.device != device:
+            logger.info(
+                f"Callback from {self.__class__.__name__} is fired to move to new device {device}. Old device = {runner.device}"
+            )
+            self.runner.to(device)
 
     @torch.no_grad()
     def retrieve_topk(
         self,
         queries: Union[str, List[str]],
         top_k: int = 5,
+        prefix: str = None,
         include_embedding: bool = False,
         alpha: float = 0.85,
         include_scores: bool = False,
+        batch_size: int = 16,
     ):
         queries = [queries] if isinstance(queries, str) else queries
-        queries = [{"content": q} for q in queries]
-        dataset, tensor_names = igniset(queries, processor=self.processor, batch_size=1_000)
-        loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=1)
+        queries = [
+            (
+                {"content": q}
+                if prefix is None
+                else {"content": q, "meta": {"prefix": prefix}}
+            )
+            for q in queries
+        ]
+        dataset, tensor_names = igniset(
+            queries, processor=self.processor, batch_size=batch_size
+        )
+        loader = NamedDataLoader(
+            dataset, tensor_names=tensor_names, batch_size=batch_size
+        )
         answer = []
-        for query, _batch in zip(queries, loader):
-            batch = {k: v.to(self.device) for k, v in _batch.items()}
-            vector = self.runner(batch=batch)[0].cpu().numpy().tolist()
-            res_topk = self.store.search(vector, top_k=top_k, alpha=alpha)
-            answer.append(res_topk)
+
+        for _queries, _batches in zip(chunked(queries, n=batch_size), loader):
+            batches = {k: v.to(self.device) for k, v in _batches.items()}
+            vectors = (
+                self.runner(batch=batches)[0].cpu().numpy().tolist()
+            )  # batch_size x vector_dim
+            for vector, query in zip(vectors, _queries):
+                res_topk = self.store.search(vector, alpha=alpha, top_k=top_k)
+                answer.append(res_topk)
         return answer
 
 
@@ -75,6 +97,12 @@ class EmbeddingRetriever(IRetrieverRunner):
         self.processor = processor
         self.runner = runner.eval()
         self.device = device
+        if runner.device != device:
+            logger.info(
+                f"Callback from {self.__class__.__name__} is fired to move to new device {device}. Old device = {runner.device}"
+            )
+            self.runner.to(device)
+
         self.runner.to(device)
 
     @torch.no_grad()
@@ -82,19 +110,33 @@ class EmbeddingRetriever(IRetrieverRunner):
         self,
         queries: Union[str, List[str]],
         top_k: int = 5,
+        prefix: str = None,
         include_embedding: bool = False,
         include_scores: bool = False,
         batch_size: int = 16,
     ):
         queries = [queries] if isinstance(queries, str) else queries
-        queries = [{"content": q} for q in queries]
-        dataset, tensor_names = igniset(queries, processor=self.processor, batch_size=batch_size)
-        loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=batch_size)
+        queries = [
+            (
+                {"content": q}
+                if prefix is None
+                else {"content": q, "meta": {"prefix": prefix}}
+            )
+            for q in queries
+        ]
+        dataset, tensor_names = igniset(
+            queries, processor=self.processor, batch_size=batch_size
+        )
+        loader = NamedDataLoader(
+            dataset, tensor_names=tensor_names, batch_size=batch_size
+        )
         answer = []
 
         for _queries, _batches in zip(chunked(queries, n=batch_size), loader):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
-            vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
+            vectors = (
+                self.runner(batch=batches)[0].cpu().numpy().tolist()
+            )  # batch_size x vector_dim
             for vector, query in zip(vectors, _queries):
                 res_topk = self.store.search_by_embedding(vector, top_k=top_k)
                 answer.append(res_topk)
@@ -107,7 +149,12 @@ class KWARGRetriever(IRetrieverRunner):
         super().__init__()
         self.store = store
 
-    def retrieve_topk(self, queries: Union[str, List[str]], top_k: int = 5, include_scores: bool = False):
+    def retrieve_topk(
+        self,
+        queries: Union[str, List[str]],
+        top_k: int = 5,
+        include_scores: bool = False,
+    ):
         queries = [queries] if isinstance(queries, str) else queries
         answers = []
         for query in queries:
