@@ -140,7 +140,14 @@ def wrapper_docs_with_queries(
     return docs
 
 
-def igni_runners(store, index_by: str, model_name_or_path, device: str = "cpu"):
+def igni_runners(
+    store,
+    index_by: str,
+    model_name_or_path,
+    query_prefix: str = "",
+    content_prefix: str = "",
+    device: str = "cpu",
+):
     ix_runner, ir_runner = None, None
     if index_by == "keywords":
         ix_runner = IndexerAPI.named(index_by, store=store)
@@ -153,14 +160,14 @@ def igni_runners(store, index_by: str, model_name_or_path, device: str = "cpu"):
         lm_model = ILanguageModel.load(model_name_or_path)
         # processor = IProcessor.load(model_name_or_path)
         ix_processor = INFERProcessor(
-            ITokenizer.from_pretrained(model_name_or_path), prefix="passage:"
+            ITokenizer.from_pretrained(model_name_or_path), prefix=content_prefix
         )
         ir_processor = INFERProcessor(
-            ITokenizer.from_pretrained(model_name_or_path), prefix="query:"
+            ITokenizer.from_pretrained(model_name_or_path), prefix=query_prefix
         )
         runner = M1LMRunner(model=lm_model, prediction_heads=[], device=device)
         ix_runner = IndexerAPI.named(
-            index_by, store=store, runner=runner, processor=ix_processor
+            index_by, store=store, runner=runner, processor=ix_processor, device=device
         )
         ir_runner = RetrieverApi.named(
             index_by, store=store, runner=runner, processor=ir_processor, device=device
@@ -173,9 +180,11 @@ async def maybe_index_and_ir(
     collection_name: str,
     pl_data: pl.DataFrame,
     model_name_or_path: Optional[str] = None,
-    index_by: str = "embedding",
+    index_and_eval_by: str = "embedding",
     search_field: str = "query",
     content_field: str = "content",
+    query_prefix: str = None,
+    content_prefix: str = None,
     filters: Optional[Dict] = None,
     batch_size: int = 4,
     top_k: int = 5,
@@ -191,9 +200,11 @@ async def maybe_index_and_ir(
 
     ix_runner, ir_runner = igni_runners(
         store=store,
-        index_by=index_by,
+        index_by=index_and_eval_by,
         model_name_or_path=model_name_or_path,
         device=device,
+        query_prefix=query_prefix,
+        content_prefix=content_prefix,
     )
     assert (
         search_field in pl_data.columns
@@ -213,9 +224,9 @@ async def maybe_index_and_ir(
 
 async def main(
     model_name_or_path: Optional[str] = None,
-    index_by: str = "embedding",
-    collection_name: str = "EvaluationForKeywords",
-    dataset_name_or_path: str = "justatom",
+    index_and_eval_by: str = "embedding",
+    collection_name: str = None,
+    dataset_name_or_path: str = None,
     top_k: int = 20,
     filters: Optional[Dict] = None,
     metrics=None,
@@ -225,9 +236,18 @@ async def main(
     content_field: str = "content",
     **props,
 ):
-
-    dataset = list(DatasetApi.named(dataset_name_or_path).iterator())
-    pl_data = pl.from_dicts(dataset)
+    collection_name = "Document" if collection_name is None else collection_name
+    dataset_name_or_path = (
+        Path(dataset_name_or_path) / "eval.csv"
+        if Path(dataset_name_or_path).is_dir()
+        else dataset_name_or_path
+    )
+    maybe_df_or_iter = DatasetApi.named(dataset_name_or_path).iterator()
+    if isinstance(maybe_df_or_iter, pl.DataFrame):
+        pl_data = maybe_df_or_iter
+    else:
+        dataset = list(maybe_df_or_iter)
+        pl_data = pl.from_dicts(dataset)
     if filters is not None:
         fields = filters.get("fields", [])
         for field in fields:
@@ -237,11 +257,12 @@ async def main(
     ir = await maybe_index_and_ir(
         collection_name=collection_name,
         pl_data=pl_data,
-        index_by=index_by,
+        index_and_eval_by=index_and_eval_by,
         model_name_or_path=model_name_or_path,
         filters=filters,
         search_field=search_field,
         content_field=content_field,
+        **props,
     )
 
     logger.info(
@@ -262,7 +283,7 @@ async def main(
     print()
     comp_eval_metrics = {k: list(v.compute()) for k, v in eval_metrics.items()}
     comp_eval_metrics = [
-        {"name": k, "mean": v[0], "std": v[1], "dataset": dataset_name_or_path}
+        {"name": k, "mean": v[0], "std": v[1], "dataset": str(dataset_name_or_path)}
         for k, v in comp_eval_metrics.items()
     ]
     pl_metrics = pl.from_dicts(comp_eval_metrics)
@@ -281,13 +302,12 @@ if __name__ == "__main__":
     asio.run(
         *[
             main(
-                eval_by="embedding",
+                index_and_eval_by="embedding",
                 filters={"fields": ["query", "content"]},
-                model_name_or_path=str(
-                    Path(os.getcwd())
-                    / "weights"
-                    / "bs=16_model=E5Base_esm=TrainingLoss_dataset=polaroids.ai_margin=0.4"
-                ),
+                model_name_or_path=str("intfloat/multilingual-e5-base"),
+                dataset_name_or_path=str(Path(os.getcwd()) / ".data"),
+                query_prefix="query:",
+                content_prefix="passage:",
                 metrics_top_k=["HitRate"],
                 eval_top_k=[2, 5, 10, 15, 20],
             )

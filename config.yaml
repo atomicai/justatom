@@ -35,7 +35,7 @@ train:
   batch_size: 64
   early_stopping:
     metric: TrainingLoss
-    size: 250
+    size: 20
     mode: min
   save_model_path: weights
   val_check_interval: 30
