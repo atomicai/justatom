@@ -1,2 +1,2 @@
 def pi():
-    return 3.12
+    return 3
