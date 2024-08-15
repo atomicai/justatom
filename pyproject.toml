@@ -9,12 +9,12 @@ pythonpath = [
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
 extend-exclude = [
-    ".data"
+    ".data",
+    "*.ipynb"
 ]
-extend-include = ["*.ipynb"]
 
 # Same as Black.
-line-length = 88
+line-length = 120
 indent-width = 4
 
 [tool.ruff.lint]
