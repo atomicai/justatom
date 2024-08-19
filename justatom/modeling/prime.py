@@ -427,7 +427,7 @@ class DocEmbedder(IDocEmbedder):
 
             batch = {k: v.to(device) for k, v in batch_features.items()}
 
-            embeddings = self.model(**batch).cpu()
+            embeddings = self.model(**batch)[0].cpu()
 
             yield embeddings.numpy()
 
