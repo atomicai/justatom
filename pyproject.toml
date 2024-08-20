@@ -14,7 +14,7 @@ extend-exclude = [
 ]
 
 # Same as Black.
-line-length = 120
+line-length = 132
 indent-width = 4
 
 [tool.ruff.lint]
