@@ -1,1 +1,1 @@
-from .lodash import Lodash
+from .lodash import Lodash  # noqa: F401

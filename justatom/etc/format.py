@@ -1,6 +1,7 @@
 from datetime import datetime
-from pathlib import Path
 from itertools import islice
+from pathlib import Path
+
 import simplejson as json
 from fastnumbers import try_real
 
@@ -17,7 +18,7 @@ def convert_date_to_rfc3339(date: str) -> str:
     and filter_utils.py.
     """
     parsed_datetime = datetime.fromisoformat(date)
-    if parsed_datetime.utcoffset() is None:
+    if parsed_datetime.utcoffset() is None:  # noqa: SIM108
         converted_date = parsed_datetime.isoformat() + "Z"
     else:
         converted_date = parsed_datetime.isoformat()
@@ -39,7 +40,7 @@ def maybe_json(x):
     try:
         json.dumps(x)
         return True
-    except:
+    except:  # noqa: E722
         return False
 
 

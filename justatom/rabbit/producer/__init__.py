@@ -1,1 +1,1 @@
-from .core import Producer
+from .core import Producer  # noqa: F401

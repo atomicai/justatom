@@ -2,8 +2,9 @@ import base64
 import datetime
 import json
 import os
+from collections.abc import Generator
 from dataclasses import asdict
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any
 
 import weaviate
 from loguru import logger
@@ -96,13 +97,13 @@ class WeaviateDocStore:
     def __init__(
         self,
         *,
-        url: Optional[str] = None,
-        collection_name: Optional[str] = "Default",
-        collection_settings: Optional[Dict[str, Any]] = None,
-        auth_client_secret: Optional[AuthCredentials] = None,
-        additional_headers: Optional[Dict] = None,
-        embedded_options: Optional[EmbeddedOptions] = None,
-        additional_config: Optional[AdditionalConfig] = None,
+        url: str | None = None,
+        collection_name: str | None = "Default",
+        collection_settings: dict[str, Any] | None = None,
+        auth_client_secret: AuthCredentials | None = None,
+        additional_headers: dict | None = None,
+        embedded_options: EmbeddedOptions | None = None,
+        additional_config: AdditionalConfig | None = None,
         grpc_port: int = 50051,
         grpc_secure: bool = False,
     ):
@@ -154,15 +155,11 @@ class WeaviateDocStore:
         # startup_period has been removed
         self._client = weaviate.WeaviateClient(
             connection_params=(
-                weaviate.connect.base.ConnectionParams.from_url(
-                    url=url, grpc_port=grpc_port, grpc_secure=grpc_secure
-                )
+                weaviate.connect.base.ConnectionParams.from_url(url=url, grpc_port=grpc_port, grpc_secure=grpc_secure)
                 if url
                 else None
             ),
-            auth_client_secret=(
-                auth_client_secret.resolve_value() if auth_client_secret else None
-            ),
+            auth_client_secret=(auth_client_secret.resolve_value() if auth_client_secret else None),
             additional_config=additional_config,
             additional_headers=additional_headers,
             embedded_options=embedded_options,
@@ -181,13 +178,9 @@ class WeaviateDocStore:
             }
         else:
             # Set the class if not set
-            collection_settings = merge_in_order(
-                collection_settings, {"class": collection_name.capitalize()}
-            )
+            collection_settings = merge_in_order(collection_settings, {"class": collection_name.capitalize()})
             # Set the properties if they're not set
-            collection_settings["properties"] = collection_settings.get(
-                "properties", DOCUMENT_COLLECTION_PROPERTIES
-            )
+            collection_settings["properties"] = collection_settings.get("properties", DOCUMENT_COLLECTION_PROPERTIES)
 
         if not self._client.collections.exists(collection_settings["class"]):
             self._client.collections.create_from_dict(collection_settings)
@@ -200,36 +193,28 @@ class WeaviateDocStore:
         self._additional_config = additional_config
         self._collection = self._client.collections.get(collection_settings["class"])
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the component to a dictionary.
 
         :returns:
             Dictionary with serialized data.
         """
-        embedded_options = (
-            asdict(self._embedded_options) if self._embedded_options else None
-        )
-        additional_config = (
-            json.loads(self._additional_config.model_dump_json(by_alias=True))
-            if self._additional_config
-            else None
-        )
+        embedded_options = asdict(self._embedded_options) if self._embedded_options else None
+        additional_config = json.loads(self._additional_config.model_dump_json(by_alias=True)) if self._additional_config else None
 
         return default_to_dict(
             self,
             url=self._url,
             collection_settings=self._collection_settings,
-            auth_client_secret=(
-                self._auth_client_secret.to_dict() if self._auth_client_secret else None
-            ),
+            auth_client_secret=(self._auth_client_secret.to_dict() if self._auth_client_secret else None),
             additional_headers=self._additional_headers,
             embedded_options=embedded_options,
             additional_config=additional_config,
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "WeaviateDocStore":
+    def from_dict(cls, data: dict[str, Any]) -> "WeaviateDocStore":
         """
         Deserializes the component from a dictionary.
 
@@ -238,24 +223,12 @@ class WeaviateDocStore:
         :returns:
             The deserialized component.
         """
-        if (
-            auth_client_secret := data["init_parameters"].get("auth_client_secret")
-        ) is not None:
-            data["init_parameters"]["auth_client_secret"] = AuthCredentials.from_dict(
-                auth_client_secret
-            )
-        if (
-            embedded_options := data["init_parameters"].get("embedded_options")
-        ) is not None:
-            data["init_parameters"]["embedded_options"] = EmbeddedOptions(
-                **embedded_options
-            )
-        if (
-            additional_config := data["init_parameters"].get("additional_config")
-        ) is not None:
-            data["init_parameters"]["additional_config"] = AdditionalConfig(
-                **additional_config
-            )
+        if (auth_client_secret := data["init_parameters"].get("auth_client_secret")) is not None:
+            data["init_parameters"]["auth_client_secret"] = AuthCredentials.from_dict(auth_client_secret)
+        if (embedded_options := data["init_parameters"].get("embedded_options")) is not None:
+            data["init_parameters"]["embedded_options"] = EmbeddedOptions(**embedded_options)
+        if (additional_config := data["init_parameters"].get("additional_config")) is not None:
+            data["init_parameters"]["additional_config"] = AdditionalConfig(**additional_config)
         return default_from_dict(
             cls,
             data,
@@ -268,7 +241,7 @@ class WeaviateDocStore:
         total = self._collection.aggregate.over_all(total_count=True).total_count
         return total if total else 0
 
-    def _to_data_object(self, document: Document) -> Dict[str, Any]:
+    def _to_data_object(self, document: Document) -> dict[str, Any]:
         """
         Converts a Document to a Weaviate data object ready to be saved.
         """
@@ -299,23 +272,21 @@ class WeaviateDocStore:
 
         AVAILABLE_PROPS = set([f["name"] for f in DOCUMENT_COLLECTION_PROPERTIES])
         # Delete all the rest keys
-        if "meta" in data.keys() and "meta" not in AVAILABLE_PROPS:
-            logger.warning(
-                f"[meta={data['meta']}] is present and will be ignored since it is NOT registred in a collection."
-            )
+        if "meta" in data.keys() and "meta" not in AVAILABLE_PROPS:  # noqa: SIM118
+            logger.warning(f"[meta={data['meta']}] is present and will be ignored since it is NOT registred in a collection.")
             del data["meta"]
 
         return data
 
-    def _to_document(self, data: DataObject[Dict[str, Any], None]) -> Document:
+    def _to_document(self, data: DataObject[dict[str, Any], None]) -> Document:
         """
         Converts a data object read from Weaviate into a Document.
         """
         document_data = data.properties
         document_data["id"] = document_data.pop("_original_id")
-        if isinstance(data.vector, List):
+        if isinstance(data.vector, list):
             document_data["embedding"] = data.vector
-        elif isinstance(data.vector, Dict):
+        elif isinstance(data.vector, dict):
             document_data["embedding"] = data.vector.get("default")
         else:
             document_data["embedding"] = None
@@ -346,18 +317,16 @@ class WeaviateDocStore:
 
         return Document.from_dict(document_data)
 
-    def _query(self) -> List[Dict[str, Any]]:
+    def _query(self) -> list[dict[str, Any]]:
         # properties = [p.name for p in self._collection.config.get().properties]
         try:
-            result = self._collection.iterator(
-                include_vector=True, return_properties=None
-            )
+            result = self._collection.iterator(include_vector=True, return_properties=None)
         except weaviate.exceptions.WeaviateQueryError as e:
             msg = f"Failed to query documents in Weaviate. Error: {e.message}"
             raise DocumentStoreError(msg) from e
         return result
 
-    def _query_with_filters(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _query_with_filters(self, filters: dict[str, Any]) -> list[dict[str, Any]]:
         # properties = [p.name for p in self._collection.config.get().properties]
         # When querying with filters we need to paginate using limit and offset as using
         # a cursor with after is not possible. See the official docs:
@@ -372,9 +341,7 @@ class WeaviateDocStore:
         partial_result = None
         result = []
         # Keep querying until we get all documents matching the filters
-        while (
-            partial_result is None or len(partial_result.objects) == DEFAULT_QUERY_LIMIT
-        ):
+        while partial_result is None or len(partial_result.objects) == DEFAULT_QUERY_LIMIT:
             try:
                 partial_result = self._collection.query.fetch_objects(
                     filters=convert_filters(filters),
@@ -390,9 +357,7 @@ class WeaviateDocStore:
             offset += DEFAULT_QUERY_LIMIT
         return result
 
-    def filter_documents(
-        self, filters: Optional[Dict[str, Any]] = None
-    ) -> List[Document]:
+    def filter_documents(self, filters: dict[str, Any] | None = None) -> list[Document]:
         """
         Returns the documents that match the filters provided.
 
@@ -403,13 +368,13 @@ class WeaviateDocStore:
         :returns: A list of Documents that match the given filters.
         """
         result = []
-        if filters:
+        if filters:  # noqa: SIM108
             result = self._query_with_filters(filters)
         else:
             result = self._query()
         return [self._to_document(doc) for doc in result]
 
-    def _batch_write(self, documents: List[Document]) -> int:
+    def _batch_write(self, documents: list[Document]) -> int:
         """
         Writes document to Weaviate in batches.
         Documents with the same id will be overwritten.
@@ -439,10 +404,7 @@ class WeaviateDocStore:
                 mapped_objects[id_] = obj.message
 
             msg = "\n".join(
-                [
-                    f"Failed to write object with id '{id_}'. Error: '{message}'"
-                    for id_, message in mapped_objects.items()
-                ]
+                [f"Failed to write object with id '{id_}'. Error: '{message}'" for id_, message in mapped_objects.items()]
             )
             raise DocumentStoreError(msg)
 
@@ -450,7 +412,7 @@ class WeaviateDocStore:
         # So we assume that all Documents were written.
         return len(documents)
 
-    def _write(self, documents: List[Document], policy: DuplicatePolicy) -> int:
+    def _write(self, documents: list[Document], policy: DuplicatePolicy) -> int:
         """
         Writes documents to Weaviate using the specified policy.
         This doesn't uses the batch API, so it's slower than _batch_write.
@@ -464,9 +426,7 @@ class WeaviateDocStore:
                 msg = f"Expected a Document, got '{type(doc)}' instead."
                 raise ValueError(msg)
 
-            if policy == DuplicatePolicy.SKIP and self._collection.data.exists(
-                uuid=generate_uuid5(doc.id)
-            ):
+            if policy == DuplicatePolicy.SKIP and self._collection.data.exists(uuid=generate_uuid5(doc.id)):
                 # This Document already exists, we skip it
                 continue
 
@@ -486,9 +446,7 @@ class WeaviateDocStore:
             raise DuplicateDocumentError(msg)
         return written
 
-    def write_documents(
-        self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE
-    ) -> int:
+    def write_documents(self, documents: list[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE) -> int:
         """
         Writes documents to Weaviate using the specified policy.
         We recommend using a OVERWRITE policy as it's faster than other policies for Weaviate since it uses
@@ -504,19 +462,17 @@ class WeaviateDocStore:
 
     def get_all_documents(self, include_vector: bool = False) -> Generator:
         props = dict(include_vector=include_vector)
-        for obj in self._collection.iterator(**props):
+        for obj in self._collection.iterator(**props):  # noqa: UP028
             yield obj
 
-    def delete_documents(self, document_ids: List[str]) -> None:
+    def delete_documents(self, document_ids: list[str]) -> None:
         """
         Deletes all documents with matching document_ids from the DocumentStore.
 
         :param document_ids: The object_ids to delete.
         """
         weaviate_ids = [generate_uuid5(doc_id) for doc_id in document_ids]
-        self._collection.data.delete_many(
-            where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids)
-        )
+        self._collection.data.delete_many(where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids))
 
     def delete_all_documents(self) -> bool:
         it = self.get_all_documents()
@@ -524,26 +480,22 @@ class WeaviateDocStore:
         if len(ids) > 0:
             try:
                 self.delete_documents(document_ids=ids)
-            except:
-                logger.error(
-                    f"Error deleting documents for {self._collection_settings.get('class')}, see logs for more details."
-                )
+            except:  # noqa: E722
+                logger.error(f"Error deleting documents for {self._collection_settings.get('class')}, see logs for more details.")
                 return False
             else:
                 return True
         else:
-            logger.info(
-                f"Nothing to delete in {self._collection_settings.get('class')}"
-            )
+            logger.info(f"Nothing to delete in {self._collection_settings.get('class')}")
 
     def search_by_keywords(
         self,
         query: str,
-        policy: Optional[SearchPolicy] = SearchPolicy.BM25,
-        filters: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None,
-        include_vector: Optional[bool] = False,
-    ) -> List[Document]:
+        policy: SearchPolicy | None = SearchPolicy.BM25,
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
+        include_vector: bool | None = False,
+    ) -> list[Document]:
         # properties = [p.name for p in self._collection.config.get().properties]
         if policy == SearchPolicy.BM25:
             result = self._collection.query.bm25(
@@ -553,9 +505,7 @@ class WeaviateDocStore:
                 include_vector=include_vector,
                 query_properties=["content"],
                 return_properties=None,
-                return_metadata=MetadataQuery(
-                    distance=True, score=True, explain_score=True, certainty=True
-                ),
+                return_metadata=MetadataQuery(distance=True, score=True, explain_score=True, certainty=True),
             )
         else:
             msg = f"You specified {str(policy)} that is not compatable with [search_by_keywords]. Only [BM25] is avalaible"
@@ -567,14 +517,14 @@ class WeaviateDocStore:
     def search(
         self,
         query: str,
-        query_embedding: List[float],
-        rank_policy: Optional[str] = None,
-        alpha: Optional[float] = 0.22,
-        filters: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None,
-        return_metadata: Optional[List[str]] = None,
-        include_vector: Optional[bool] = False,
-    ) -> List[Document]:
+        query_embedding: list[float],
+        rank_policy: str | None = None,
+        alpha: float | None = 0.22,
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
+        return_metadata: list[str] | None = None,
+        include_vector: bool | None = False,
+    ) -> list[Document]:
         """
         This method assumes the hybrid search with one of the present `ranking` methods out there.
         """
@@ -597,13 +547,13 @@ class WeaviateDocStore:
 
     def search_by_embedding(
         self,
-        query_embedding: List[float],
-        filters: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None,
-        distance: Optional[float] = None,
-        certainty: Optional[float] = None,
-        return_metadata: Optional[List[str]] = None,
-    ) -> List[Document]:
+        query_embedding: list[float],
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
+        distance: float | None = None,
+        certainty: float | None = None,
+        return_metadata: list[str] | None = None,
+    ) -> list[Document]:
         if distance is not None and certainty is not None:
             msg = "Can't use 'distance' and 'certainty' parameters together"
             raise ValueError(msg)
@@ -625,17 +575,12 @@ class WeaviateDocStore:
 
 @singleton
 class IFinder:
-
-    store: Dict[str, WeaviateDocStore] = dict()
+    store: dict[str, WeaviateDocStore] = dict()
 
     def find(self, collection_name: str, **kwargs):
         if collection_name not in self.store:
-            WEAVIATE_HOST = kwargs.get("WEAVIATE_HOST") or os.environ.get(
-                "WEAVIATE_HOST"
-            )
-            WEAVIATE_PORT = kwargs.get("WEAVIATE_PORT") or os.environ.get(
-                "WEAVIATE_PORT"
-            )
+            WEAVIATE_HOST = kwargs.get("WEAVIATE_HOST") or os.environ.get("WEAVIATE_HOST")
+            WEAVIATE_PORT = kwargs.get("WEAVIATE_PORT") or os.environ.get("WEAVIATE_PORT")
             self.store[collection_name] = WeaviateDocStore(
                 collection_name=collection_name,
                 url=f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}",

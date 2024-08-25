@@ -2,23 +2,14 @@
 Contains functions that turn readable clear text input into dictionaries of features
 """
 
-
 import logging
 
-from farm.data_handler.samples import Sample
-from farm.data_handler.utils import (
-    expand_labels,
-    pad)
-from farm.modeling.tokenization import insert_at_special_tokens_pos
-
-import numpy as np
+from farm.data_handler.utils import pad
 
 logger = logging.getLogger(__name__)
 
 
-def sample_to_features_text(
-    sample, tasks, max_seq_len, tokenizer
-):
+def sample_to_features_text(sample, tasks, max_seq_len, tokenizer):
     """
     Generates a dictionary of features for a given input sample that is to be consumed by a text classification model.
 
@@ -32,24 +23,28 @@ def sample_to_features_text(
     :return: A list with one dictionary containing the keys "input_ids", "padding_mask" and "segment_ids" (also "label_ids" if not
              in inference mode). The values are lists containing those features.
     :rtype: list
-    """
+    """  # noqa: E501
 
     if tokenizer.is_fast:
         text = sample.clear_text["text"]
         # Here, we tokenize the sample for the second time to get all relevant ids
         # This should change once we git rid of FARM's tokenize_with_metadata()
-        inputs = tokenizer(text,
-                           return_token_type_ids=True,
-                           truncation=True,
-                           truncation_strategy="longest_first",
-                           max_length=max_seq_len,
-                           return_special_tokens_mask=True)
+        inputs = tokenizer(
+            text,
+            return_token_type_ids=True,
+            truncation=True,
+            truncation_strategy="longest_first",
+            max_length=max_seq_len,
+            return_special_tokens_mask=True,
+        )
 
         if (len(inputs["input_ids"]) - inputs["special_tokens_mask"].count(1)) != len(sample.tokenized["tokens"]):
-            logger.error(f"FastTokenizer encoded sample {sample.clear_text['text']} to "
-                         f"{len(inputs['input_ids']) - inputs['special_tokens_mask'].count(1)} tokens, which differs "
-                         f"from number of tokens produced in tokenize_with_metadata(). \n"
-                         f"Further processing is likely to be wrong.")
+            logger.error(
+                f"FastTokenizer encoded sample {sample.clear_text['text']} to "
+                f"{len(inputs['input_ids']) - inputs['special_tokens_mask'].count(1)} tokens, which differs "
+                f"from number of tokens produced in tokenize_with_metadata(). \n"
+                f"Further processing is likely to be wrong."
+            )
     else:
         # TODO It might be cleaner to adjust the data structure in sample.tokenized
         tokens_a = sample.tokenized["tokens"]
@@ -104,12 +99,12 @@ def sample_to_features_text(
                 # id of label
                 try:
                     label_ids = [label_list.index(label_raw)]
-                except ValueError as e:
-                    raise ValueError(f'[Task: {task_name}] Observed label {label_raw} not in defined label_list')
+                except ValueError:
+                    raise ValueError(f"[Task: {task_name}] Observed label {label_raw} not in defined label_list")  # noqa: B904
             elif task["task_type"] == "multilabel_classification":
                 # multi-hot-format
                 label_ids = [0] * len(label_list)
-                for l in label_raw.split(","):
+                for l in label_raw.split(","):  # noqa: E741
                     if l != "":
                         label_ids[label_list.index(l)] = 1
             elif task["task_type"] == "regression":
@@ -124,7 +119,7 @@ def sample_to_features_text(
     return [feat_dict]
 
 
-#TODO remove once NQ processing is adjusted
+# TODO remove once NQ processing is adjusted
 def get_roberta_seq_2_start(input_ids):
     # This commit (https://github.com/huggingface/transformers/commit/dfe012ad9d6b6f0c9d30bc508b9f1e4c42280c07)from
     # huggingface transformers now means that RobertaTokenizer.encode_plus returns only zeros in token_type_ids. Therefore, we need
@@ -136,7 +131,8 @@ def get_roberta_seq_2_start(input_ids):
     second_backslash_s = input_ids.index(2, first_backslash_s + 1)
     return second_backslash_s + 1
 
-#TODO remove once NQ processing is adjusted
+
+# TODO remove once NQ processing is adjusted
 def get_camembert_seq_2_start(input_ids):
     # CamembertTokenizer.encode_plus returns only zeros in token_type_ids (same as RobertaTokenizer).
     # This is another way to find the start of the second sequence (following get_roberta_seq_2_start)

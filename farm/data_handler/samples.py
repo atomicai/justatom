@@ -1,14 +1,14 @@
-from transformers.models.bert.tokenization_bert import whitespace_tokenize
-from farm.visual.ascii.images import SAMPLE
+import logging
+
 import numpy as np
 
-import logging
+from farm.visual.ascii.images import SAMPLE
 
 logger = logging.getLogger(__name__)
 
 
 class SampleBasket:
-    """ An object that contains one source text and the one or more samples that will be processed. This
+    """An object that contains one source text and the one or more samples that will be processed. This
     is needed for tasks like question answering where the source text can generate multiple input - label
     pairs."""
 
@@ -22,14 +22,14 @@ class SampleBasket:
         :type raw: dict
         :param samples: An optional list of Samples used to populate the basket at initialization.
         :type samples: Sample
-        """
+        """  # noqa: E501
         self.id_internal = id_internal
         self.id_external = id_external
         self.raw = raw
         self.samples = samples
 
 
-class Sample(object):
+class Sample:
     """A single training/test sample. This should contain the input and the label. Is initialized with
     the human readable clear_text. Over the course of data preprocessing, this object is populated
     with tokenized and featurized versions of the data."""
@@ -45,26 +45,25 @@ class Sample(object):
         :param features: A dictionary containing features in a vectorized format needed by the model to process this sample.
         :type features: dict
 
-        """
+        """  # noqa: E501
         self.id = id
         self.clear_text = clear_text
         self.features = features
         self.tokenized = tokenized
 
     def __str__(self):
-
         if self.clear_text:
-            clear_text_str = "\n \t".join(
-                [k + ": " + str(v) for k, v in self.clear_text.items()]
-            )
+            clear_text_str = "\n \t".join([k + ": " + str(v) for k, v in self.clear_text.items()])
             if len(clear_text_str) > 10000:
-                clear_text_str = clear_text_str[:10_000] + f"\nTHE REST IS TOO LONG TO DISPLAY. " \
-                                                           f"Remaining chars :{len(clear_text_str)-10_000}"
+                clear_text_str = (
+                    clear_text_str[:10_000] + f"\nTHE REST IS TOO LONG TO DISPLAY. "
+                    f"Remaining chars :{len(clear_text_str)-10_000}"
+                )
         else:
             clear_text_str = "None"
 
         if self.features:
-            if isinstance(self.features, list):
+            if isinstance(self.features, list):  # noqa: SIM108
                 features = self.features[0]
             else:
                 features = self.features
@@ -73,12 +72,11 @@ class Sample(object):
             feature_str = "None"
 
         if self.tokenized:
-            tokenized_str = "\n \t".join(
-                [k + ": " + str(v) for k, v in self.tokenized.items()]
-            )
+            tokenized_str = "\n \t".join([k + ": " + str(v) for k, v in self.tokenized.items()])
             if len(tokenized_str) > 10000:
-                tokenized_str = tokenized_str[:10_000] + f"\nTHE REST IS TOO LONG TO DISPLAY. " \
-                                                         f"Remaining chars: {len(tokenized_str)-10_000}"
+                tokenized_str = (
+                    tokenized_str[:10_000] + f"\nTHE REST IS TOO LONG TO DISPLAY. " f"Remaining chars: {len(tokenized_str)-10_000}"
+                )
         else:
             tokenized_str = "None"
         s = (
@@ -93,7 +91,6 @@ class Sample(object):
 
 
 def create_sample_one_label_one_text(raw_data, text_index, label_index, basket_id):
-
     # text = " ".join(raw_data[text_index:])
     text = raw_data[text_index]
     label = raw_data[label_index]
@@ -102,7 +99,6 @@ def create_sample_one_label_one_text(raw_data, text_index, label_index, basket_i
 
 
 def create_sample_ner(split_text, label, basket_id):
-
     text = " ".join(split_text)
     label = label
 
@@ -117,7 +113,7 @@ def process_answers(answers, doc_offsets, passage_start_c, passage_start_t):
         # This section calculates start and end relative to document
         answer_text = answer["text"]
         answer_len_c = len(answer_text)
-        if "offset" in answer:
+        if "offset" in answer:  # noqa: SIM108
             answer_start_c = answer["offset"]
         else:
             answer_start_c = answer["answer_start"]
@@ -131,7 +127,6 @@ def process_answers(answers, doc_offsets, passage_start_c, passage_start_t):
         # if (answer_start_t != answer_start_t2) or (answer_end_t != answer_end_t2):
         #     pass
 
-
         # TODO: Perform check that answer can be recovered from document?
         # This section converts start and end so that they are relative to the passage
         # TODO: Is this actually necessary on character level?
@@ -140,27 +135,20 @@ def process_answers(answers, doc_offsets, passage_start_c, passage_start_t):
         answer_start_t -= passage_start_t
         answer_end_t -= passage_start_t
 
-        curr_answer_clear = {"text": answer_text,
-                             "start_c": answer_start_c,
-                             "end_c": answer_end_c}
-        curr_answer_tokenized = {"start_t": answer_start_t,
-                                 "end_t": answer_end_t,
-                                 "answer_type": answer.get("answer_type","span")}
+        curr_answer_clear = {"text": answer_text, "start_c": answer_start_c, "end_c": answer_end_c}
+        curr_answer_tokenized = {"start_t": answer_start_t, "end_t": answer_end_t, "answer_type": answer.get("answer_type", "span")}
 
         answers_clear.append(curr_answer_clear)
         answers_tokenized.append(curr_answer_tokenized)
     return answers_clear, answers_tokenized
 
 
-def get_passage_offsets(doc_offsets,
-                        doc_stride,
-                        passage_len_t,
-                        doc_text):
+def get_passage_offsets(doc_offsets, doc_stride, passage_len_t, doc_text):
     """
     Get spans (start and end offsets) for passages by applying a sliding window function.
     The sliding window moves in steps of doc_stride.
     Returns a list of dictionaries which each describe the start, end and id of a passage
-    that is formed when chunking a document using a sliding window approach. """
+    that is formed when chunking a document using a sliding window approach."""
 
     passage_spans = []
     passage_id = 0
@@ -181,11 +169,13 @@ def get_passage_offsets(doc_offsets,
             raw_passage_text = doc_text[:end_ch_idx]
             passage_end_c = len(raw_passage_text.strip())
 
-        passage_span = {"passage_start_t": passage_start_t,
-                        "passage_end_t": passage_end_t,
-                        "passage_start_c": passage_start_c,
-                        "passage_end_c": passage_end_c,
-                        "passage_id": passage_id}
+        passage_span = {
+            "passage_start_t": passage_start_t,
+            "passage_end_t": passage_end_t,
+            "passage_start_c": passage_start_c,
+            "passage_end_c": passage_end_c,
+            "passage_id": passage_id,
+        }
         passage_spans.append(passage_span)
         passage_id += 1
         # If the end idx is greater than or equal to the length of the passage
@@ -195,14 +185,15 @@ def get_passage_offsets(doc_offsets,
 
 
 def offset_to_token_idx(token_offsets, ch_idx):
-    """ Returns the idx of the token at the given character idx"""
+    """Returns the idx of the token at the given character idx"""
     n_tokens = len(token_offsets)
     for i in range(n_tokens):
         if (i + 1 == n_tokens) or (token_offsets[i] <= ch_idx < token_offsets[i + 1]):
             return i
 
+
 def offset_to_token_idx_vecorized(token_offsets, ch_idx):
-    """ Returns the idx of the token at the given character idx"""
+    """Returns the idx of the token at the given character idx"""
     ################
     ################
     ##################
@@ -212,7 +203,7 @@ def offset_to_token_idx_vecorized(token_offsets, ch_idx):
     ################
     ##################
     # case ch_idx is at end of tokens
-    if ch_idx >= np.max(token_offsets):
+    if ch_idx >= np.max(token_offsets):  # noqa: SIM108
         # TODO check "+ 1" (it is needed for making end indices compliant with old offset_to_token_idx() function)
         # check weather end token is incluse or exclusive
         idx = np.argmax(token_offsets) + 1

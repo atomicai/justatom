@@ -1,7 +1,7 @@
 from math import ceil
 
-from torch.utils.data import DataLoader, Dataset, Sampler
 import torch
+from torch.utils.data import DataLoader
 
 
 class NamedDataLoader(DataLoader):
@@ -32,24 +32,22 @@ class NamedDataLoader(DataLoader):
             the name of the tensor and the value is the tensor itself
             """
 
-            if type(dataset).__name__ == "_StreamingDataSet":
+            if type(dataset).__name__ == "_StreamingDataSet":  # noqa: SIM108
                 _tensor_names = dataset.tensor_names
             else:
                 _tensor_names = tensor_names
 
-            if type(batch[0]) == list:
+            if type(batch[0]) == list:  # noqa: E721
                 batch = batch[0]
 
-            assert len(batch[0]) == len(
-                _tensor_names
-            ), "Dataset contains {} tensors while there are {} tensor names supplied: {}".format(
-                len(batch[0]), len(_tensor_names), _tensor_names
-            )
+            assert (
+                len(batch[0]) == len(_tensor_names)
+            ), f"Dataset contains {len(batch[0])} tensors while there are {len(_tensor_names)} tensor names supplied: {_tensor_names}"  # noqa: E501
             lists_temp = [[] for _ in range(len(_tensor_names))]
-            ret = dict(zip(_tensor_names, lists_temp))
+            ret = dict(zip(_tensor_names, lists_temp, strict=False))
 
             for example in batch:
-                for name, tensor in zip(_tensor_names, example):
+                for name, tensor in zip(_tensor_names, example, strict=False):
                     ret[name].append(tensor)
 
             for key in ret:
@@ -57,7 +55,7 @@ class NamedDataLoader(DataLoader):
 
             return ret
 
-        super(NamedDataLoader, self).__init__(
+        super(NamedDataLoader, self).__init__(  # noqa: UP008
             dataset=dataset,
             sampler=sampler,
             batch_size=batch_size,
@@ -87,7 +85,5 @@ def covert_dataset_to_dataloader(dataset, sampler, batch_size):
     :return: A DataLoader that wraps the input Dataset.
     """
     sampler_initialized = sampler(dataset)
-    data_loader = DataLoader(
-        dataset, sampler=sampler_initialized, batch_size=batch_size
-    )
+    data_loader = DataLoader(dataset, sampler=sampler_initialized, batch_size=batch_size)
     return data_loader

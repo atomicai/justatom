@@ -1,8 +1,9 @@
-from typing import Any, Dict, Type
+from typing import Any
+
 from justatom.etc.errors import DeserializationError
 
 
-def generate_qualified_class_name(cls: Type[object]) -> str:
+def generate_qualified_class_name(cls: type[object]) -> str:
     """
     Generates a qualified class name for a class.
 
@@ -14,7 +15,7 @@ def generate_qualified_class_name(cls: Type[object]) -> str:
     return f"{cls.__module__}.{cls.__name__}"
 
 
-def default_to_dict(obj: Any, **init_parameters) -> Dict[str, Any]:
+def default_to_dict(obj: Any, **init_parameters) -> dict[str, Any]:
     """
     Utility function to serialize an object to a dictionary.
 
@@ -56,7 +57,7 @@ def default_to_dict(obj: Any, **init_parameters) -> Dict[str, Any]:
     return {"type": generate_qualified_class_name(type(obj)), "init_parameters": init_parameters}
 
 
-def default_from_dict(cls: Type[object], data: Dict[str, Any]) -> Any:
+def default_from_dict(cls: type[object], data: dict[str, Any]) -> Any:
     """
     Utility function to deserialize a dictionary to an object.
 

@@ -3,12 +3,11 @@ import abc
 import numpy as np
 
 
-class IDimReducer(abc.ABC):
-
-    def fit_transform(self, embeddings: np.ndarray) -> np.ndarray:
+class IDimReducer(abc.ABC):  # noqa: B024
+    def fit_transform(self, embeddings: np.ndarray) -> np.ndarray:  # noqa: B027
         pass
 
-    def transform(self, embeddings: np.ndarray) -> np.ndarray:
+    def transform(self, embeddings: np.ndarray) -> np.ndarray:  # noqa: B027
         pass
 
 

@@ -1,11 +1,13 @@
-from justatom.storing.mask import IDataset
-from justatom.etc.pattern import singleton
-from typing import Generator
-import simplejson as json
-from pathlib import Path
-from loguru import logger
-import polars as pl
 import os
+from collections.abc import Generator
+from pathlib import Path
+
+import polars as pl
+import simplejson as json
+from loguru import logger
+
+from justatom.etc.pattern import singleton
+from justatom.storing.mask import IDataset
 
 
 class URLInJSONDataset(IDataset):
@@ -16,16 +18,14 @@ class URLInJSONDataset(IDataset):
 
 
 class JUSTATOMDataset(IDataset):
-
     def iterator(self, **kwargs) -> Generator:
         with open(Path(os.getcwd()) / ".data" / "polaroids.ai.data.json") as fp:
             docs = json.load(fp)
-            for doc in docs:
+            for doc in docs:  # noqa: UP028
                 yield doc
 
 
 class CSVDataset(IDataset):
-
     def __init__(self, fp):
         self.fp = fp
 
@@ -35,7 +35,6 @@ class CSVDataset(IDataset):
 
 
 class XLSXDataset(IDataset):
-
     def __init__(self, fp):
         self.fp = fp
 
@@ -46,7 +45,6 @@ class XLSXDataset(IDataset):
 
 @singleton
 class ByName:
-
     def named(self, name: str, **kwargs):
         OPS = ["url", "justatom"]
 
@@ -57,7 +55,7 @@ class ByName:
         else:
             fp = Path(name)
             if not fp.exists():
-                msg = f"Unknown dataset_name_or_path=[{name}] to init IDataset instance. Use one of {','.join(OPS)} or provide valid dataset path"
+                msg = f"Unknown dataset_name_or_path=[{name}] to init IDataset instance. Use one of {','.join(OPS)} or provide valid dataset path"  # noqa: E501
                 logger.error(msg)
                 raise ValueError(msg)
             if fp.suffix in [".csv"]:

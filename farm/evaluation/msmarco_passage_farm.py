@@ -1,6 +1,8 @@
-from farm.evaluation.msmarco_passage_official import compute_metrics_from_files
 import os
+
 import pandas as pd
+
+from farm.evaluation.msmarco_passage_official import compute_metrics_from_files
 
 
 def msmarco_evaluation(preds_file, dev_file, qrels_file, output_file):
@@ -18,13 +20,13 @@ def msmarco_evaluation(preds_file, dev_file, qrels_file, output_file):
     """
 
     # Initialize files
-    preds_scores = [float(l) for l in open(preds_file)]
-    dev_lines = [l for i,l in enumerate(open(dev_file)) if i != 0]
-    output = open(output_file, "w")
+    preds_scores = [float(l) for l in open(preds_file)]  # noqa: SIM115, E741
+    dev_lines = [l for i, l in enumerate(open(dev_file)) if i != 0]  # noqa: SIM115, E741
+    output = open(output_file, "w")  # noqa: SIM115
 
     # Populate a dict with all qid/pid/score triples
     results = dict()
-    for i, (score, line) in enumerate(zip(preds_scores, dev_lines)):
+    for i, (score, line) in enumerate(zip(preds_scores, dev_lines, strict=False)):
         if i == 0:
             continue
         qid, _, pid, _, _ = line.split("\t")
@@ -62,12 +64,12 @@ def msmarco_evaluation(preds_file, dev_file, qrels_file, output_file):
 
     # Sort by scores and take top 10
     for qid in list(results):
-        sorted_scores = sorted(results[qid], key= lambda x: x[1], reverse=True)[:10]
-        results[qid] = [(pid, i+1) for i, (pid, _)  in enumerate(sorted_scores)]
+        sorted_scores = sorted(results[qid], key=lambda x: x[1], reverse=True)[:10]
+        results[qid] = [(pid, i + 1) for i, (pid, _) in enumerate(sorted_scores)]
 
     # Write to file
     for qid in list(results):
-        for (pid, rank) in results[qid]:
+        for pid, rank in results[qid]:
             output.write(f"{qid}\t{pid}\t{rank}\n")
     output.close()
 
@@ -79,11 +81,8 @@ def msmarco_evaluation(preds_file, dev_file, qrels_file, output_file):
     path_to_reference = "tmp"
     path_to_candidate = output_file
     metrics = compute_metrics_from_files(path_to_reference, path_to_candidate)
-    print('#####################')
+    print("#####################")
     for metric in sorted(metrics):
-        print('{}: {}'.format(metric, metrics[metric]))
-    print('#####################')
+        print(f"{metric}: {metrics[metric]}")
+    print("#####################")
     os.remove(path_to_reference)
-
-
-

@@ -1,9 +1,9 @@
 import abc
+
 import polars as pl
 
 
 class IChart(abc.ABC):
-
     @abc.abstractmethod
     def view(self, data: pl.DataFrame, **props):
         pass

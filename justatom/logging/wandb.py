@@ -1,13 +1,12 @@
-from typing import Dict, Optional
 import os
 import pickle
 
 import numpy as np
+from loguru import logger
 
-from justatom.logging.mask import ILogger
 from justatom.configuring import Config
 from justatom.etc.lazy_imports import LazyImport
-from loguru import logger
+from justatom.logging.mask import ILogger
 
 with LazyImport("Run 'pip install wandb==0.16.1'") as wb_import:
     import wandb
@@ -63,8 +62,8 @@ class WandbLogger(ILogger):
     def __init__(
         self,
         project: str,
-        name: Optional[str] = None,
-        entity: Optional[str] = None,
+        name: str | None = None,
+        entity: str | None = None,
         log_batch_metrics: bool = Config.log.log_batch_metrics,
         log_epoch_metrics: bool = Config.log.log_epoch_metrics,
         **kwargs,
@@ -92,7 +91,7 @@ class WandbLogger(ILogger):
         """Internal logger/experiment/etc. from the monitoring system."""
         return self.run
 
-    def _log_metrics(self, metrics: Dict[str, float], step: int = None, loader_key: str = None, prefix=""):
+    def _log_metrics(self, metrics: dict[str, float], step: int = None, loader_key: str = None, prefix=""):
         for key, value in metrics.items():
             if prefix != "":
                 if loader_key is not None:
@@ -108,7 +107,7 @@ class WandbLogger(ILogger):
     def log_artifacts(
         self,
         tag: str,
-        runner: "IRunner",
+        runner: "IRunner",  # noqa: F821
         artifact: object = None,
         path_to_artifact: str = None,
         scope: str = None,
@@ -127,7 +126,7 @@ class WandbLogger(ILogger):
             art_file_dir = os.path.join("wandb", self.run.id, "artifact_dumps")
             os.makedirs(art_file_dir, exist_ok=True)
 
-            art_file = open(os.path.join(art_file_dir, tag), "wb")
+            art_file = open(os.path.join(art_file_dir, tag), "wb")  # noqa: SIM115
             pickle.dump(artifact, art_file)
             art_file.close()
 
@@ -140,7 +139,7 @@ class WandbLogger(ILogger):
         self,
         tag: str,
         image: np.ndarray,
-        runner: "IRunner",
+        runner: "IRunner",  # noqa: F821
         scope: str = None,
     ) -> None:
         """Logs image to the logger."""
@@ -154,15 +153,15 @@ class WandbLogger(ILogger):
         step = runner.sample_step if self.log_batch_metrics else runner.epoch_step
         self.run.log({f"{log_path}.png": wandb.Image(image)}, step=step)
 
-    def log_hparams(self, hparams: Dict, runner: "IRunner" = None) -> None:
+    def log_hparams(self, hparams: dict, runner: "IRunner" = None) -> None:  # noqa: F821
         """Logs hyperparameters to the logger."""
         self.run.config.update(hparams)
 
     def log_metrics(
         self,
-        metrics: Dict[str, float],
-        scope: Optional[str] = None,
-        runner: "IRunner" = None,
+        metrics: dict[str, float],
+        scope: str | None = None,
+        runner: "IRunner" = None,  # noqa: F821
         step: int = None,
     ) -> None:
         """Logs batch and epoch metrics to wandb."""

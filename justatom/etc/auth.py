@@ -1,16 +1,16 @@
+import os
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass, field, fields
 from enum import Enum
-
-from justatom.etc.errors import DeserializationError
+from typing import Any
 
 from weaviate.auth import AuthApiKey as WeaviateAuthApiKey
 from weaviate.auth import AuthBearerToken as WeaviateAuthBearerToken
 from weaviate.auth import AuthClientCredentials as WeaviateAuthClientCredentials
 from weaviate.auth import AuthClientPassword as WeaviateAuthClientPassword
 
-import os
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Type
+from justatom.etc.errors import DeserializationError
 
 
 class SecretType(Enum):
@@ -53,7 +53,7 @@ class Secret(ABC):
         return TokenSecret(_token=token)
 
     @staticmethod
-    def from_env_var(env_vars: Union[str, List[str]], *, strict: bool = True) -> "Secret":
+    def from_env_var(env_vars: str | list[str], *, strict: bool = True) -> "Secret":
         """
         Create an environment variable-based secret. Accepts
         one or more environment variables. Upon resolution, it
@@ -71,7 +71,7 @@ class Secret(ABC):
             env_vars = [env_vars]
         return EnvVarSecret(_env_vars=tuple(env_vars), _strict=strict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert the secret to a JSON-serializable dictionary.
         Some secrets may not be serializable.
@@ -81,12 +81,12 @@ class Secret(ABC):
         """
         out = {"type": self.type.value}
         inner = self._to_dict()
-        assert all(k not in inner for k in out.keys())
+        assert all(k not in inner for k in out)
         out.update(inner)
         return out
 
     @staticmethod
-    def from_dict(dict: Dict[str, Any]) -> "Secret":
+    def from_dict(dict: dict[str, Any]) -> "Secret":
         """
         Create a secret from a JSON-serializable dictionary.
 
@@ -100,7 +100,7 @@ class Secret(ABC):
         return secret_map[secret_type]._from_dict(dict)  # type: ignore
 
     @abstractmethod
-    def resolve_value(self) -> Optional[Any]:
+    def resolve_value(self) -> Any | None:
         """
         Resolve the secret to an atomic value. The semantics
         of the value is secret-dependent.
@@ -119,12 +119,12 @@ class Secret(ABC):
         pass
 
     @abstractmethod
-    def _to_dict(self) -> Dict[str, Any]:
+    def _to_dict(self) -> dict[str, Any]:
         pass
 
     @staticmethod
     @abstractmethod
-    def _from_dict(dict: Dict[str, Any]) -> "Secret":
+    def _from_dict(dict: dict[str, Any]) -> "Secret":
         pass
 
 
@@ -145,18 +145,14 @@ class TokenSecret(Secret):
         if len(self._token) == 0:
             raise ValueError("Authentication token cannot be empty.")
 
-    def _to_dict(self) -> Dict[str, Any]:
-        raise ValueError(
-            "Cannot serialize token-based secret. Use an alternative secret type like environment variables."
-        )
+    def _to_dict(self) -> dict[str, Any]:
+        raise ValueError("Cannot serialize token-based secret. Use an alternative secret type like environment variables.")
 
     @staticmethod
-    def _from_dict(dict: Dict[str, Any]) -> "Secret":
-        raise ValueError(
-            "Cannot deserialize token-based secret. Use an alternative secret type like environment variables."
-        )
+    def _from_dict(dict: dict[str, Any]) -> "Secret":
+        raise ValueError("Cannot deserialize token-based secret. Use an alternative secret type like environment variables.")
 
-    def resolve_value(self) -> Optional[Any]:
+    def resolve_value(self) -> Any | None:
         return self._token
 
     @property
@@ -172,7 +168,7 @@ class EnvVarSecret(Secret):
     environment variable that is set. Can be serialized.
     """
 
-    _env_vars: Tuple[str, ...]
+    _env_vars: tuple[str, ...]
     _strict: bool = True
     _type: SecretType = SecretType.ENV_VAR
 
@@ -183,14 +179,14 @@ class EnvVarSecret(Secret):
         if len(self._env_vars) == 0:
             raise ValueError("One or more environment variables must be provided for the secret.")
 
-    def _to_dict(self) -> Dict[str, Any]:
+    def _to_dict(self) -> dict[str, Any]:
         return {"env_vars": list(self._env_vars), "strict": self._strict}
 
     @staticmethod
-    def _from_dict(dict: Dict[str, Any]) -> "Secret":
+    def _from_dict(dict: dict[str, Any]) -> "Secret":
         return EnvVarSecret(tuple(dict["env_vars"]), _strict=dict["strict"])
 
-    def resolve_value(self) -> Optional[Any]:
+    def resolve_value(self) -> Any | None:
         out = None
         for env_var in self._env_vars:
             value = os.getenv(env_var)
@@ -206,7 +202,7 @@ class EnvVarSecret(Secret):
         return self._type
 
 
-def deserialize_secrets_inplace(data: Dict[str, Any], keys: Iterable[str], *, recursive: bool = False):
+def deserialize_secrets_inplace(data: dict[str, Any], keys: Iterable[str], *, recursive: bool = False):
     """
     Deserialize secrets in a dictionary inplace.
 
@@ -255,7 +251,7 @@ class AuthCredentials(ABC):
     Can be used to deserialize from dict any of the supported auth credentials.
     """
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Converts the object to a dictionary representation for serialization.
         """
@@ -269,7 +265,7 @@ class AuthCredentials(ABC):
         return {"type": str(SupportedAuthTypes.from_class(self.__class__)), "init_parameters": _fields}
 
     @staticmethod
-    def from_dict(data: Dict[str, Any]) -> "AuthCredentials":
+    def from_dict(data: dict[str, Any]) -> "AuthCredentials":
         """
         Converts a dictionary representation to an auth credentials object.
         """
@@ -277,7 +273,7 @@ class AuthCredentials(ABC):
             msg = "Missing 'type' in serialization data"
             raise DeserializationError(msg)
 
-        auth_classes: Dict[str, Type[AuthCredentials]] = {
+        auth_classes: dict[str, type[AuthCredentials]] = {
             str(SupportedAuthTypes.API_KEY): AuthApiKey,
             str(SupportedAuthTypes.BEARER): AuthBearerToken,
             str(SupportedAuthTypes.CLIENT_CREDENTIALS): AuthClientCredentials,
@@ -288,7 +284,7 @@ class AuthCredentials(ABC):
 
     @classmethod
     @abstractmethod
-    def _from_dict(cls, data: Dict[str, Any]):
+    def _from_dict(cls, data: dict[str, Any]):
         """
         Internal method to convert a dictionary representation to an auth credentials object.
         All subclasses must implement this method.
@@ -312,7 +308,7 @@ class AuthApiKey(AuthCredentials):
     api_key: Secret = field(default_factory=lambda: Secret.from_env_var(["WEAVIATE_API_KEY"]))
 
     @classmethod
-    def _from_dict(cls, data: Dict[str, Any]) -> "AuthApiKey":
+    def _from_dict(cls, data: dict[str, Any]) -> "AuthApiKey":
         deserialize_secrets_inplace(data["init_parameters"], ["api_key"])
         return cls(**data["init_parameters"])
 
@@ -335,7 +331,7 @@ class AuthBearerToken(AuthCredentials):
     refresh_token: Secret = field(default_factory=lambda: Secret.from_env_var(["WEAVIATE_REFRESH_TOKEN"], strict=False))
 
     @classmethod
-    def _from_dict(cls, data: Dict[str, Any]) -> "AuthBearerToken":
+    def _from_dict(cls, data: dict[str, Any]) -> "AuthBearerToken":
         deserialize_secrets_inplace(data["init_parameters"], ["access_token", "refresh_token"])
         return cls(**data["init_parameters"])
 
@@ -364,7 +360,7 @@ class AuthClientCredentials(AuthCredentials):
     scope: Secret = field(default_factory=lambda: Secret.from_env_var(["WEAVIATE_SCOPE"], strict=False))
 
     @classmethod
-    def _from_dict(cls, data: Dict[str, Any]) -> "AuthClientCredentials":
+    def _from_dict(cls, data: dict[str, Any]) -> "AuthClientCredentials":
         deserialize_secrets_inplace(data["init_parameters"], ["client_secret", "scope"])
         return cls(**data["init_parameters"])
 
@@ -391,7 +387,7 @@ class AuthClientPassword(AuthCredentials):
     scope: Secret = field(default_factory=lambda: Secret.from_env_var(["WEAVIATE_SCOPE"], strict=False))
 
     @classmethod
-    def _from_dict(cls, data: Dict[str, Any]) -> "AuthClientPassword":
+    def _from_dict(cls, data: dict[str, Any]) -> "AuthClientPassword":
         deserialize_secrets_inplace(data["init_parameters"], ["username", "password", "scope"])
         return cls(**data["init_parameters"])
 

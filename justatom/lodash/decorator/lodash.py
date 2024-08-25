@@ -1,30 +1,32 @@
-import logging
 import functools
+import logging
 
 __version__ = "0.0.7"
 
 
 def trycatch(func):
-
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
             func(*args, **kwargs)
         except Exception as e:
-            logging.exception('Exception occurred: [{}]'.format(e))
+            logging.exception(f"Exception occurred: [{e}]")
+
     return wrapper
 
 
 def benchmark(func):
-
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         from time import time
+
         start_time = time()
         func(*args, **kwargs)
         end_time = time()
-        logging.info('Time taken by the function is [{time}] sec'.format(func=func, time=end_time-start_time))
+        logging.info(f"Time taken by the function is [{end_time-start_time}] sec")
+
     return wrapper
+
 
 def run_in_thread(func):
     """
@@ -42,11 +44,14 @@ def run_in_thread(func):
         Printing ('Siddhesh',) from thread
 
     """
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         import threading
+
         threading.Thread(target=func, args=(args, kwargs)).start()
-        logging.info('Thread started for function {}'.format(func))
+        logging.info(f"Thread started for function {func}")
+
     return wrapper
 
 
@@ -59,12 +64,16 @@ def create_n_threads(thread_count=1):
         - Will start number of threads based on the count specified while decorating
     Use:
     """
+
     def wrapper(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             import threading
-            for i in range(thread_count):
+
+            for i in range(thread_count):  # noqa: B007
                 threading.Thread(target=func, args=(args, kwargs)).start()
-                logging.info('Thread started for function {}'.format(func))
+                logging.info(f"Thread started for function {func}")
+
         return wrapper
+
     return wrapper

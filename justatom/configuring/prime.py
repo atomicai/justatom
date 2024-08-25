@@ -1,16 +1,16 @@
+import os
+from pathlib import Path
+
+import dotenv
+import yaml
 from dotmap import DotMap
+from loguru import logger
 
 from justatom.etc.pattern import singleton
-from pathlib import Path
-import yaml
-import dotenv
-from loguru import logger
-import os
 
 
 @singleton
 class IConfig:
-
     DEFAULT_UMAP = dict(n_neighbors=15, n_components=5, min_dist=0.0, metric="cosine")
 
     DEFAULT_PCA = dict()
@@ -23,9 +23,9 @@ class IConfig:
         try:
             with open(str(Path(os.getcwd()) / "config.yaml")) as fp:
                 config = DotMap(yaml.safe_load(fp))
-        except:
+        except:  # noqa: E722
             config = DotMap()
-            logger.info(f"Config file is not loaded, be aware that no options are propagates from `config.yaml`")
+            logger.info("Config file is not loaded, be aware that no options are propagates from `config.yaml`")
         else:
             for k, v in config.items():
                 if k.startswith("_"):

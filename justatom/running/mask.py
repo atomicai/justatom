@@ -1,7 +1,7 @@
 import abc
 import copy
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple, Union
 
 import numpy as np
 import simplejson as json
@@ -48,7 +48,7 @@ class IMODELRunner:
         runner = cls.subclasses[config["klass"]].load(data_dir, config=config)
         return runner
 
-    def save_config(self, save_dir: Union[Path, str]):
+    def save_config(self, save_dir: Path | str):
         save_filename = Path(save_dir) / "runner_config.json"
         config = copy.deepcopy(self.config)
         config["klass"] = self.__class__.__name__
@@ -73,7 +73,7 @@ class IMODELRunner:
         # Save the model itself
         self.model.save(save_dir)
 
-    def connect_heads_with_processor(self, tasks: Dict, require_labels: bool = True):
+    def connect_heads_with_processor(self, tasks: dict, require_labels: bool = True):
         """
         Populates prediction heads (flow) with information coming from tasks.
 
@@ -95,11 +95,10 @@ class IMODELRunner:
 
 
 class ICLUSTERINGWrapperBackend(BaseEmbedder):
-
     def __init__(self, model: IDocEmbedder):
         self.model = model
 
-    def embed(self, documents: List[str], verbose: bool = False) -> np.ndarray:
+    def embed(self, documents: list[str], verbose: bool = False) -> np.ndarray:
         """Embed a list of n documents/words into an n-dimensional
         matrix of embeddings
 
@@ -123,36 +122,33 @@ class ICLUSTERINGRunner(abc.ABC):
         self.model = model
 
     @abc.abstractmethod
-    def fit_transform(self, docs, **kwargs) -> Tuple[List[int], Union[np.ndarray, None]]:
+    def fit_transform(self, docs, **kwargs) -> tuple[list[int], np.ndarray | None]:
         pass
 
 
 class IRetrieverRunner(abc.ABC):
-
     @abc.abstractmethod
-    def retrieve_topk(self, queries: Union[str, List[str]], top_k: int = 5):
+    def retrieve_topk(self, queries: str | list[str], top_k: int = 5):
         pass
 
 
 class IIndexerRunner(abc.ABC):
-
     @abc.abstractmethod
-    def index(self, documents: List[Document], **kwargs):
+    def index(self, documents: list[Document], **kwargs):
         pass
 
 
 class IEvaluatorRunner(abc.ABC):
-
     def __init__(self, ir: IRetrieverRunner):
         self.ir = ir
 
     @abc.abstractmethod
     def evaluate_topk(
         self,
-        queries: Union[str, List[str]],
-        metrics: List[Union[str, Callable]],
-        metrics_top_k: List[Union[str, Callable]],
-        eval_top_k: List[int] = None,
+        queries: str | list[str],
+        metrics: list[str | Callable],
+        metrics_top_k: list[str | Callable],
+        eval_top_k: list[int] = None,
         top_k: int = 5,
     ):
         pass

@@ -1,9 +1,9 @@
-from justatom.storing.mask import IDBDocStore
 from rethinkdb import r
+
+from justatom.storing.mask import IDBDocStore
 
 
 class IReDocStore(IDBDocStore):
-
     def __init__(self, host, port, **props):
         super().__init__()
         self.client = r.connect(host=host, port=port)

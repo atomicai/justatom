@@ -1,14 +1,14 @@
-from typing import Any, Dict
-
-from dateutil import parser
-from justatom.etc.errors import FilterError
-from pandas import DataFrame
+from typing import Any
 
 import weaviate
+from dateutil import parser
+from pandas import DataFrame
 from weaviate.collections.classes.filters import Filter, FilterReturn
 
+from justatom.etc.errors import FilterError
 
-def convert_filters(filters: Dict[str, Any]) -> FilterReturn:
+
+def convert_filters(filters: dict[str, Any]) -> FilterReturn:
     """
     Convert filters from intuitive format to Weaviate format.
     """
@@ -36,7 +36,7 @@ OPERATOR_INVERSE = {
 }
 
 
-def _invert_condition(filters: Dict[str, Any]) -> Dict[str, Any]:
+def _invert_condition(filters: dict[str, Any]) -> dict[str, Any]:
     """
     Invert condition recursively.
     Weaviate doesn't support NOT filters so we need to invert them ourselves.
@@ -60,7 +60,7 @@ LOGICAL_OPERATORS = {
 }
 
 
-def _parse_logical_condition(condition: Dict[str, Any]) -> FilterReturn:
+def _parse_logical_condition(condition: dict[str, Any]) -> FilterReturn:
     if "operator" not in condition:
         msg = f"'operator' key missing in {condition}"
         raise FilterError(msg)
@@ -225,7 +225,7 @@ COMPARISON_OPERATORS = {
 }
 
 
-def _parse_comparison_condition(condition: Dict[str, Any]) -> FilterReturn:
+def _parse_comparison_condition(condition: dict[str, Any]) -> FilterReturn:
     field: str = condition["field"]
 
     if field.startswith("meta."):

@@ -1,16 +1,15 @@
-from typing import List, Union
+import os
+from pathlib import Path
+
+import simplejson as json
+from loguru import logger
 from quart import Quart, request, session
 from quart_session import Session
-import simplejson as json
-from justatom.storing.weaviate import Finder as StoreFinder
-from justatom.running.retriever import API as RetrieverApi
+
 from justatom.running.indexer import API as IndexerApi
+from justatom.running.retriever import API as RetrieverApi
 from justatom.storing.dataset import API as DatasetApi
-from loguru import logger
-
-from pathlib import Path
-import os
-
+from justatom.storing.weaviate import Finder as StoreFinder
 
 app = Quart(
     __name__,

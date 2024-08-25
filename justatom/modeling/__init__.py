@@ -1,1 +1,1 @@
-from justatom.modeling.prime import E5Model, E5SModel, E5LModel
+from justatom.modeling.prime import E5LModel, E5Model, E5SModel  # noqa: F401

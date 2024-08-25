@@ -1,21 +1,19 @@
-from justatom.storing.mask import IDFDocStore
-import polars as pl
-import numpy as np
-from typing import Union
 import re
+
+import numpy as np
+import polars as pl
+
+from justatom.storing.mask import IDFDocStore
 
 
 class POLARStore(IDFDocStore):
-
-    def __init__(self, df: Union[pl.DataFrame, pl.Series]):
+    def __init__(self, df: pl.DataFrame | pl.Series):
         self.df = df
 
     def counts_per_col(self, col: str, view_as_dict: bool = False):
         df = self.df.with_row_count()
         pl_view = (
-            df.with_columns(
-                [pl.count("row_nr").over(col).alias(f"counts_per_{col}"), pl.first("row_nr").over(col).alias("mask")]
-            )
+            df.with_columns([pl.count("row_nr").over(col).alias(f"counts_per_{col}"), pl.first("row_nr").over(col).alias("mask")])
             .filter(pl.col("row_nr") == pl.col("mask"))
             .sort(by=f"counts_per_{col}", descending=True)
         )
@@ -24,7 +22,9 @@ class POLARStore(IDFDocStore):
             pl_res = {
                 key_over: key_value
                 for key_over, key_value in zip(
-                    pl_view.select(col).to_series().to_list(), pl_view.select(f"counts_per_{col}").to_series().to_list()
+                    pl_view.select(col).to_series().to_list(),
+                    pl_view.select(f"counts_per_{col}").to_series().to_list(),
+                    strict=False,
                 )
             }
         else:
@@ -32,7 +32,6 @@ class POLARStore(IDFDocStore):
         return pl_res
 
     def count_words_per_col(self, col: str, sort=True, stopchars: str = None):
-
         df = self.df
 
         def clear_doc(text):
@@ -105,9 +104,7 @@ class POLARStore(IDFDocStore):
         """
         # [self.df.sample(sample_size) for _ in range(num_obs)]
         # Lazy API. See https://stackoverflow.com/a/76359078/22622408 for more info
-        pl_lazy_obs = [
-            self.df.lazy().select(row=pl.struct(pl.all()).sample(sample_size)).unnest("row") for _ in range(num_obs)
-        ]
+        pl_lazy_obs = [self.df.lazy().select(row=pl.struct(pl.all()).sample(sample_size)).unnest("row") for _ in range(num_obs)]
 
         return pl.collect_all(pl_lazy_obs)
 

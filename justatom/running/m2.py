@@ -1,12 +1,13 @@
+import os
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+from loguru import logger
+
+from justatom.modeling.div import loss_per_head_sum
 from justatom.modeling.mask import ILanguageModel
 from justatom.running.mask import IMODELRunner
-from justatom.modeling.div import loss_per_head_sum
-from pathlib import Path
-import os
-import torch
-from loguru import logger
-import torch.nn as nn
-from typing import Optional
 
 
 class M2LMRunner(IMODELRunner, nn.Module):
@@ -17,7 +18,7 @@ class M2LMRunner(IMODELRunner, nn.Module):
     def __init__(
         self,
         query_model: ILanguageModel,
-        passage_model: Optional[ILanguageModel] = None,
+        passage_model: ILanguageModel | None = None,
         prediction_heads=None,
         embeds_dropout_prob: float = 0.1,
         device: str = "cpu",
@@ -59,12 +60,12 @@ class M2LMRunner(IMODELRunner, nn.Module):
 
     def forward_lm(
         self,
-        query_input_ids: Optional[torch.Tensor] = None,
-        query_segment_ids: Optional[torch.Tensor] = None,
-        query_attention_mask: Optional[torch.Tensor] = None,
-        passage_input_ids: Optional[torch.Tensor] = None,
-        passage_segment_ids: Optional[torch.Tensor] = None,
-        passage_attention_mask: Optional[torch.Tensor] = None,
+        query_input_ids: torch.Tensor | None = None,
+        query_segment_ids: torch.Tensor | None = None,
+        query_attention_mask: torch.Tensor | None = None,
+        passage_input_ids: torch.Tensor | None = None,
+        passage_segment_ids: torch.Tensor | None = None,
+        passage_attention_mask: torch.Tensor | None = None,
     ):
         """
         Forward pass for the 2 `LanguageModel` models.
@@ -81,7 +82,6 @@ class M2LMRunner(IMODELRunner, nn.Module):
             pooled_output[0] = pooled_output1
 
         if passage_input_ids is not None and passage_segment_ids is not None and passage_attention_mask is not None:
-
             max_seq_len = passage_input_ids.shape[-1]
             passage_input_ids = passage_input_ids.view(-1, max_seq_len)
             passage_attention_mask = passage_attention_mask.view(-1, max_seq_len)

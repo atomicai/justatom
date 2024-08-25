@@ -1,1 +1,1 @@
-from .core import Cache
+from .core import Cache  # noqa: F401

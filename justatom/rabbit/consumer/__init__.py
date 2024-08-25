@@ -1,1 +1,1 @@
-from .core import Consumer
+from .core import Consumer  # noqa: F401

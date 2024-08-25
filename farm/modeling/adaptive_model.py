@@ -1,22 +1,23 @@
 import copy
 import json
 import logging
+import multiprocessing
 import os
 from pathlib import Path
 
-import multiprocessing
 import numpy
 import torch
 from torch import nn
 from transformers import AutoConfig
-from transformers.convert_graph_to_onnx import convert, quantize as quantize_model
+from transformers.convert_graph_to_onnx import convert
+from transformers.convert_graph_to_onnx import quantize as quantize_model
 
-
+import farm.conversion.transformers as conv
 from farm.data_handler.processor import Processor
 from farm.modeling.language_model import LanguageModel
 from farm.modeling.prediction_head import PredictionHead, pick_single_fn
-from farm.utils import WANDBLogger as MlLogger, stack
-import farm.conversion.transformers as conv
+from farm.utils import WANDBLogger as MlLogger
+from farm.utils import stack
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ class BaseAdaptiveModel:
     subclasses = {}
 
     def __init_subclass__(cls, **kwargs):
-        """ This automatically keeps track of all available subclasses.
+        """This automatically keeps track of all available subclasses.
         Enables generic load() for all specific AdaptiveModel implementation.
         """
         super().__init_subclass__(**kwargs)
@@ -65,7 +66,7 @@ class BaseAdaptiveModel:
         """
         all_preds = []
         # collect preds from all heads
-        for head, logits_for_head in zip(self.prediction_heads, logits):
+        for head, logits_for_head in zip(self.prediction_heads, logits, strict=False):
             preds = head.logits_to_preds(logits=logits_for_head, **kwargs)
             all_preds.append(preds)
         return all_preds
@@ -102,9 +103,9 @@ class BaseAdaptiveModel:
             logits_for_head = logits[0]
             preds = head.formatted_preds(logits=logits_for_head, **kwargs)
             # TODO This is very messy - we need better definition of what the output should look like
-            if type(preds) == list:
+            if type(preds) == list:  # noqa: E721
                 preds_final += preds
-            elif type(preds) == dict and "predictions" in preds:
+            elif type(preds) == dict and "predictions" in preds:  # noqa: E721
                 preds_final.append(preds)
 
         # This case is triggered by Natural Questions
@@ -119,7 +120,9 @@ class BaseAdaptiveModel:
 
             del kwargs["preds"]
 
-            for i, (head, preds_for_head, logits_for_head) in enumerate(zip(self.prediction_heads, preds_for_heads, logits_for_heads)):
+            for i, (head, preds_for_head, logits_for_head) in enumerate(
+                zip(self.prediction_heads, preds_for_heads, logits_for_heads, strict=False)
+            ):
                 preds = head.formatted_preds(logits=logits_for_head, preds=preds_for_head, **kwargs)
                 preds_final[i].append(preds)
 
@@ -137,7 +140,7 @@ class BaseAdaptiveModel:
         :param tasks: A dictionary where the keys are the names of the tasks and the values are the details of the task (e.g. label_list, metric, tensor name)
         :param require_labels: If True, an error will be thrown when a task is not supplied with labels)
         :return:
-        """
+        """  # noqa: E501
 
         # Drop the next sentence prediction head if it does not appear in tasks. This is triggered by the interaction
         # setting the argument BertStyleLMProcessor(next_sent_pred=False)
@@ -147,39 +150,30 @@ class BaseAdaptiveModel:
                 if ph.task_name == "nextsentence":
                     idx = i
             if idx is not None:
-                logger.info(
-                "Removing the NextSentenceHead since next_sent_pred is set to False in the BertStyleLMProcessor")
+                logger.info("Removing the NextSentenceHead since next_sent_pred is set to False in the BertStyleLMProcessor")
                 del self.prediction_heads[i]
 
         for head in self.prediction_heads:
             head.label_tensor_name = tasks[head.task_name]["label_tensor_name"]
             label_list = tasks[head.task_name]["label_list"]
             if not label_list and require_labels:
-                raise Exception(f"The task \'{head.task_name}\' is missing a valid set of labels")
+                raise Exception(f"The task '{head.task_name}' is missing a valid set of labels")
             label_list = tasks[head.task_name]["label_list"]
             head.label_list = label_list
-            if "RegressionHead" in str(type(head)):
+            if "RegressionHead" in str(type(head)):  # noqa: SIM108
                 # This needs to be explicitly set because the regression label_list is being hijacked to store
                 # the scaling factor and the mean
                 num_labels = 1
             else:
-                num_labels = len(label_list)
+                num_labels = len(label_list)  # noqa: F841
             head.metric = tasks[head.task_name]["metric"]
 
     @classmethod
     def _get_prediction_head_files(cls, load_dir, strict=True):
         load_dir = Path(load_dir)
         files = os.listdir(load_dir)
-        model_files = [
-            load_dir / f
-            for f in files
-            if ".bin" in f and "prediction_head" in f
-        ]
-        config_files = [
-            load_dir / f
-            for f in files
-            if "config.json" in f and "prediction_head" in f
-        ]
+        model_files = [load_dir / f for f in files if ".bin" in f and "prediction_head" in f]
+        config_files = [load_dir / f for f in files if "config.json" in f and "prediction_head" in f]
         # sort them to get correct order in case of multiple prediction heads
         model_files.sort()
         config_files.sort()
@@ -195,6 +189,7 @@ class BaseAdaptiveModel:
 
         return model_files, config_files
 
+
 def loss_per_head_sum(loss_per_head, global_step=None, batch=None):
     """
     Input: loss_per_head (list of tensors), global_step (int), batch (dict)
@@ -202,8 +197,9 @@ def loss_per_head_sum(loss_per_head, global_step=None, batch=None):
     """
     return sum(loss_per_head)
 
+
 class AdaptiveModel(nn.Module, BaseAdaptiveModel):
-    """ PyTorch implementation containing all the modelling needed for your NLP task. Combines a language
+    """PyTorch implementation containing all the modelling needed for your NLP task. Combines a language
     model and a prediction head. Allows for gradient flow back to the language model component."""
 
     def __init__(
@@ -243,7 +239,7 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
         :type loss_aggregation_fn: function
         """
 
-        super(AdaptiveModel, self).__init__()
+        super(AdaptiveModel, self).__init__()  # noqa: UP008
         self.device = device
         self.language_model = language_model.to(device)
         self.lm_output_dims = language_model.get_output_dims()
@@ -254,9 +250,7 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
             if head.model_type == "language_modelling":
                 head.set_shared_weights(language_model.model.embeddings.word_embeddings.weight)
         self.dropout = nn.Dropout(embeds_dropout_prob)
-        self.lm_output_types = (
-            [lm_output_types] if isinstance(lm_output_types, str) else lm_output_types
-        )
+        self.lm_output_types = [lm_output_types] if isinstance(lm_output_types, str) else lm_output_types
         self.log_params()
         # default loss aggregation function is a simple sum (without using any of the optional params)
         if not loss_aggregation_fn:
@@ -273,14 +267,18 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
     def bypass_ph(self):
         """Replaces methods in the prediction heads with dummy functions. Used for benchmarking where we want to
         isolate the lm run time from ph run time."""
+
         def fake_forward(x):
             """Slices lm vector outputs of shape (batch_size, max_seq_len, dims) --> (batch_size, max_seq_len, 2)"""
             return x.narrow(2, 0, 2)
+
         def fake_logits_to_preds(logits, **kwargs):
             batch_size = logits.shape[0]
             return [None, None] * batch_size
+
         def fake_formatted_preds(**kwargs):
             return None
+
         for ph in self.prediction_heads:
             ph.forward = fake_forward
             ph.logits_to_preds = fake_logits_to_preds
@@ -327,7 +325,7 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
         """
 
         # Language Model
-        if lm_name:
+        if lm_name:  # noqa: SIM108
             language_model = LanguageModel.load(load_dir, farm_lm_name=lm_name)
         else:
             language_model = LanguageModel.load(load_dir)
@@ -356,12 +354,13 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
         :return: The per sample per prediciton head loss whose first two dimensions have length n_pred_heads, batch_size
         """
         all_losses = []
-        for head, logits_for_one_head in zip(self.prediction_heads, logits):
+        for head, logits_for_one_head in zip(self.prediction_heads, logits, strict=False):
             # check if PredictionHead connected to Processor
-            assert hasattr(head, "label_tensor_name"), \
-                (f"Label_tensor_names are missing inside the {head.task_name} Prediction Head. Did you connect the model"
+            assert hasattr(head, "label_tensor_name"), (
+                f"Label_tensor_names are missing inside the {head.task_name} Prediction Head. Did you connect the model"
                 " with the processor through either 'model.connect_heads_with_processor(processor.tasks)'"
-                " or by passing the processor to the Adaptive Model?")
+                " or by passing the processor to the Adaptive Model?"
+            )
             all_losses.append(head.logits_to_loss(logits=logits_for_one_head, **kwargs))
         return all_losses
 
@@ -416,20 +415,16 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
         # Run forward pass of (multiple) prediction heads using the output from above
         all_logits = []
         if len(self.prediction_heads) > 0:
-            for head, lm_out in zip(self.prediction_heads, self.lm_output_types):
+            for head, lm_out in zip(self.prediction_heads, self.lm_output_types, strict=False):
                 # Choose relevant vectors from LM as output and perform dropout
                 if lm_out == "per_token":
                     output = self.dropout(sequence_output)
                 elif lm_out == "per_sequence" or lm_out == "per_sequence_continuous":
                     output = self.dropout(pooled_output)
-                elif (
-                    lm_out == "per_token_squad"
-                ):  # we need a per_token_squad because of variable metric computation later on...
+                elif lm_out == "per_token_squad":  # we need a per_token_squad because of variable metric computation later on...
                     output = self.dropout(sequence_output)
                 else:
-                    raise ValueError(
-                        "Unknown extraction strategy from language model: {}".format(lm_out)
-                    )
+                    raise ValueError(f"Unknown extraction strategy from language model: {lm_out}")
 
                 # Do the actual forward pass of a single head
                 all_logits.append(head(output))
@@ -450,7 +445,7 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
         # Check if we have to extract from a special layer of the LM (default = last layer)
         try:
             extraction_layer = self.language_model.extraction_layer
-        except:
+        except:  # noqa: E722
             extraction_layer = -1
 
         # Run forward pass of language model
@@ -461,7 +456,7 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
             self.language_model.enable_hidden_states_output()
             sequence_output, pooled_output, all_hidden_states = self.language_model(**kwargs, return_dict=False)
             sequence_output = all_hidden_states[extraction_layer]
-            pooled_output = None #not available in earlier layers
+            pooled_output = None  # not available in earlier layers
             self.language_model.disable_hidden_states_output()
         return sequence_output, pooled_output
 
@@ -472,9 +467,7 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
         params = {
             "lm_type": self.language_model.__class__.__name__,
             "lm_name": self.language_model.name,
-            "prediction_heads": ",".join(
-                [head.__class__.__name__ for head in self.prediction_heads]
-            ),
+            "prediction_heads": ",".join([head.__class__.__name__ for head in self.prediction_heads]),
             "lm_output_types": ",".join(self.lm_output_types),
         }
         try:
@@ -483,14 +476,16 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
             logger.warning(f"ML logging didn't work: {e}")
 
     def verify_vocab_size(self, vocab_size):
-        """ Verifies that the model fits to the tokenizer vocabulary.
+        """Verifies that the model fits to the tokenizer vocabulary.
         They could diverge in case of custom vocabulary added via tokenizer.add_tokens()"""
 
         model_vocab_len = self.language_model.model.resize_token_embeddings(new_num_tokens=None).num_embeddings
 
-        msg = f"Vocab size of tokenizer {vocab_size} doesn't match with model {model_vocab_len}. " \
-              "If you added a custom vocabulary to the tokenizer, " \
-              "make sure to supply 'n_added_tokens' to LanguageModel.load() and BertStyleLM.load()"
+        msg = (
+            f"Vocab size of tokenizer {vocab_size} doesn't match with model {model_vocab_len}. "
+            "If you added a custom vocabulary to the tokenizer, "
+            "make sure to supply 'n_added_tokens' to LanguageModel.load() and BertStyleLM.load()"
+        )
         assert vocab_size == model_vocab_len, msg
 
         for head in self.prediction_heads:
@@ -536,12 +531,9 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
         :type processor: Processor
         :return: AdaptiveModel
         """
-        return conv.Converter.convert_from_transformers(model_name_or_path,
-                                                        revision=revision,
-                                                        device=device,
-                                                        task_type=task_type,
-                                                        processor=processor)
-
+        return conv.Converter.convert_from_transformers(
+            model_name_or_path, revision=revision, device=device, task_type=task_type, processor=processor
+        )
 
     @classmethod
     def convert_to_onnx(cls, model_name, output_path, task_type, convert_to_float16=False, quantize=False, opset_version=11):
@@ -568,28 +560,20 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
         if language_model_class not in ["Bert", "Roberta", "XLMRoberta"]:
             raise Exception("The current ONNX conversion only support 'BERT', 'RoBERTa', and 'XLMRoberta' models.")
 
-        task_type_to_pipeline_map = {
-            "question_answering": "question-answering",
-            "embeddings": "feature-extraction",
-            "ner": "ner"
-        }
+        task_type_to_pipeline_map = {"question_answering": "question-answering", "embeddings": "feature-extraction", "ner": "ner"}
 
         convert(
             pipeline_name=task_type_to_pipeline_map[task_type],
             framework="pt",
             model=model_name,
-            output=output_path/"model.onnx",
+            output=output_path / "model.onnx",
             opset=opset_version,
-            use_external_format=True if language_model_class is "XLMRoberta" else False
+            use_external_format=True if language_model_class == "XLMRoberta" else False,  # noqa: SIM210
         )
 
         # save processor & model config files that are needed when loading the model with the FARM Inferencer
         processor = Processor.convert_from_transformers(
-            tokenizer_name_or_path=model_name,
-            task_type=task_type,
-            max_seq_len=256,
-            doc_stride=128,
-            use_fast=True
+            tokenizer_name_or_path=model_name, task_type=task_type, max_seq_len=256, doc_stride=128, use_fast=True
         )
         processor.save(output_path)
         model = AdaptiveModel.convert_from_transformers(model_name, device="cpu", task_type=task_type)
@@ -600,25 +584,26 @@ class AdaptiveModel(nn.Module, BaseAdaptiveModel):
             "task_type": task_type,
             "onnx_opset_version": opset_version,
             "language_model_class": language_model_class,
-            "language": model.language_model.language
+            "language": model.language_model.language,
         }
         with open(output_path / "onnx_model_config.json", "w") as f:
             json.dump(onnx_model_config, f)
 
         if convert_to_float16:
             from onnxruntime_tools import optimizer
+
             config = AutoConfig.from_pretrained(model_name)
             optimized_model = optimizer.optimize_model(
-                input=str(output_path/"model.onnx"),
-                model_type='bert',
+                input=str(output_path / "model.onnx"),
+                model_type="bert",
                 num_heads=config.num_hidden_layers,
-                hidden_size=config.hidden_size
+                hidden_size=config.hidden_size,
             )
             optimized_model.convert_model_float32_to_float16()
             optimized_model.save_model_to_file("model.onnx")
 
         if quantize:
-            quantize_model(output_path/"model.onnx")
+            quantize_model(output_path / "model.onnx")
 
 
 class ONNXAdaptiveModel(BaseAdaptiveModel):
@@ -630,10 +615,13 @@ class ONNXAdaptiveModel(BaseAdaptiveModel):
 
     For inference, this class is compatible with the FARM Inferencer.
     """
+
     def __init__(self, onnx_session, language_model_class, language, prediction_heads, device):
-        if str(device) == "cuda" and onnxruntime.get_device() != "GPU":
-            raise Exception(f"Device {device} not available for Inference. For CPU, run pip install onnxruntime and"
-                            f"for GPU run pip install onnxruntime-gpu")
+        if str(device) == "cuda" and onnxruntime.get_device() != "GPU":  # noqa: F821
+            raise Exception(
+                f"Device {device} not available for Inference. For CPU, run pip install onnxruntime and"
+                f"for GPU run pip install onnxruntime-gpu"
+            )
         self.onnx_session = onnx_session
         self.language_model_class = language_model_class
         self.language = language
@@ -644,6 +632,7 @@ class ONNXAdaptiveModel(BaseAdaptiveModel):
     def load(cls, load_dir, device, **kwargs):
         load_dir = Path(load_dir)
         import onnxruntime
+
         sess_options = onnxruntime.SessionOptions()
         # Set graph optimization level to ORT_ENABLE_EXTENDED to enable bert optimization.
         sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
@@ -662,7 +651,7 @@ class ONNXAdaptiveModel(BaseAdaptiveModel):
             prediction_heads.append(head)
             ph_output_type.append(head.ph_output_type)
 
-        with open(load_dir/"onnx_model_config.json") as f:
+        with open(load_dir / "onnx_model_config.json") as f:
             model_config = json.load(f)
             language_model_class = model_config["language_model_class"]
             language = model_config["language"]
@@ -679,14 +668,14 @@ class ONNXAdaptiveModel(BaseAdaptiveModel):
         with torch.no_grad():
             if self.language_model_class == "Bert":
                 input_to_onnx = {
-                    'input_ids': numpy.ascontiguousarray(kwargs['input_ids'].cpu().numpy()),
-                    'attention_mask': numpy.ascontiguousarray(kwargs['padding_mask'].cpu().numpy()),
-                    'token_type_ids': numpy.ascontiguousarray(kwargs['segment_ids'].cpu().numpy()),
+                    "input_ids": numpy.ascontiguousarray(kwargs["input_ids"].cpu().numpy()),
+                    "attention_mask": numpy.ascontiguousarray(kwargs["padding_mask"].cpu().numpy()),
+                    "token_type_ids": numpy.ascontiguousarray(kwargs["segment_ids"].cpu().numpy()),
                 }
             elif self.language_model_class in ["Roberta", "XLMRoberta"]:
                 input_to_onnx = {
-                    'input_ids': numpy.ascontiguousarray(kwargs['input_ids'].cpu().numpy()),
-                    'attention_mask': numpy.ascontiguousarray(kwargs['padding_mask'].cpu().numpy())
+                    "input_ids": numpy.ascontiguousarray(kwargs["input_ids"].cpu().numpy()),
+                    "attention_mask": numpy.ascontiguousarray(kwargs["padding_mask"].cpu().numpy()),
                 }
             res = self.onnx_session.run(None, input_to_onnx)
             res = numpy.stack(res).transpose(1, 2, 0)
@@ -716,6 +705,7 @@ class ONNXWrapper(AdaptiveModel):
     However, the AdaptiveModel's forward takes keyword arguments. This class circumvents the issue by converting
     positional arguments to keyword arguments.
     """
+
     @classmethod
     def load_from_adaptive_model(cls, adaptive_model):
         model = copy.deepcopy(adaptive_model)

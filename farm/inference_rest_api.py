@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from flask import Flask, request, make_response
+from flask import Flask, make_response, request
 from flask_cors import CORS
 from flask_restplus import Api, Resource
 
@@ -43,8 +43,7 @@ class ModelListEndpoint(Resource):
         resp = []
 
         for idx, model in INFERENCERS.items():
-
-            #TODO UI still relies on the old prediction_type attribute, but we should switch this to inferencer.task_type
+            # TODO UI still relies on the old prediction_type attribute, but we should switch this to inferencer.task_type
             prediction_type = model.model.prediction_heads[0].model_type
 
             _res = {
@@ -77,7 +76,7 @@ def resp_json(data, code, headers=None):
 @api.route("/models/<int:model_id>/inference")
 class InferenceEndpoint(Resource):
     def post(self, model_id):
-        model = INFERENCERS.get(model_id, None)
+        model = INFERENCERS.get(model_id)
         if not model:
             return "Model not found", 404
 

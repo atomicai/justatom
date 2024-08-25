@@ -1,11 +1,12 @@
-import torch.nn as nn
-import torch
-import simplejson as json
-import torch.functional as F
-from pathlib import Path
-import inspect
 import copy
-from typing import List, Union, Optional, Dict, Any
+import inspect
+from pathlib import Path
+from typing import Any
+
+import simplejson as json
+import torch
+import torch.functional as F
+import torch.nn as nn
 
 
 def _get_clones(module, N):
@@ -13,7 +14,7 @@ def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
-def loss_per_head_sum(loss_per_head: List[torch.Tensor], global_step: Optional[int] = None, batch: Optional[Dict] = None):
+def loss_per_head_sum(loss_per_head: list[torch.Tensor], global_step: int | None = None, batch: dict | None = None):
     """
     Sums up the loss of each prediction head.
 
@@ -68,9 +69,9 @@ class FFBlock(nn.Module):
     Feed Forward Block module.
     """
 
-    def __init__(self, layer_dims: List[int]):
+    def __init__(self, layer_dims: list[int]):
         # Todo: Consider having just one input argument
-        super(FFBlock, self).__init__()
+        super(FFBlock, self).__init__()  # noqa: UP008
         self.layer_dims = layer_dims
         # If read from config the input will be string
         L = len(layer_dims) - 1
@@ -94,7 +95,7 @@ class IEmbedding(nn.Module):
     props = ("embedding_dim", "vocab_size")
 
     def __init__(self, embedding_dim, vocab_size):
-        super(IEmbedding, self).__init__()
+        super(IEmbedding, self).__init__()  # noqa: UP008
         self.config = dict(embedding_dim=embedding_dim, vocab_size=vocab_size)
         self.embedding_dim = embedding_dim
         self.vocab_size = vocab_size
@@ -115,10 +116,10 @@ class IEmbedding(nn.Module):
         farm_model = Path(_path) / "embedding_model.bin"
         _model = None
         if farm_config.exists():
-            with open(str(farm_config), "r") as fin:
+            with open(str(farm_config)) as fin:
                 config = json.load(fin)
             # vocab_size, embedding_dim = config["vocab_size"], config["embedding_dim"]
-            props = {k: config[k] for k in inspect.signature(cls.__init__).parameters.keys() if k in cls.props}
+            props = {k: config[k] for k in inspect.signature(cls.__init__).parameters.keys() if k in cls.props}  # noqa: SIM118
             _model = cls(**props)
             _model.load_state_dict(torch.load(str(farm_model)))
         else:
@@ -128,20 +129,20 @@ class IEmbedding(nn.Module):
 
         return _model
 
-    def save_config(self, save_dir: Union[Path, str]):
+    def save_config(self, save_dir: Path | str):
         save_filename = Path(save_dir) / "embedding_config.json"
         config = copy.deepcopy(self.config)
         config["klass"] = self.__class__.__name__
         with open(str(save_filename), "w") as f:
             f.write(json.dumps(config))
 
-    def save(self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None):
+    def save(self, save_dir: str | Path, state_dict: dict[Any, Any] | None = None):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
         :param save_dir: The directory in which the model should be saved.
         :param state_dict: A dictionary containing the whole state of the module, including names of layers. By default, the unchanged state dictionary of the module is used.
-        """
+        """  # noqa: E501
         save_dir = Path(save_dir) / "embedding"
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         save_name = Path(save_dir) / "embedding_model.bin"
@@ -183,7 +184,7 @@ class IEmbedding(nn.Module):
 
 class AttentionHead(nn.Module):
     def __init__(self, dim_inp, dim_out):
-        super(AttentionHead, self).__init__()
+        super(AttentionHead, self).__init__()  # noqa: UP008
 
         self.dim_inp = dim_inp
 
@@ -209,7 +210,7 @@ class AttentionHead(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, num_heads, dim_inp, dim_out):
-        super(MultiHeadAttention, self).__init__()
+        super(MultiHeadAttention, self).__init__()  # noqa: UP008
 
         self.heads = nn.ModuleList([AttentionHead(dim_inp, dim_out) for _ in range(num_heads)])
         self.linear = nn.Linear(dim_out * num_heads, dim_inp)
@@ -226,7 +227,7 @@ class IAttention(nn.Module):
     props = ("embedding_dim", "dim_out", "attention_heads", "dropout")
 
     def __init__(self, embedding_dim, dim_out, attention_heads=4, dropout=0.1, **kwargs):
-        super(IAttention, self).__init__()
+        super(IAttention, self).__init__()  # noqa: UP008
         self.config = dict(
             attention_heads=attention_heads,
             embedding_dim=embedding_dim,
@@ -234,9 +235,7 @@ class IAttention(nn.Module):
             dropout=dropout,
         )
 
-        self.attention = MultiHeadAttention(
-            attention_heads, embedding_dim, dim_out
-        )  # batch_size x max_seq_len x embedding_size
+        self.attention = MultiHeadAttention(attention_heads, embedding_dim, dim_out)  # batch_size x max_seq_len x embedding_size
         self.feed_forward = nn.Sequential(
             nn.Linear(embedding_dim, dim_out),
             nn.Dropout(dropout),
@@ -253,10 +252,10 @@ class IAttention(nn.Module):
         farm_config = Path(_path) / "attention_config.json"
         farm_model = Path(_path) / "attention_model.bin"
         if farm_config.exists():
-            with open(str(farm_config), "r") as fin:
+            with open(str(farm_config)) as fin:
                 config = json.load(fin)
             # drop the "klass" key and all of the rest keys not corresponding to constructor
-            props = {k: config[k] for k in inspect.signature(cls.__init__).parameters.keys() if k in cls.props}
+            props = {k: config[k] for k in inspect.signature(cls.__init__).parameters.keys() if k in cls.props}  # noqa: SIM118
             _model = cls(**props)
             _model.load_state_dict(torch.load(str(farm_model)))
         else:
@@ -265,20 +264,20 @@ class IAttention(nn.Module):
             _model = cls(embedding_dim=embedding_dim, dim_out=dim_out)
         return _model
 
-    def save_config(self, save_dir: Union[Path, str]):
+    def save_config(self, save_dir: Path | str):
         save_filename = Path(save_dir) / "attention_config.json"
         config = copy.deepcopy(self.config)
         config["klass"] = self.__class__.__name__
         with open(str(save_filename), "w") as f:
             f.write(json.dumps(config))
 
-    def save(self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None):
+    def save(self, save_dir: str | Path, state_dict: dict[Any, Any] | None = None):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
         :param save_dir: The directory in which the model should be saved.
         :param state_dict: A dictionary containing the whole state of the module, including names of layers. By default, the unchanged state dictionary of the module is used.
-        """
+        """  # noqa: E501
         save_dir = Path(save_dir) / "attention"
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         save_name = Path(save_dir) / "attention_model.bin"
@@ -297,10 +296,8 @@ class MLAttention(nn.Module):
     props = ("embedding_dim", "dim_out", "attention_heads", "dropout", "num_blocks")
 
     def __init__(self, embedding_dim, dim_out, attention_heads=4, dropout=0.1, num_blocks=1, **kwargs):
-        super(MLAttention, self).__init__()
-        self.blocks = _get_clones(
-            IAttention(embedding_dim, dim_out, attention_heads=attention_heads, dropout=dropout), num_blocks
-        )
+        super(MLAttention, self).__init__()  # noqa: UP008
+        self.blocks = _get_clones(IAttention(embedding_dim, dim_out, attention_heads=attention_heads, dropout=dropout), num_blocks)
         self.config = dict(
             attention_heads=attention_heads,
             embedding_dim=embedding_dim,
@@ -322,10 +319,10 @@ class MLAttention(nn.Module):
         farm_config = Path(_path) / "mlattention_config.json"
         farm_model = Path(_path) / "mlattention_model.bin"
         if farm_config.exists():
-            with open(str(farm_config), "r") as fin:
+            with open(str(farm_config)) as fin:
                 config = json.load(fin)
             # drop the "klass" key and all of the rest keys not corresponding to constructor
-            props = {k: config[k] for k in inspect.signature(cls.__init__).parameters.keys() if k in cls.props}
+            props = {k: config[k] for k in inspect.signature(cls.__init__).parameters.keys() if k in cls.props}  # noqa: SIM118
             _model = cls(**props)
             _model.load_state_dict(torch.load(str(farm_model)))
         else:
@@ -334,13 +331,13 @@ class MLAttention(nn.Module):
             _model = cls(embedding_dim=embedding_dim, dim_out=dim_out)
         return _model
 
-    def save(self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None):
+    def save(self, save_dir: str | Path, state_dict: dict[Any, Any] | None = None):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
         :param save_dir: The directory in which the model should be saved.
         :param state_dict: A dictionary containing the whole state of the module, including names of layers. By default, the unchanged state dictionary of the module is used.
-        """
+        """  # noqa: E501
         save_dir = Path(save_dir) / "attention"
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         save_name = Path(save_dir) / "mlattention_model.bin"
@@ -349,7 +346,7 @@ class MLAttention(nn.Module):
         torch.save(state_dict, save_name)
         self.save_config(save_dir)
 
-    def save_config(self, save_dir: Union[Path, str]):
+    def save_config(self, save_dir: Path | str):
         save_filename = Path(save_dir) / "mlattention_config.json"
         config = copy.deepcopy(self.config)
         config["klass"] = self.__class__.__name__

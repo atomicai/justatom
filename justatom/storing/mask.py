@@ -1,11 +1,11 @@
 import abc
-from typing import Dict, List, Optional, Generator
-from loguru import logger
+from collections.abc import Generator
+
 import numpy as np
+from loguru import logger
 
-from justatom.etc.schema import Document
 from justatom.etc.errors import DuplicateDocumentError
-
+from justatom.etc.schema import Document
 
 try:
     from numba import njit  # pylint: disable=import-error
@@ -37,7 +37,7 @@ def _normalize_embedding_2D(emb: np.ndarray) -> None:
             vec /= norm
 
 
-def scale_to_unit_interval(self, score: float, similarity: Optional[str]) -> float:
+def scale_to_unit_interval(self, score: float, similarity: str | None) -> float:
     if similarity == "cosine":
         return (score + 1) / 2
     else:
@@ -45,7 +45,6 @@ def scale_to_unit_interval(self, score: float, similarity: Optional[str]) -> flo
 
 
 class IEVENTDocStore(abc.ABC):
-
     @abc.abstractmethod
     def add_event(self, e):
         pass
@@ -68,7 +67,6 @@ class IEVENTDocStore(abc.ABC):
 
 
 class IDFDocStore(abc.ABC):
-
     @abc.abstractmethod
     def counts_per_col(self, col):
         pass
@@ -83,9 +81,8 @@ class IDFDocStore(abc.ABC):
 
 
 class INNDocStore(abc.ABC):
-
-    index: Optional[str]
-    similarity: Optional[str]
+    index: str | None
+    similarity: str | None
     duplicate_documents_options: tuple = ("skip", "overwrite", "fail")
     ids_iterator = None
 
@@ -94,7 +91,7 @@ class INNDocStore(abc.ABC):
         pass
 
     @abc.abstractclassmethod
-    def get_document_by_id(self, id: str, headers: Optional[Dict[str, str]] = None) -> Optional[Document]:
+    def get_document_by_id(self, id: str, headers: dict[str, str] | None = None) -> Document | None:
         pass
 
     @abc.abstractmethod
@@ -128,7 +125,7 @@ class INNDocStore(abc.ABC):
         self.ids_iterator = self.ids_iterator[1:]
         return ret
 
-    def _drop_duplicate_documents(self, documents: List[Document], index: Optional[str] = None) -> List[Document]:
+    def _drop_duplicate_documents(self, documents: list[Document], index: str | None = None) -> list[Document]:
         """
         Drop duplicates documents based on same hash ID
         :param documents: A list of Document objects.
@@ -136,7 +133,7 @@ class INNDocStore(abc.ABC):
         :return: A list of Document objects.
         """
         _hash_ids = set([])
-        _documents: List[Document] = []
+        _documents: list[Document] = []
 
         for document in documents:
             if document.id in _hash_ids:
@@ -153,10 +150,10 @@ class INNDocStore(abc.ABC):
 
     def _handle_duplicate_documents(
         self,
-        documents: List[Document],
-        index: Optional[str] = None,
-        duplicate_documents: Optional[str] = None,
-        headers: Optional[Dict[str, str]] = None,
+        documents: list[Document],
+        index: str | None = None,
+        duplicate_documents: str | None = None,
+        headers: dict[str, str] | None = None,
     ):
         """
         Checks whether any of the passed documents is already existing in the chosen index and returns a list of
@@ -171,13 +168,13 @@ class INNDocStore(abc.ABC):
                                     exists.
         :param headers: Custom HTTP headers to pass to document store client if supported (e.g. {'Authorization': 'Basic YWRtaW46cm9vdA=='} for basic authentication)
         :return: A list of Document objects.
-        """
+        """  # noqa: E501
 
         index = index or self.index
         if duplicate_documents in ("skip", "fail"):
             documents = self._drop_duplicate_documents(documents, index)
             documents_found = self.get_documents_by_id(ids=[doc.id for doc in documents], index=index, headers=headers)
-            ids_exist_in_db: List[str] = [doc.id for doc in documents_found]
+            ids_exist_in_db: list[str] = [doc.id for doc in documents_found]
 
             if len(ids_exist_in_db) > 0 and duplicate_documents == "fail":
                 raise DuplicateDocumentError(
@@ -202,7 +199,6 @@ class INNDocStore(abc.ABC):
 
 
 class IDataset:
-
     @abc.abstractmethod
     def iterator(self, **kwargs) -> Generator:
         pass

@@ -1,10 +1,11 @@
 import abc
+
 from loguru import logger
-from typing import Optional
+
 from justatom.etc.visual import WELCOME_MSG
 
 
-class ILogger(abc.ABC):
+class ILogger(abc.ABC):  # noqa: B024
     """
     Base class for tracking experiments.
 
@@ -13,7 +14,7 @@ class ILogger(abc.ABC):
 
     disable_logging = False
 
-    def __init__(self, log_batch_metrics: bool, log_epoch_metrics: bool, tracking_uri: Optional[bool] = False, **kwargs):
+    def __init__(self, log_batch_metrics: bool, log_epoch_metrics: bool, tracking_uri: bool | None = False, **kwargs):
         self.tracking_uri = tracking_uri
         self.log_batch_metrics = log_batch_metrics
         self.log_epoch_metrics = log_epoch_metrics

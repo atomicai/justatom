@@ -1,22 +1,18 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-
-import io
 import json
 import logging
 import os
 import unicodedata
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.cluster import KMeans
+from sklearn.decomposition import TruncatedSVD
 from tqdm import tqdm
 from transformers import BertTokenizer
-from sklearn.decomposition import TruncatedSVD
-from sklearn.cluster import KMeans
-from collections import Counter
 
 from farm.file_utils import load_from_cache
-
 
 # create dictionaries with links to wordembeddings stored on deepset s3
 # the dicts need to be used with HF transformers to use their data + modelling functionality
@@ -38,9 +34,11 @@ MAX_MODEL_INPU_SIZES = {
     "glove-english-uncased-6B": 10000,
     "glove-english-cased-840B": 10000,
 }
-PRETRAINED_INIT_CONFIGURATION = {"glove-german-uncased": {"do_lower_case": True},
-                                 "glove-english-uncased-6B": {"do_lower_case": True},
-                                 "glove-english-cased-840B": {"do_lower_case": False}}
+PRETRAINED_INIT_CONFIGURATION = {
+    "glove-german-uncased": {"do_lower_case": True},
+    "glove-english-uncased-6B": {"do_lower_case": True},
+    "glove-english-cased-840B": {"do_lower_case": False},
+}
 # model
 EMBEDDING_MODEL_MAP = {
     "glove-german-uncased": "https://s3.eu-central-1.amazonaws.com/deepset.ai-farm-models/0.4.1/glove-german-uncased/vectors.txt",
@@ -54,26 +52,26 @@ SPECIAL_TOKENS = ["[CLS]", "[SEP]", "[UNK]", "[PAD]", "[MASK]"]
 logger = logging.getLogger(__name__)
 
 
-class Fasttext_converter():
+class Fasttext_converter:
     """
     Class to use fasttext inside FARM by converting embeddings to format usable by preprocessing pipeline.
     Farm needs fixed vocab and embeddings. We can construct a vocab for the data we wish to embed.
     """
 
-    def __init__(self,
-                 pretrained_model_name_or_path,
-                 do_lower_case,
-                 data_path,
-                 train_filename,
-                 output_path,
-                 language=None,
-                 sep="\t",
-                 text_column_name="text",
-                 max_inputdata_rows=None,
-                 min_vocab_count=None,
-                 max_features=None,
-                 ):
-
+    def __init__(
+        self,
+        pretrained_model_name_or_path,
+        do_lower_case,
+        data_path,
+        train_filename,
+        output_path,
+        language=None,
+        sep="\t",
+        text_column_name="text",
+        max_inputdata_rows=None,
+        min_vocab_count=None,
+        max_features=None,
+    ):
         """
         :param pretrained_model_name_or_path: path to local model or pointer to s3
         :param do_lower_case: casing information, should match the vocab
@@ -88,7 +86,7 @@ class Fasttext_converter():
         :param max_features: maximum number of words to use in vocab
         """
         try:
-            import fasttext  # fasttext import is optional in requirements. So we just load it when needed.
+            import fasttext  # fasttext import is optional in requirements. So we just load it when needed.  # noqa: F401
         except ModuleNotFoundError:
             logger.error("Could not find fasttext. Please install through 'pip install fasttext==0.9.1'.")
 
@@ -119,7 +117,7 @@ class Fasttext_converter():
 
         temp_vocab, vocab_counts = self._create_vocab(all_words=all_words)
 
-        vocab,embeddings = self._create_embeddings(temp_vocab=temp_vocab, model=model)
+        vocab, embeddings = self._create_embeddings(temp_vocab=temp_vocab, model=model)
 
         self._save(vocab=vocab, embeddings=embeddings)
 
@@ -130,7 +128,7 @@ class Fasttext_converter():
         farm_lm_config = Path(self.pretrained_model_name_or_path) / "language_model_config.json"
         if os.path.exists(farm_lm_config):
             # from local dir
-            config = json.load(open(farm_lm_config, "r"))
+            config = json.load(open(farm_lm_config))  # noqa: SIM115
             resolved_model_file = str(Path(self.pretrained_model_name_or_path) / config["embeddings_filename"])
         else:
             # from s3 or cache
@@ -147,8 +145,7 @@ class Fasttext_converter():
         df = pd.read_csv(str(self.data_path / self.train_filename), sep=self.sep, nrows=self.max_inputdata_rows)
 
         if self.text_column_name not in df.columns:
-            logger.error(
-                f"Cannot find Text column name in the supplied data. Available columsn are {', '.join(df.columns)}.")
+            logger.error(f"Cannot find Text column name in the supplied data. Available columsn are {', '.join(df.columns)}.")
         if self.max_inputdata_rows:
             df = df.sample(n=self.max_inputdata_rows)
         texts = df.loc[:, self.text_column_name].values
@@ -177,7 +174,7 @@ class Fasttext_converter():
                 w = w[idx[:max_features_adjusted]]
                 c = c[idx[:max_features_adjusted]]
         temp_vocab = list(w)
-        vocab_counts = dict(zip(temp_vocab, c))
+        vocab_counts = dict(zip(temp_vocab, c, strict=False))
         return temp_vocab, vocab_counts
 
     def _create_embeddings(self, temp_vocab, model):
@@ -185,7 +182,7 @@ class Fasttext_converter():
         embeddings = np.zeros((len(temp_vocab) + len(SPECIAL_TOKENS), model.get_dimension()))
         for i, w in enumerate(temp_vocab):
             embeddings[i + len(SPECIAL_TOKENS), :] = model.get_word_vector(w)
-        mean_embedding = np.mean(embeddings[len(SPECIAL_TOKENS):, :], axis=0)
+        mean_embedding = np.mean(embeddings[len(SPECIAL_TOKENS) :, :], axis=0)
         for i in range(len(SPECIAL_TOKENS)):
             embeddings[i, :] = mean_embedding
         vocab = SPECIAL_TOKENS + temp_vocab
@@ -199,30 +196,33 @@ class Fasttext_converter():
             "language": self.language,
             "name": "WordEmbedding_LM",
             "vocab_filename": "vocab.txt",
-            "vocab_size": embeddings.shape[0]
+            "vocab_size": embeddings.shape[0],
         }
         # saving
         if not os.path.exists(self.output_path):
             os.makedirs(self.output_path)
         with open(self.output_path / "language_model_config.json", "w") as file:
             file.write(json.dumps(lm_config, indent=2))
-        _save_word2vec_format(fname=str(self.output_path / lm_config["embeddings_filename"]),
-                              fvocab=str(self.output_path / lm_config["vocab_filename"]),
-                              vocab=vocab,
-                              vectors=embeddings)
+        _save_word2vec_format(
+            fname=str(self.output_path / lm_config["embeddings_filename"]),
+            fvocab=str(self.output_path / lm_config["vocab_filename"]),
+            vocab=vocab,
+            vectors=embeddings,
+        )
 
 
 def load_embedding_tokenizer(pretrained_model_name_or_path, **kwargs):
     # if the pretrained model points to a file on deepset s3, we need to adjust transformers dictionaries
     if pretrained_model_name_or_path in PRETRAINED_INIT_CONFIGURATION:
-        BertTokenizer.pretrained_vocab_files_map["vocab_file"]. \
-            update({pretrained_model_name_or_path: EMBEDDING_VOCAB_FILES_MAP["vocab_file"].get(
-            pretrained_model_name_or_path, None)})
-        BertTokenizer.max_model_input_sizes. \
-            update({pretrained_model_name_or_path: MAX_MODEL_INPU_SIZES.get(pretrained_model_name_or_path, None)})
-        BertTokenizer.pretrained_init_configuration. \
-            update(
-            {pretrained_model_name_or_path: PRETRAINED_INIT_CONFIGURATION.get(pretrained_model_name_or_path, None)})
+        BertTokenizer.pretrained_vocab_files_map["vocab_file"].update(
+            {pretrained_model_name_or_path: EMBEDDING_VOCAB_FILES_MAP["vocab_file"].get(pretrained_model_name_or_path, None)}
+        )
+        BertTokenizer.max_model_input_sizes.update(
+            {pretrained_model_name_or_path: MAX_MODEL_INPU_SIZES.get(pretrained_model_name_or_path)}
+        )
+        BertTokenizer.pretrained_init_configuration.update(
+            {pretrained_model_name_or_path: PRETRAINED_INIT_CONFIGURATION.get(pretrained_model_name_or_path)}
+        )
     ret = BertTokenizer.from_pretrained(pretrained_model_name_or_path, **kwargs)
     return ret
 
@@ -230,12 +230,11 @@ def load_embedding_tokenizer(pretrained_model_name_or_path, **kwargs):
 def load_model(pretrained_model_name_or_path, **kwargs):
     # loading config
     resolved_config_file = load_from_cache(pretrained_model_name_or_path, PRETRAINED_CONFIG_ARCHIVE_MAP, **kwargs)
-    temp = open(resolved_config_file, "r", encoding="utf-8").read()
+    temp = open(resolved_config_file, encoding="utf-8").read()  # noqa: SIM115
     config_dict = json.loads(temp)
 
     # loading vocab
-    resolved_vocab_file = load_from_cache(pretrained_model_name_or_path, EMBEDDING_VOCAB_FILES_MAP["vocab_file"],
-                                          **kwargs)
+    resolved_vocab_file = load_from_cache(pretrained_model_name_or_path, EMBEDDING_VOCAB_FILES_MAP["vocab_file"], **kwargs)
 
     # loading model
     resolved_model_file = load_from_cache(pretrained_model_name_or_path, EMBEDDING_MODEL_MAP, **kwargs)
@@ -244,7 +243,7 @@ def load_model(pretrained_model_name_or_path, **kwargs):
 
 
 def load_embedding_vectors(embedding_file, vocab):
-    f = io.open(embedding_file, 'rt', encoding='utf-8').readlines()
+    f = open(embedding_file, encoding="utf-8").readlines()  # noqa: SIM115
 
     words_transformed = set()
     repetitions = 0
@@ -254,10 +253,10 @@ def load_embedding_vectors(embedding_file, vocab):
     for line in tqdm(f, desc="Loading embeddings"):
         line = line.strip()
         if line:
-            word, vec = line.split(' ', 1)
-            if (word not in words_transformed):  # omit repetitions = speed up + debug
+            word, vec = line.split(" ", 1)
+            if word not in words_transformed:  # omit repetitions = speed up + debug
                 try:
-                    np_vec = np.fromstring(vec, sep=' ')
+                    np_vec = np.fromstring(vec, sep=" ")
                     if embeddings_dimensionality is None:
                         if len(np_vec) < 4:  # word2vec includes number of vectors and its dimension as header
                             logger.info("Skipping header")
@@ -267,9 +266,9 @@ def load_embedding_vectors(embedding_file, vocab):
                     if len(np_vec) == embeddings_dimensionality:
                         vectors[word] = np_vec
                         words_transformed.add(word)
-                except:
+                except:  # noqa: E722
                     if logger is not None:
-                        logger.debug("Embeddings reader: Could not convert line: {}".format(line))
+                        logger.debug(f"Embeddings reader: Could not convert line: {line}")
             else:
                 repetitions += 1
 
@@ -285,9 +284,9 @@ def load_embedding_vectors(embedding_file, vocab):
 def load_word2vec_vocab(vocab_filename):
     """Loads a vocabulary file into a list."""
     vocab = []
-    with open(vocab_filename, "r", encoding="utf-8") as reader:
+    with open(vocab_filename, encoding="utf-8") as reader:
         lines = reader.readlines()
-    for l in lines:
+    for l in lines:  # noqa: E741
         w, c = l.split(" ")
         vocab.append(w.strip())
     return vocab
@@ -317,9 +316,9 @@ def convert_WordEmbeddings(embedding_filename, vocab_filename, output_path, lang
     temp_embeddings = load_embedding_vectors(embedding_file=embedding_filename, vocab=temp_vocab)
     mean_embedding = np.mean(temp_embeddings, axis=0)
     embeddings = np.zeros((temp_embeddings.shape[0] + len(SPECIAL_TOKENS), temp_embeddings.shape[1]))
-    for i, tok in enumerate(SPECIAL_TOKENS):
+    for i, tok in enumerate(SPECIAL_TOKENS):  # noqa: B007
         embeddings[i, :] = mean_embedding
-    embeddings[len(SPECIAL_TOKENS):, :] = temp_embeddings
+    embeddings[len(SPECIAL_TOKENS) :, :] = temp_embeddings
 
     # create config
     lm_config = {
@@ -328,7 +327,7 @@ def convert_WordEmbeddings(embedding_filename, vocab_filename, output_path, lang
         "language": language,
         "name": "WordEmbedding_LM",
         "vocab_filename": "vocab.txt",
-        "vocab_size": embeddings.shape[0]
+        "vocab_size": embeddings.shape[0],
     }
 
     # saving
@@ -337,10 +336,12 @@ def convert_WordEmbeddings(embedding_filename, vocab_filename, output_path, lang
     with open(Path(output_path) / "language_model_config.json", "w") as file:
         file.write(json.dumps(lm_config, indent=2))
 
-    _save_word2vec_format(fname=str(Path(output_path) / lm_config["embeddings_filename"]),
-                          fvocab=str(Path(output_path) / lm_config["vocab_filename"]),
-                          vocab=vocab,
-                          vectors=embeddings)
+    _save_word2vec_format(
+        fname=str(Path(output_path) / lm_config["embeddings_filename"]),
+        fvocab=str(Path(output_path) / lm_config["vocab_filename"]),
+        vocab=vocab,
+        vectors=embeddings,
+    )
 
 
 def _save_word2vec_format(fname, vocab, vectors, fvocab):
@@ -365,12 +366,12 @@ def _save_word2vec_format(fname, vocab, vectors, fvocab):
     vector_size = vectors.shape[1]
     if fvocab is not None:
         logger.info(f"storing vocabulary in {fvocab}")
-        with io.open(fvocab, 'w') as vout:
+        with open(fvocab, "w") as vout:
             for word in vocab:
                 vout.write(word + "\n")
     logger.info(f"storing {len(vocab)} projection weights with dimension {vector_size} into {fname}")
     assert (len(vocab), vector_size) == vectors.shape
-    with io.open(fname, 'w') as fout:
+    with open(fname, "w") as fout:
         # store in sorted order: most frequent words at the top
         for i, word in enumerate(vocab):
             row = vectors[i, :]
@@ -412,9 +413,10 @@ def _is_punctuation(char):
     if (cp >= 33 and cp <= 47) or (cp >= 58 and cp <= 64) or (cp >= 91 and cp <= 96) or (cp >= 123 and cp <= 126):
         return True
     cat = unicodedata.category(char)
-    if cat.startswith("P"):
+    if cat.startswith("P"):  # noqa: SIM103
         return True
     return False
+
 
 def s3e_pooling(token_embs, token_ids, token_weights, centroids, token_to_cluster, mask, svd_components=None):
     """
@@ -439,7 +441,7 @@ def s3e_pooling(token_embs, token_ids, token_weights, centroids, token_to_cluste
                            then be removed from all subsequent embeddings in this function.
                            We expect the sklearn.decomposition.TruncatedSVD.fit(<your_embeddings>)._components to be passed here.
     :return: embeddings matrix of shape (batch_size, emb_dim + (n_clusters*n_clusters+1)/2)
-    """
+    """  # noqa: E501
 
     embeddings = []
     n_clusters = centroids.shape[0]
@@ -459,7 +461,7 @@ def s3e_pooling(token_embs, token_ids, token_weights, centroids, token_to_cluste
 
         # 2) create a second dict with key=cluster_id, val=[embeddings] (= C)
         stage_vec.append({})
-        for k, v in stage_vec[-2].items():
+        for k, v in stage_vec[-2].items():  # noqa: B007
             cluster = token_to_cluster[k]
 
             if cluster in stage_vec[-1]:
@@ -479,7 +481,7 @@ def s3e_pooling(token_embs, token_ids, token_weights, centroids, token_to_cluste
 
         # Compute Sentence Embedding (weighted avg, dim = original embedding dim)
         sentvec = []
-        vec = np.zeros((emb_dim))
+        vec = np.zeros(emb_dim)
         for key, value in stage_vec[0].items():
             # print(token_weights[key])
             vec = vec + value * token_weights[key]
@@ -516,12 +518,21 @@ def s3e_pooling(token_embs, token_ids, token_weights, centroids, token_to_cluste
     return embeddings
 
 
-def fit_s3e_on_corpus(processor, model, corpus, n_clusters=10,
-                      mean_removal=True, pca_removal=True,
-                      pca_n_components=300, pca_n_top_components=10,
-                      default_token_weight=1, min_token_occurrences=0,
-                      svd_postprocessing=False,
-                      use_gpu=False, batch_size=50):
+def fit_s3e_on_corpus(
+    processor,
+    model,
+    corpus,
+    n_clusters=10,
+    mean_removal=True,
+    pca_removal=True,
+    pca_n_components=300,
+    pca_n_top_components=10,
+    default_token_weight=1,
+    min_token_occurrences=0,
+    svd_postprocessing=False,
+    use_gpu=False,
+    batch_size=50,
+):
     """
     Pooling of word/token embeddings as described by Wang et al in the paper
     "Efficient Sentence Embedding via Semantic Subspace Analysis"
@@ -537,12 +548,12 @@ def fit_s3e_on_corpus(processor, model, corpus, n_clusters=10,
 
     :param processor: FARM Processor with a Tokenizer used for reading the corpus (e.g. Inference Processor)
     :param model: FARM AdaptiveModel with an embedding layer in the LM (currently only supporting 'WordEmbedding_LM' as a language model)
-    :param corpus: Path to a text file or a str 
+    :param corpus: Path to a text file or a str
     :param n_clusters: Number of clusters for S3E. The more clusters, the higher the dimensionality of the resulting embeddings.
-    :param mean_removal: Bool, whether to remove the mean from the token embeddings (preprocessing) 
+    :param mean_removal: Bool, whether to remove the mean from the token embeddings (preprocessing)
     :param pca_removal: Bool, whether to remove pca components from the token embeddings (preprocessing)
-    :param pca_n_components: int, how many PCA components to fit if `pca_removal` is enabled 
-    :param pca_n_top_components: int, how many top PCA components to remove if `pca_removal` is enabled 
+    :param pca_n_components: int, how many PCA components to fit if `pca_removal` is enabled
+    :param pca_n_top_components: int, how many top PCA components to remove if `pca_removal` is enabled
     :param default_token_weight: float, what weight to assign for tokens that are in vocab but not in corpus
     :param min_token_occurrences: int, mininum number of token occurrences in the corpus for keeping it in the vocab.
                                   Helps to shrink the model & speed it up.
@@ -552,7 +563,7 @@ def fit_s3e_on_corpus(processor, model, corpus, n_clusters=10,
     :param use_gpu: bool, whether to use a GPU
     :param batch_size: int, size of batch for the inferencer (only needed when `svd_postprocessing` is enabled)
     :return: model, processor, s3e_stats
-    """
+    """  # noqa: E501
 
     from farm.infer import Inferencer
     from farm.modeling.tokenization import tokenize_with_metadata
@@ -560,10 +571,10 @@ def fit_s3e_on_corpus(processor, model, corpus, n_clusters=10,
     # Get tokens of corpus
     if isinstance(corpus, Path):
         logger.info("Reading corpus for fitting S3E ")
-        with open(corpus, "r") as f:
+        with open(corpus) as f:
             corpus = f.read()
     else:
-        assert type(corpus) == str, "`corpus` must be of type str or Path()"
+        assert type(corpus) == str, "`corpus` must be of type str or Path()"  # noqa: E721
 
     tokenized_corpus = tokenize_with_metadata(corpus, processor.tokenizer)["tokens"]
     token_counts = dict(Counter(tokenized_corpus))
@@ -573,9 +584,12 @@ def fit_s3e_on_corpus(processor, model, corpus, n_clusters=10,
     model.language_model.trim_vocab(token_counts, processor, min_threshold=min_token_occurrences)
 
     # Normalize embeddings
-    model.language_model.normalize_embeddings(zero_mean=mean_removal, pca_removal=pca_removal,
-                                              pca_n_components=pca_n_components,
-                                              pca_n_top_components=pca_n_top_components)
+    model.language_model.normalize_embeddings(
+        zero_mean=mean_removal,
+        pca_removal=pca_removal,
+        pca_n_components=pca_n_components,
+        pca_n_top_components=pca_n_top_components,
+    )
     normalized_word_embs = model.language_model.model.embeddings.cpu().numpy()
 
     # Get token weights
@@ -590,25 +604,34 @@ def fit_s3e_on_corpus(processor, model, corpus, n_clusters=10,
 
     # Construct Cluster
     weight_list = np.array(list(token_weights.values()))
-    logger.info('Creating clusters for S3E embeddings')
+    logger.info("Creating clusters for S3E embeddings")
     kmeans = KMeans(n_clusters=n_clusters, random_state=42).fit(normalized_word_embs, sample_weight=weight_list)
 
-    s3e_stats = {"token_to_cluster": kmeans.labels_,
-                 "centroids": kmeans.cluster_centers_,
-                 "token_weights": token_weights,
-                 "svd_components": None}
+    s3e_stats = {
+        "token_to_cluster": kmeans.labels_,
+        "centroids": kmeans.cluster_centers_,
+        "token_weights": token_weights,
+        "svd_components": None,
+    }
 
     if svd_postprocessing:
-        logger.info('Post processing sentence embeddings using principal component removal')
+        logger.info("Post processing sentence embeddings using principal component removal")
 
         # Input
         sentences = [{"text": s} for s in corpus.split("\n") if len(s.strip()) > 0]
 
         # Get embeddings
         try:
-            inferencer = Inferencer(model=model, processor=processor, task_type="embeddings", gpu=use_gpu,
-                                    batch_size=batch_size, extraction_strategy="s3e", extraction_layer=-1,
-                                    s3e_stats=s3e_stats)
+            inferencer = Inferencer(
+                model=model,
+                processor=processor,
+                task_type="embeddings",
+                gpu=use_gpu,
+                batch_size=batch_size,
+                extraction_strategy="s3e",
+                extraction_layer=-1,
+                s3e_stats=s3e_stats,
+            )
             result = inferencer.inference_from_dicts(dicts=sentences)
         finally:
             inferencer.close_multiprocessing_pool()
@@ -624,7 +647,9 @@ def fit_s3e_on_corpus(processor, model, corpus, n_clusters=10,
 
 
 if __name__ == "__main__":
-    convert_WordEmbeddings(embedding_filename="../../saved_models/glove-normal/vectors.txt",
-                           vocab_filename="../../saved_models/glove-normal/vocab.txt",
-                           output_path="../../saved_models/glove-converted",
-                           language="German")
+    convert_WordEmbeddings(
+        embedding_filename="../../saved_models/glove-normal/vectors.txt",
+        vocab_filename="../../saved_models/glove-normal/vocab.txt",
+        output_path="../../saved_models/glove-converted",
+        language="German",
+    )

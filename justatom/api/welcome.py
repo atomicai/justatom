@@ -1,13 +1,12 @@
-import pyfiglet as pfg
-from typer import Typer
-from functools import partial, wraps
-import anyio
-from loguru import logger
-import asyncer
 import inspect
 import random
-from typing import Union, List
+from functools import partial, wraps
 
+import anyio
+import asyncer
+import pyfiglet as pfg
+from loguru import logger
+from typer import Typer
 
 # Typer doesn't support the `in-place` asyncio support. Hence we wrap around it to make it coro-friendly.
 # See https://github.com/tiangolo/typer/issues/88#issuecomment-1732469681
@@ -40,7 +39,7 @@ cli = AsyncTyper()
 
 
 @cli.command()
-async def main(fonts: List[str] = None, text: str = "Welcome"):
+async def main(fonts: list[str] = None, text: str = "Welcome"):
     fonts = random.sample(pfg.FigletFont.getFonts(), k=10)
     # sub-zero is the most visually attractive!
     logger.info("\n".join(fonts))

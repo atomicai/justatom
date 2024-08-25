@@ -1,7 +1,6 @@
-from typing import Optional, Type
 from types import TracebackType
-from lazy_imports.try_import import _DeferredImportExceptionContextManager
 
+from lazy_imports.try_import import _DeferredImportExceptionContextManager
 
 DEFAULT_IMPORT_ERROR_MSG = "Try 'pip install {}'"
 
@@ -17,8 +16,8 @@ class LazyImport(_DeferredImportExceptionContextManager):
         self.import_error_msg = message
 
     def __exit__(
-        self, exc_type: Optional[Type[Exception]], exc_value: Optional[Exception], traceback: Optional[TracebackType]
-    ) -> Optional[bool]:
+        self, exc_type: type[Exception] | None, exc_value: Exception | None, traceback: TracebackType | None
+    ) -> bool | None:
         """Exit the context manager.
 
         Args:

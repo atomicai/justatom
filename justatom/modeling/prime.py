@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import numpy as np
 import simplejson as json
@@ -19,22 +19,15 @@ from justatom.processing.silo import igniset
 
 
 class E5GeneralWrapper(ILanguageModel):
-
     def __init__(self):
         super().__init__()
 
-    def average_pool(
-        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(
-            ~attention_mask[..., None].bool(), 0.0
-        )
+    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
 
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
-    def maybe_norm_or_average(
-        self, xs, attention_mask: torch.Tensor, norm: bool, average: bool
-    ):
+    def maybe_norm_or_average(self, xs, attention_mask: torch.Tensor, norm: bool, average: bool):
         if average:
             result = self.average_pool(xs, attention_mask=attention_mask)
             if norm:
@@ -51,15 +44,13 @@ class E5Model(E5GeneralWrapper):
 
     def __init__(
         self,
-        model_name_or_instance: Union[str, nn.Module] = "intfloat/multilingual-e5-base",
+        model_name_or_instance: str | nn.Module = "intfloat/multilingual-e5-base",
         device="cpu",
         **kwargs,
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance)
-            if isinstance(model_name_or_instance, str)
-            else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "intfloat/multilingual-e5-base"
         self.model.to(device)
@@ -87,9 +78,7 @@ class E5Model(E5GeneralWrapper):
             average=average,
         )
         if pos_input_ids is not None and pos_attention_mask is not None:
-            pos_outputs = self.model(
-                input_ids=pos_input_ids, attention_mask=pos_attention_mask
-            )
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask)
             pos_response = self.maybe_norm_or_average(
                 pos_outputs.last_hidden_state,
                 attention_mask=pos_attention_mask,
@@ -106,17 +95,13 @@ class E5SModel(E5GeneralWrapper):
 
     def __init__(
         self,
-        model_name_or_instance: Union[
-            str, nn.Module
-        ] = "intfloat/multilingual-e5-small",
+        model_name_or_instance: str | nn.Module = "intfloat/multilingual-e5-small",
         device="cpu",
         **kwargs,
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance)
-            if isinstance(model_name_or_instance, str)
-            else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "intfloat/multilingual-e5-small"
         self.model.to(device)
@@ -137,9 +122,7 @@ class E5SModel(E5GeneralWrapper):
         average: bool = True,
     ):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        response = self.maybe_norm_or_average(
-            outputs.last_hidden_state, attention_mask=attention_mask
-        )
+        response = self.maybe_norm_or_average(outputs.last_hidden_state, attention_mask=attention_mask)
         if pos_input_ids is not None and pos_attention_mask is not None:
             pos_outputs = self.model(
                 input_ids=pos_input_ids,
@@ -147,9 +130,7 @@ class E5SModel(E5GeneralWrapper):
                 norm=norm,
                 average=average,
             )
-            pos_response = self.maybe_norm_or_average(
-                pos_outputs.last_hidden_state, attention_mask=pos_attention_mask
-            )
+            pos_response = self.maybe_norm_or_average(pos_outputs.last_hidden_state, attention_mask=pos_attention_mask)
             return response, pos_response
 
         return (response,)
@@ -160,17 +141,13 @@ class E5LModel(E5GeneralWrapper):
 
     def __init__(
         self,
-        model_name_or_instance: Union[
-            str, nn.Module
-        ] = "intfloat/multilingual-e5-large",
+        model_name_or_instance: str | nn.Module = "intfloat/multilingual-e5-large",
         device="cpu",
         **kwargs,
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance)
-            if isinstance(model_name_or_instance, str)
-            else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "intfloat/multilingual-e5-large"
         self.model.to(device)
@@ -198,9 +175,7 @@ class E5LModel(E5GeneralWrapper):
             average=average,
         )
         if pos_input_ids is not None and pos_attention_mask is not None:
-            pos_outputs = self.model(
-                input_ids=pos_input_ids, attention_mask=pos_attention_mask
-            )
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask)
             pos_response = self.maybe_norm_or_average(
                 pos_outputs.last_hidden_state,
                 attention_mask=pos_attention_mask,
@@ -213,20 +188,15 @@ class E5LModel(E5GeneralWrapper):
 
 
 class MBERTModel(ILanguageModel):
-
     def __init__(
         self,
-        model_name_or_instance: Union[
-            str, nn.Module
-        ] = "google-bert/bert-base-multilingual-cased",
+        model_name_or_instance: str | nn.Module = "google-bert/bert-base-multilingual-cased",
         device: str = "cpu",
         **kwargs,
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance)
-            if isinstance(model_name_or_instance, str)
-            else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "google-bert/bert-base-multilingual-cased"
         self.model.to(device)
@@ -251,15 +221,11 @@ class MBERTModel(ILanguageModel):
         norm: bool = True,
         average: bool = True,
     ):
-        outputs = self.model(
-            input_ids=input_ids, attention_mask=attention_mask
-        ).pooler_output
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask).pooler_output
 
         outputs = self.maybe_norm(outputs, norm=norm)
         if pos_input_ids is not None and pos_attention_mask is not None:
-            pos_outputs = self.model(
-                input_ids=pos_input_ids, attention_mask=pos_attention_mask
-            ).pooler_output
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask).pooler_output
 
             pos_outputs = self.maybe_norm(pos_outputs, norm=norm)
 
@@ -291,10 +257,8 @@ class IPFBERTModel(IModel):
     Positional Free Bidirectional Encoder Representation from Transformers
     """
 
-    def __init__(
-        self, embedding: nn.Module = None, attention: nn.Module = None, **props
-    ):
-        super(IPFBERTModel, self).__init__()
+    def __init__(self, embedding: nn.Module = None, attention: nn.Module = None, **props):
+        super(IPFBERTModel, self).__init__()  # noqa: UP008
         if embedding is not None and attention is not None:
             self.embedding = embedding
             self.blocks = attention
@@ -310,7 +274,7 @@ class IPFBERTModel(IModel):
                 self.blocks = IAttention(**attention_props)
 
     def generate_config(self):
-        if isinstance(self.blocks, IAttention):
+        if isinstance(self.blocks, IAttention):  # noqa: SIM108
             num_blocks = -1
         else:
             num_blocks = self.blocks.config["num_blocks"]
@@ -332,15 +296,13 @@ class IPFBERTModel(IModel):
 
         return cls(embedding=emb, attention=att)
 
-    def save(
-        self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None
-    ):
+    def save(self, save_dir: str | Path, state_dict: dict[Any, Any] | None = None):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
         :param save_dir: The directory in which the model should be saved.
         :param state_dict: A dictionary containing the whole state of the module, including names of layers. By default, the unchanged state dictionary of the module is used.
-        """
+        """  # noqa: E501
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         # (1). Save the encoder with attention module and config(s)
         self.blocks.save(save_dir)
@@ -349,12 +311,8 @@ class IPFBERTModel(IModel):
         # (3). Generate and save the config
         self.generate_config().save_config(save_dir)
 
-    def average_pool(
-        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(
-            ~attention_mask[..., None].bool(), 0.0
-        )
+    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
 
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
@@ -394,7 +352,7 @@ class DocEmbedder(IDocEmbedder):
     @torch.no_grad()
     def encode(
         self,
-        texts: List[str],
+        texts: list[str],
         batch_size: int = 1,
         padding: bool = True,
         truncation: bool = True,
@@ -415,16 +373,13 @@ class DocEmbedder(IDocEmbedder):
             batch_size=batch_size,
         )
 
-        loader = NamedDataLoader(
-            dataset=dataset, batch_size=batch_size, tensor_names=tensor_names
-        )
+        loader = NamedDataLoader(dataset=dataset, batch_size=batch_size, tensor_names=tensor_names)
 
         batch_gen = range(0, len(texts), batch_size)
         if verbose:
             batch_gen = tqdm(batch_gen)
 
-        for batch_begin, batch_features in zip(batch_gen, loader):
-
+        for batch_begin, batch_features in zip(batch_gen, loader, strict=False):  # noqa: B007
             batch = {k: v.to(device) for k, v in batch_features.items()}
 
             embeddings = self.model(**batch)[0].cpu()
@@ -438,7 +393,7 @@ class IRECModel(IModel):
     """
 
     def __init__(self):
-        super(IRECModel, self).__init__()
+        super(IRECModel, self).__init__()  # noqa: UP008
 
     @classmethod
     def load(cls, pretrained_model_name_or_path):
@@ -447,8 +402,7 @@ class IRECModel(IModel):
 
 @singleton
 class ILMFinder:
-
-    store: Dict[str, ILanguageModel] = dict()
+    store: dict[str, ILanguageModel] = dict()
 
     def find(self, model_name_or_path: str, **kwargs):
         key = cached_call(model_name_or_path, **kwargs)

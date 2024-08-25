@@ -2,7 +2,7 @@ import abc
 import copy
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import numpy as np
 import simplejson as json
@@ -73,7 +73,7 @@ class IModel(nn.Module, abc.ABC):
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor):
         raise NotImplementedError
 
-    def save_config(self, save_dir: Union[Path, str]):
+    def save_config(self, save_dir: Path | str):
         """
         Save the configuration of the language model in format.
         """
@@ -84,13 +84,13 @@ class IModel(nn.Module, abc.ABC):
         with open(str(save_filename), "w") as f:
             f.write(json.dumps(config))
 
-    def save(self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None):
+    def save(self, save_dir: str | Path, state_dict: dict[Any, Any] | None = None):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
         :param save_dir: The directory in which the model should be saved.
         :param state_dict: A dictionary containing the whole state of the module, including names of layers. By default, the unchanged state dictionary of the module is used.
-        """
+        """  # noqa: E501
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         # Save Weights
         save_name = Path(save_dir) / "pytorch_model.bin"
@@ -155,9 +155,9 @@ class ILanguageModel(nn.Module, abc.ABC):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        segment_ids: Optional[torch.Tensor],  # DistilBERT does not use them, see DistilBERTLanguageModel
-        output_hidden_states: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
+        segment_ids: torch.Tensor | None,  # DistilBERT does not use them, see DistilBERTLanguageModel
+        output_hidden_states: bool | None = None,
+        output_attentions: bool | None = None,
         return_dict: bool = False,
     ):
         raise NotImplementedError
@@ -191,11 +191,11 @@ class ILanguageModel(nn.Module, abc.ABC):
                     self._output_dims = value
                     return value
             except AttributeError:
-                raise ModelingError("Can't get the output dimension before loading the model.")
+                raise ModelingError("Can't get the output dimension before loading the model.")  # noqa: B904
 
         raise ModelingError("Could not infer the output dimensions of the language model.")
 
-    def save_config(self, save_dir: Union[Path, str]):
+    def save_config(self, save_dir: Path | str):
         """
         Save the configuration of the language model in format.
         """
@@ -206,13 +206,13 @@ class ILanguageModel(nn.Module, abc.ABC):
         with open(str(save_filename), "w") as f:
             f.write(json.dumps(config))
 
-    def save(self, save_dir: Union[str, Path], state_dict: Optional[Dict[Any, Any]] = None):
+    def save(self, save_dir: str | Path, state_dict: dict[Any, Any] | None = None):
         """
         Save the model `state_dict` and its configuration file so that it can be loaded again.
 
         :param save_dir: The directory in which the model should be saved.
         :param state_dict: A dictionary containing the whole state of the module, including names of layers. By default, the unchanged state dictionary of the module is used.
-        """
+        """  # noqa: E501
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         # Save Weights
         save_name = Path(save_dir) / "pytorch_model.bin"
@@ -228,8 +228,8 @@ class ILanguageModel(nn.Module, abc.ABC):
         logits,
         samples,
         ignore_first_token: bool = True,
-        padding_mask: Optional[torch.Tensor] = None,
-    ) -> List[Dict[str, Any]]:
+        padding_mask: torch.Tensor | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Extracting vectors from a language model (for example, for extracting sentence embeddings).
         You can use different pooling strategies and layers by specifying them in the object attributes
@@ -246,7 +246,7 @@ class ILanguageModel(nn.Module, abc.ABC):
         :param input_ids: IDs of the tokens in the vocabulary.
         :param kwargs: kwargs
         :return: A list of dictionaries containing predictions, for example: [{"context": "some text", "vec": [-0.01, 0.5 ...]}].
-        """
+        """  # noqa: E501
         if not hasattr(self, "extraction_layer") or not hasattr(self, "extraction_strategy"):
             raise ModelingError(
                 "`extraction_layer` or `extraction_strategy` not specified for LM. "
@@ -269,14 +269,7 @@ class ILanguageModel(nn.Module, abc.ABC):
         elif self.extraction_strategy == "per_token":
             vecs = sequence_output.cpu().numpy()
 
-        elif self.extraction_strategy == "reduce_mean":
-            vecs = self._pool_tokens(
-                sequence_output,
-                padding_mask,
-                self.extraction_strategy,
-                ignore_first_token=ignore_first_token,
-            )
-        elif self.extraction_strategy == "reduce_max":
+        elif self.extraction_strategy == "reduce_mean" or self.extraction_strategy == "reduce_max":
             vecs = self._pool_tokens(
                 sequence_output,
                 padding_mask,
@@ -286,12 +279,10 @@ class ILanguageModel(nn.Module, abc.ABC):
         elif self.extraction_strategy == "cls_token":
             vecs = sequence_output[:, 0, :].cpu().numpy()
         else:
-            raise NotImplementedError(
-                f"This extraction strategy ({self.extraction_strategy}) is not supported by Haystack."
-            )
+            raise NotImplementedError(f"This extraction strategy ({self.extraction_strategy}) is not supported by Haystack.")
 
         preds = []
-        for vec, sample in zip(vecs, samples):
+        for vec, sample in zip(vecs, samples, strict=False):
             pred = {}
             pred["context"] = sample.clear_text["text"]
             pred["vec"] = vec
@@ -341,11 +332,11 @@ class IRemoteLargeLanguageModel(abc.ABC):
         super().__init__()
 
     @abc.abstractmethod
-    def generate(self, prompt: str, history: List[str], **kwargs):
+    def generate(self, prompt: str, history: list[str], **kwargs):
         pass
 
 
-class ILargeLanguageModel(abc.ABC):
+class ILargeLanguageModel(abc.ABC):  # noqa: B024
     """
     The parent class for any kind of local LLM that can generate sequence of tokens.
     These models receive tokenized string (prefix) and return generated sequence via forward pass.
@@ -509,7 +500,7 @@ class IDocEmbedder(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def encode(self, texts: List[str], **kwargs) -> Iterator[np.ndarray]:
+    def encode(self, texts: list[str], **kwargs) -> Iterator[np.ndarray]:
         pass
 
 

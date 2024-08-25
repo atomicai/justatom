@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2018 The Google AI Language Team Authors,  The HuggingFace Inc. Team and deepset Team.
 # Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
 #
@@ -13,46 +12,52 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Acknowledgements: Many of the modeling parts here come from the great transformers repository: https://github.com/huggingface/transformers.
-Thanks for the great work! """
+"""Acknowledgements: Many of the modeling parts here come from the great transformers repository: https://github.com/huggingface/transformers.
+Thanks for the great work!"""
 
-from __future__ import absolute_import, division, print_function, unicode_literals
-
+import copy
 import json
 import logging
 import os
-import io
-from pathlib import Path
 from collections import OrderedDict
+from pathlib import Path
 
-from dotmap import DotMap
-from tqdm import tqdm
-import copy
 import numpy as np
 import torch
+from dotmap import DotMap
 from torch import nn
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
-from transformers import (
-    BertModel, BertConfig,
-    RobertaModel, RobertaConfig,
-    XLNetModel, XLNetConfig,
-    AlbertModel, AlbertConfig,
-    XLMRobertaModel, XLMRobertaConfig,
-    DistilBertModel, DistilBertConfig,
-    ElectraModel, ElectraConfig,
-    CamembertModel, CamembertConfig,
-    BigBirdModel, BigBirdConfig
+import transformers  # noqa: E402
+from transformers import (  # noqa: E402
+    AlbertConfig,
+    AlbertModel,
+    AutoConfig,
+    AutoModel,
+    BertConfig,
+    BertModel,
+    BigBirdConfig,
+    BigBirdModel,
+    CamembertConfig,
+    CamembertModel,
+    DistilBertConfig,
+    DistilBertModel,
+    ElectraConfig,
+    ElectraModel,
+    RobertaConfig,
+    RobertaModel,
+    XLMRobertaConfig,
+    XLMRobertaModel,
+    XLNetConfig,
+    XLNetModel,
 )
+from transformers.modeling_utils import SequenceSummary  # noqa: E402
+from transformers.models.bert.tokenization_bert import load_vocab  # noqa: E402
 
-from transformers import AutoModel, AutoConfig
-from transformers.modeling_utils import SequenceSummary
-from transformers.models.bert.tokenization_bert import load_vocab
-import transformers
-
-from farm.modeling import wordembedding_utils
-from farm.modeling.wordembedding_utils import s3e_pooling
+from farm.modeling import wordembedding_utils  # noqa: E402
+from farm.modeling.wordembedding_utils import s3e_pooling  # noqa: E402
 
 # These are the names of the attributes in various model configs which refer to the number of dimensions
 # in the output vectors
@@ -69,7 +74,7 @@ class LanguageModel(nn.Module):
     subclasses = {}
 
     def __init_subclass__(cls, **kwargs):
-        """ This automatically keeps track of all available subclasses.
+        """This automatically keeps track of all available subclasses.
         Enables generic load() or all specific LanguageModel implementation.
         """
         super().__init_subclass__(**kwargs)
@@ -139,11 +144,11 @@ class LanguageModel(nn.Module):
         if os.path.exists(config_file):
             logger.info(f"Model found locally at {pretrained_model_name_or_path}")
             # it's a local directory in FARM format
-            config = json.load(open(config_file))
+            config = json.load(open(config_file))  # noqa: SIM115
             language_model = cls.subclasses[config["name"]].load(pretrained_model_name_or_path)
         else:
             logger.info(f"Could not find {pretrained_model_name_or_path} locally.")
-            logger.info(f"Looking on Transformers Model Hub (in local cache and online)...")
+            logger.info("Looking on Transformers Model Hub (in local cache and online)...")
             if language_model_class is None:
                 language_model_class = cls.get_language_model_class(pretrained_model_name_or_path)
 
@@ -168,8 +173,7 @@ class LanguageModel(nn.Module):
             # TODO verify for other models than BERT
             model_emb_size = language_model.model.resize_token_embeddings(new_num_tokens=None).num_embeddings
             vocab_size = model_emb_size + n_added_tokens
-            logger.info(
-                f"Resizing embedding layer of LM from {model_emb_size} to {vocab_size} to cope with custom vocab.")
+            logger.info(f"Resizing embedding layer of LM from {model_emb_size} to {vocab_size} to cope with custom vocab.")
             language_model.model.resize_token_embeddings(vocab_size)
             # verify
             model_emb_size = language_model.model.resize_token_embeddings(new_num_tokens=None).num_embeddings
@@ -213,8 +217,9 @@ class LanguageModel(nn.Module):
             language_model_class = "BigBird"
         else:
             # Fall back to inferring type from model name
-            logger.warning("Could not infer LanguageModel class from config. Trying to infer "
-                           "LanguageModel class from model name.")
+            logger.warning(
+                "Could not infer LanguageModel class from config. Trying to infer " "LanguageModel class from model name."
+            )
             language_model_class = LanguageModel._infer_language_model_class_from_string(model_name_or_path)
 
         return language_model_class
@@ -237,17 +242,17 @@ class LanguageModel(nn.Module):
         elif "camembert" in model_name_or_path.lower() or "umberto" in model_name_or_path.lower():
             language_model_class = "Camembert"
         elif "albert" in model_name_or_path.lower():
-            language_model_class = 'Albert'
+            language_model_class = "Albert"
         elif "distilbert" in model_name_or_path.lower():
-            language_model_class = 'DistilBert'
+            language_model_class = "DistilBert"
         elif "bert" in model_name_or_path.lower():
-            language_model_class = 'Bert'
+            language_model_class = "Bert"
         elif "xlnet" in model_name_or_path.lower():
-            language_model_class = 'XLNet'
+            language_model_class = "XLNet"
         elif "electra" in model_name_or_path.lower():
-            language_model_class = 'Electra'
+            language_model_class = "Electra"
         elif "word2vec" in model_name_or_path.lower() or "glove" in model_name_or_path.lower():
-            language_model_class = 'WordEmbedding_LM'
+            language_model_class = "WordEmbedding_LM"
         elif "minilm" in model_name_or_path.lower():
             language_model_class = "Bert"
         elif "dpr-question_encoder" in model_name_or_path.lower():
@@ -268,18 +273,18 @@ class LanguageModel(nn.Module):
             raise Exception("Could not infer the output dimensions of the language model")
 
     def freeze(self, layers):
-        """ To be implemented"""
+        """To be implemented"""
         raise NotImplementedError()
 
     def unfreeze(self):
-        """ To be implemented"""
+        """To be implemented"""
         raise NotImplementedError()
 
     def save_config(self, save_dir):
         save_filename = Path(save_dir) / "language_model_config.json"
         with open(save_filename, "w") as file:
-            setattr(self.model.config, "name", self.__class__.__name__)
-            setattr(self.model.config, "language", self.language)
+            self.model.config.name = self.__class__.__name__
+            self.model.config.language = self.language
             string = self.model.config.to_json_string()
             file.write(string)
 
@@ -292,9 +297,7 @@ class LanguageModel(nn.Module):
         """
         # Save Weights
         save_name = Path(save_dir) / "language_model.bin"
-        model_to_save = (
-            self.model.module if hasattr(self.model, "module") else self.model
-        )  # Only save the model it-self
+        model_to_save = self.model.module if hasattr(self.model, "module") else self.model  # Only save the model it-self
         torch.save(model_to_save.state_dict(), save_name)
         self.save_config(save_dir)
 
@@ -320,28 +323,21 @@ class LanguageModel(nn.Module):
         matches = [lang for lang in known_languages if lang in name]
         if "camembert" in name:
             language = "french"
-            logger.info(
-                f"Automatically detected language from language model name: {language}"
-            )
+            logger.info(f"Automatically detected language from language model name: {language}")
         elif "umberto" in name:
             language = "italian"
-            logger.info(
-                f"Automatically detected language from language model name: {language}"
-            )
+            logger.info(f"Automatically detected language from language model name: {language}")
         elif len(matches) == 0:
             language = "english"
         elif len(matches) > 1:
             language = matches[0]
         else:
             language = matches[0]
-            logger.info(
-                f"Automatically detected language from language model name: {language}"
-            )
+            logger.info(f"Automatically detected language from language model name: {language}")
 
         return language
 
-    def formatted_preds(self, logits, samples, ignore_first_token=True,
-                        padding_mask=None, input_ids=None, **kwargs):
+    def formatted_preds(self, logits, samples, ignore_first_token=True, padding_mask=None, input_ids=None, **kwargs):
         """
         Extracting vectors from language model (e.g. for extracting sentence embeddings).
         Different pooling strategies and layers are available and will be determined from the object attributes
@@ -358,11 +354,13 @@ class LanguageModel(nn.Module):
         :param input_ids: ids of the tokens in the vocab
         :param kwargs: kwargs
         :return: list of dicts containing preds, e.g. [{"context": "some text", "vec": [-0.01, 0.5 ...]}]
-        """
+        """  # noqa: E501
 
         if not hasattr(self, "extraction_layer") or not hasattr(self, "extraction_strategy"):
-            raise ValueError("`extraction_layer` or `extraction_strategy` not specified for LM. "
-                             "Make sure to set both, e.g. via Inferencer(extraction_strategy='cls_token', extraction_layer=-1)`")
+            raise ValueError(
+                "`extraction_layer` or `extraction_strategy` not specified for LM. "
+                "Make sure to set both, e.g. via Inferencer(extraction_strategy='cls_token', extraction_layer=-1)`"
+            )
 
         # unpack the tuple from LM forward pass
         sequence_output = logits[0][0]
@@ -371,25 +369,30 @@ class LanguageModel(nn.Module):
         # aggregate vectors
         if self.extraction_strategy == "pooled":
             if self.extraction_layer != -1:
-                raise ValueError(f"Pooled output only works for the last layer, but got extraction_layer = {self.extraction_layer}. Please set `extraction_layer=-1`.)")
+                raise ValueError(
+                    f"Pooled output only works for the last layer, but got extraction_layer = {self.extraction_layer}. Please set `extraction_layer=-1`.)"  # noqa: E501
+                )
             vecs = pooled_output.cpu().numpy()
         elif self.extraction_strategy == "per_token":
             vecs = sequence_output.cpu().numpy()
-        elif self.extraction_strategy == "reduce_mean":
-            vecs = self._pool_tokens(sequence_output, padding_mask, self.extraction_strategy, ignore_first_token=ignore_first_token)
-        elif self.extraction_strategy == "reduce_max":
+        elif self.extraction_strategy == "reduce_mean" or self.extraction_strategy == "reduce_max":
             vecs = self._pool_tokens(sequence_output, padding_mask, self.extraction_strategy, ignore_first_token=ignore_first_token)
         elif self.extraction_strategy == "cls_token":
             vecs = sequence_output[:, 0, :].cpu().numpy()
         elif self.extraction_strategy == "s3e":
-            vecs = self._pool_tokens(sequence_output, padding_mask, self.extraction_strategy,
-                                     ignore_first_token=ignore_first_token,
-                                     input_ids=input_ids, s3e_stats=self.s3e_stats)
+            vecs = self._pool_tokens(
+                sequence_output,
+                padding_mask,
+                self.extraction_strategy,
+                ignore_first_token=ignore_first_token,
+                input_ids=input_ids,
+                s3e_stats=self.s3e_stats,
+            )
         else:
             raise NotImplementedError
 
         preds = []
-        for vec, sample in zip(vecs, samples):
+        for vec, sample in zip(vecs, samples, strict=False):
             pred = {}
             pred["context"] = sample.clear_text["text"]
             pred["vec"] = vec
@@ -397,7 +400,6 @@ class LanguageModel(nn.Module):
         return preds
 
     def _pool_tokens(self, sequence_output, padding_mask, strategy, ignore_first_token, input_ids=None, s3e_stats=None):
-
         token_vecs = sequence_output.cpu().numpy()
         # we only take the aggregated value of non-padding tokens
         padding_mask = padding_mask.cpu().numpy()
@@ -413,13 +415,15 @@ class LanguageModel(nn.Module):
             pooled_vecs = np.ma.array(data=token_vecs, mask=ignore_mask_3d).mean(axis=1).data
         if strategy == "s3e":
             input_ids = input_ids.cpu().numpy()
-            pooled_vecs = s3e_pooling(token_embs=token_vecs,
-                                      token_ids=input_ids,
-                                      token_weights=s3e_stats["token_weights"],
-                                      centroids=s3e_stats["centroids"],
-                                      token_to_cluster=s3e_stats["token_to_cluster"],
-                                      svd_components=s3e_stats.get("svd_components", None),
-                                      mask=padding_mask == 0)
+            pooled_vecs = s3e_pooling(
+                token_embs=token_vecs,
+                token_ids=input_ids,
+                token_weights=s3e_stats["token_weights"],
+                centroids=s3e_stats["centroids"],
+                token_to_cluster=s3e_stats["token_to_cluster"],
+                svd_components=s3e_stats.get("svd_components", None),
+                mask=padding_mask == 0,
+            )
         return pooled_vecs
 
 
@@ -432,7 +436,7 @@ class Bert(LanguageModel):
     """
 
     def __init__(self):
-        super(Bert, self).__init__()
+        super(Bert, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "bert"
 
@@ -460,7 +464,7 @@ class Bert(LanguageModel):
         """
 
         bert = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             bert.name = kwargs["farm_lm_name"]
         else:
             bert.name = pretrained_model_name_or_path
@@ -504,7 +508,7 @@ class Bert(LanguageModel):
             token_type_ids=segment_ids,
             attention_mask=padding_mask,
         )
-        if self.model.encoder.config.output_hidden_states == True:
+        if self.model.encoder.config.output_hidden_states == True:  # noqa: E712
             sequence_output, pooled_output, all_hidden_states = output_tuple[0], output_tuple[1], output_tuple[2]
             return sequence_output, pooled_output, all_hidden_states
         else:
@@ -526,7 +530,7 @@ class Albert(LanguageModel):
     """
 
     def __init__(self):
-        super(Albert, self).__init__()
+        super(Albert, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "albert"
 
@@ -546,7 +550,7 @@ class Albert(LanguageModel):
 
         """
         albert = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             albert.name = kwargs["farm_lm_name"]
         else:
             albert.name = pretrained_model_name_or_path
@@ -590,7 +594,7 @@ class Albert(LanguageModel):
             token_type_ids=segment_ids,
             attention_mask=padding_mask,
         )
-        if self.model.encoder.config.output_hidden_states == True:
+        if self.model.encoder.config.output_hidden_states == True:  # noqa: E712
             sequence_output, pooled_output, all_hidden_states = output_tuple[0], output_tuple[1], output_tuple[2]
             return sequence_output, pooled_output, all_hidden_states
         else:
@@ -613,7 +617,7 @@ class Roberta(LanguageModel):
     """
 
     def __init__(self):
-        super(Roberta, self).__init__()
+        super(Roberta, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "roberta"
 
@@ -633,7 +637,7 @@ class Roberta(LanguageModel):
 
         """
         roberta = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             roberta.name = kwargs["farm_lm_name"]
         else:
             roberta.name = pretrained_model_name_or_path
@@ -677,7 +681,7 @@ class Roberta(LanguageModel):
             token_type_ids=segment_ids,
             attention_mask=padding_mask,
         )
-        if self.model.encoder.config.output_hidden_states == True:
+        if self.model.encoder.config.output_hidden_states == True:  # noqa: E712
             sequence_output, pooled_output, all_hidden_states = output_tuple[0], output_tuple[1], output_tuple[2]
             return sequence_output, pooled_output, all_hidden_states
         else:
@@ -700,7 +704,7 @@ class XLMRoberta(LanguageModel):
     """
 
     def __init__(self):
-        super(XLMRoberta, self).__init__()
+        super(XLMRoberta, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "xlm_roberta"
 
@@ -720,7 +724,7 @@ class XLMRoberta(LanguageModel):
 
         """
         xlm_roberta = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             xlm_roberta.name = kwargs["farm_lm_name"]
         else:
             xlm_roberta.name = pretrained_model_name_or_path
@@ -764,7 +768,7 @@ class XLMRoberta(LanguageModel):
             token_type_ids=segment_ids,
             attention_mask=padding_mask,
         )
-        if self.model.encoder.config.output_hidden_states == True:
+        if self.model.encoder.config.output_hidden_states == True:  # noqa: E712
             sequence_output, pooled_output, all_hidden_states = output_tuple[0], output_tuple[1], output_tuple[2]
             return sequence_output, pooled_output, all_hidden_states
         else:
@@ -793,7 +797,7 @@ class DistilBert(LanguageModel):
     """
 
     def __init__(self):
-        super(DistilBert, self).__init__()
+        super(DistilBert, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "distilbert"
         self.pooler = None
@@ -813,7 +817,7 @@ class DistilBert(LanguageModel):
         """
 
         distilbert = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             distilbert.name = kwargs["farm_lm_name"]
         else:
             distilbert.name = pretrained_model_name_or_path
@@ -836,8 +840,8 @@ class DistilBert(LanguageModel):
         # We don't want a dropout in the end of the pooler, since we do that already in the adaptive model before we
         # feed everything to the prediction head
         config.summary_last_dropout = 0
-        config.summary_type = 'first'
-        config.summary_activation = 'tanh'
+        config.summary_type = "first"
+        config.summary_activation = "tanh"
         distilbert.pooler = SequenceSummary(config)
         distilbert.pooler.apply(distilbert.model._init_weights)
         return distilbert
@@ -864,8 +868,8 @@ class DistilBert(LanguageModel):
         )
         # We need to manually aggregate that to get a pooled output (one vec per seq)
         pooled_output = self.pooler(output_tuple[0])
-        if self.model.config.output_hidden_states == True:
-            sequence_output, all_hidden_states = output_tuple[0], output_tuple[1]
+        if self.model.config.output_hidden_states == True:  # noqa: E712
+            sequence_output, all_hidden_states = output_tuple[0], output_tuple[1]  # noqa: F841
             return sequence_output, pooled_output
         else:
             sequence_output = output_tuple[0]
@@ -886,7 +890,7 @@ class XLNet(LanguageModel):
     """
 
     def __init__(self):
-        super(XLNet, self).__init__()
+        super(XLNet, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "xlnet"
         self.pooler = None
@@ -907,7 +911,7 @@ class XLNet(LanguageModel):
 
         """
         xlnet = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             xlnet.name = kwargs["farm_lm_name"]
         else:
             xlnet.name = pretrained_model_name_or_path
@@ -967,7 +971,7 @@ class XLNet(LanguageModel):
         # TODO verify that this is really doing correct pooling
         pooled_output = self.pooler(output_tuple[0])
 
-        if self.model.output_hidden_states == True:
+        if self.model.output_hidden_states == True:  # noqa: E712
             sequence_output, all_hidden_states = output_tuple[0], output_tuple[1]
             return sequence_output, pooled_output, all_hidden_states
         else:
@@ -980,19 +984,16 @@ class XLNet(LanguageModel):
     def disable_hidden_states_output(self):
         self.model.output_hidden_states = False
 
-class EmbeddingConfig():
+
+class EmbeddingConfig:
     """
     Config for Word Embeddings Models.
     Necessary to work with Bert and other LM style functionality
     """
-    def __init__(self,
-                 name=None,
-                 embeddings_filename=None,
-                 vocab_filename=None,
-                 vocab_size=None,
-                 hidden_size=None,
-                 language=None,
-                 **kwargs):
+
+    def __init__(
+        self, name=None, embeddings_filename=None, vocab_filename=None, vocab_size=None, hidden_size=None, language=None, **kwargs
+    ):
         """
         :param name: Name of config
         :param embeddings_filename:
@@ -1033,8 +1034,7 @@ class EmbeddingConfig():
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
 
 
-
-class EmbeddingModel():
+class EmbeddingModel:
     """
     Embedding Model that combines
     - Embeddings
@@ -1043,10 +1043,7 @@ class EmbeddingModel():
     Necessary to work with Bert and other LM style functionality
     """
 
-    def __init__(self,
-                 embedding_file,
-                 config_dict,
-                 vocab_file):
+    def __init__(self, embedding_file, config_dict, vocab_file):
         """
 
         :param embedding_file: filename of embeddings. Usually in txt format, with the word and associated vector on each line
@@ -1063,13 +1060,13 @@ class EmbeddingModel():
         assert "[UNK]" in self.vocab, "No [UNK] symbol in Wordembeddingmodel! Aborting"
         self.unk_idx = self.vocab["[UNK]"]
 
-    def save(self,save_dir):
+    def save(self, save_dir):
         # Save Weights
         save_name = Path(save_dir) / self.config.embeddings_filename
         embeddings = self.embeddings.cpu().numpy()
         with open(save_name, "w") as f:
-            for w, vec in tqdm(zip(self.vocab, embeddings), desc="Saving embeddings", total=embeddings.shape[0]):
-                f.write(w + " " + " ".join(["%.6f" % v for v in vec]) + "\n")
+            for w, vec in tqdm(zip(self.vocab, embeddings, strict=False), desc="Saving embeddings", total=embeddings.shape[0]):
+                f.write(w + " " + " ".join(["%.6f" % v for v in vec]) + "\n")  # noqa: UP031
         f.close()
 
         # Save vocab
@@ -1079,7 +1076,6 @@ class EmbeddingModel():
                 f.write(w + "\n")
         f.close()
 
-
     def resize_token_embeddings(self, new_num_tokens=None):
         # function is called as a vocab length validation inside FARM
         # fast way of returning an object with num_embeddings attribute (needed for some checks)
@@ -1088,7 +1084,6 @@ class EmbeddingModel():
         temp["num_embeddings"] = len(self.vocab)
         temp = DotMap(temp)
         return temp
-
 
 
 class WordEmbedding_LM(LanguageModel):
@@ -1101,11 +1096,10 @@ class WordEmbedding_LM(LanguageModel):
     """
 
     def __init__(self):
-        super(WordEmbedding_LM, self).__init__()
+        super(WordEmbedding_LM, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "WordEmbedding_LM"
         self.pooler = None
-
 
     @classmethod
     def load(cls, pretrained_model_name_or_path, language=None, **kwargs):
@@ -1122,7 +1116,7 @@ class WordEmbedding_LM(LanguageModel):
 
         """
         wordembedding_LM = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             wordembedding_LM.name = kwargs["farm_lm_name"]
         else:
             wordembedding_LM.name = pretrained_model_name_or_path
@@ -1130,20 +1124,21 @@ class WordEmbedding_LM(LanguageModel):
         farm_lm_config = Path(pretrained_model_name_or_path) / "language_model_config.json"
         if os.path.exists(farm_lm_config):
             # local dir
-            config = json.load(open(farm_lm_config,"r"))
+            config = json.load(open(farm_lm_config))  # noqa: SIM115
             farm_lm_model = Path(pretrained_model_name_or_path) / config["embeddings_filename"]
             vocab_filename = Path(pretrained_model_name_or_path) / config["vocab_filename"]
-            wordembedding_LM.model = EmbeddingModel(embedding_file=str(farm_lm_model), config_dict=config, vocab_file=str(vocab_filename))
+            wordembedding_LM.model = EmbeddingModel(
+                embedding_file=str(farm_lm_model), config_dict=config, vocab_file=str(vocab_filename)
+            )
             wordembedding_LM.language = config.get("language", None)
         else:
             # from remote or cache
-            config_dict, resolved_vocab_file, resolved_model_file = wordembedding_utils.load_model(pretrained_model_name_or_path, **kwargs)
-            model = EmbeddingModel(embedding_file=resolved_model_file,
-                                   config_dict=config_dict,
-                                   vocab_file=resolved_vocab_file)
+            config_dict, resolved_vocab_file, resolved_model_file = wordembedding_utils.load_model(
+                pretrained_model_name_or_path, **kwargs
+            )
+            model = EmbeddingModel(embedding_file=resolved_model_file, config_dict=config_dict, vocab_file=resolved_vocab_file)
             wordembedding_LM.model = model
             wordembedding_LM.language = model.config.language
-
 
         # taking the mean for getting the pooled representation
         # TODO: extend this to other pooling operations or remove
@@ -1158,13 +1153,16 @@ class WordEmbedding_LM(LanguageModel):
         :param save_dir: The directory in which the model should be saved.
         :type save_dir: str
         """
-        #save model
+        # save model
         self.model.save(save_dir=save_dir)
-        #save config
+        # save config
         self.save_config(save_dir=save_dir)
 
-
-    def forward(self, input_ids, **kwargs,):
+    def forward(
+        self,
+        input_ids,
+        **kwargs,
+    ):
         """
         Perform the forward pass of the wordembedding model.
         This is just the mapping of words to their corresponding embeddings
@@ -1175,7 +1173,7 @@ class WordEmbedding_LM(LanguageModel):
         for sample in input_ids:
             sample_embeddings = []
             for index in sample:
-                #if index != self.model.unk_idx:
+                # if index != self.model.unk_idx:
                 sample_embeddings.append(self.model.embeddings[index])
             sample_embeddings = torch.stack(sample_embeddings)
             sequence_output.append(sample_embeddings)
@@ -1191,14 +1189,14 @@ class WordEmbedding_LM(LanguageModel):
         return sequence_output, pooled_output
 
     def trim_vocab(self, token_counts, processor, min_threshold):
-        """ Remove embeddings for rare tokens in your corpus (< `min_threshold` occurrences) to reduce model size"""
+        """Remove embeddings for rare tokens in your corpus (< `min_threshold` occurrences) to reduce model size"""
         logger.info(f"Removing tokens with less than {min_threshold} occurrences from model vocab")
         new_vocab = OrderedDict()
         valid_tok_indices = []
         cnt = 0
         old_num_emb = self.model.embeddings.shape[0]
         for token, tok_idx in self.model.vocab.items():
-            if token_counts.get(token, 0) >= min_threshold or token in ("[CLS]","[SEP]","[UNK]","[PAD]","[MASK]"):
+            if token_counts.get(token, 0) >= min_threshold or token in ("[CLS]", "[SEP]", "[UNK]", "[PAD]", "[MASK]"):
                 new_vocab[token] = cnt
                 valid_tok_indices.append(tok_idx)
                 cnt += 1
@@ -1214,11 +1212,18 @@ class WordEmbedding_LM(LanguageModel):
 
         logger.info(f"Reduced vocab from {old_num_emb} to {self.model.embeddings.shape[0]}")
 
-    def normalize_embeddings(self, zero_mean=True, pca_removal=False, pca_n_components=300, pca_n_top_components=10,
-                             use_mean_vec_for_special_tokens=True, n_special_tokens=5):
-        """ Normalize word embeddings as in https://arxiv.org/pdf/1808.06305.pdf
+    def normalize_embeddings(
+        self,
+        zero_mean=True,
+        pca_removal=False,
+        pca_n_components=300,
+        pca_n_top_components=10,
+        use_mean_vec_for_special_tokens=True,
+        n_special_tokens=5,
+    ):
+        """Normalize word embeddings as in https://arxiv.org/pdf/1808.06305.pdf
             (e.g. used for S3E Pooling of sentence embeddings)
-            
+
         :param zero_mean: Whether to center embeddings via subtracting mean
         :type zero_mean: bool
         :param pca_removal: Whether to remove PCA components
@@ -1229,14 +1234,14 @@ class WordEmbedding_LM(LanguageModel):
         :type pca_n_top_components: int
         :param use_mean_vec_for_special_tokens: Whether to replace embedding of special tokens with the mean embedding
         :type use_mean_vec_for_special_tokens: bool
-        :param n_special_tokens: Number of special tokens like CLS, UNK etc. (used if `use_mean_vec_for_special_tokens`). 
+        :param n_special_tokens: Number of special tokens like CLS, UNK etc. (used if `use_mean_vec_for_special_tokens`).
                                  Note: We expect the special tokens to be the first `n_special_tokens` entries of the vocab.
         :type n_special_tokens: int
         :return: None
         """
 
         if zero_mean:
-            logger.info('Removing mean from embeddings')
+            logger.info("Removing mean from embeddings")
             # self.model.embeddings[:n_special_tokens, :] = torch.zeros((n_special_tokens, 300))
             mean_vec = torch.mean(self.model.embeddings, 0)
             self.model.embeddings = self.model.embeddings - mean_vec
@@ -1246,7 +1251,8 @@ class WordEmbedding_LM(LanguageModel):
 
         if pca_removal:
             from sklearn.decomposition import PCA
-            logger.info('Removing projections on top PCA components from embeddings (see https://arxiv.org/pdf/1808.06305.pdf)')
+
+            logger.info("Removing projections on top PCA components from embeddings (see https://arxiv.org/pdf/1808.06305.pdf)")
             pca = PCA(n_components=pca_n_components)
             pca.fit(self.model.embeddings.cpu().numpy())
 
@@ -1258,7 +1264,9 @@ class WordEmbedding_LM(LanguageModel):
             for emb_idx in tqdm(range(self.model.embeddings.shape[0]), desc="Removing projections"):
                 for pca_idx, u in enumerate(U1[0:PVN_dims]):
                     ratio = (explained_variance[pca_idx] - explained_variance[PVN_dims]) / explained_variance[pca_idx]
-                    self.model.embeddings[emb_idx] = self.model.embeddings[emb_idx] - ratio * np.dot(u.transpose(), self.model.embeddings[emb_idx]) * u
+                    self.model.embeddings[emb_idx] = (
+                        self.model.embeddings[emb_idx] - ratio * np.dot(u.transpose(), self.model.embeddings[emb_idx]) * u
+                    )
 
 
 class Electra(LanguageModel):
@@ -1278,7 +1286,7 @@ class Electra(LanguageModel):
     """
 
     def __init__(self):
-        super(Electra, self).__init__()
+        super(Electra, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "electra"
         self.pooler = None
@@ -1298,7 +1306,7 @@ class Electra(LanguageModel):
         """
 
         electra = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             electra.name = kwargs["farm_lm_name"]
         else:
             electra.name = pretrained_model_name_or_path
@@ -1322,8 +1330,8 @@ class Electra(LanguageModel):
         # feed everything to the prediction head.
         # Note: ELECTRA uses gelu as activation (BERT uses tanh instead)
         config.summary_last_dropout = 0
-        config.summary_type = 'first'
-        config.summary_activation = 'gelu'
+        config.summary_type = "first"
+        config.summary_activation = "gelu"
         config.summary_use_proj = False
         electra.pooler = SequenceSummary(config)
         electra.pooler.apply(electra.model._init_weights)
@@ -1355,8 +1363,8 @@ class Electra(LanguageModel):
         # We need to manually aggregate that to get a pooled output (one vec per seq)
         pooled_output = self.pooler(output_tuple[0])
 
-        if self.model.config.output_hidden_states == True:
-            sequence_output, all_hidden_states = output_tuple[0], output_tuple[1]
+        if self.model.config.output_hidden_states == True:  # noqa: E712
+            sequence_output, all_hidden_states = output_tuple[0], output_tuple[1]  # noqa: F841
             return sequence_output, pooled_output
         else:
             sequence_output = output_tuple[0]
@@ -1374,8 +1382,9 @@ class Camembert(Roberta):
     A Camembert model that wraps the HuggingFace's implementation
     (https://github.com/huggingface/transformers) to fit the LanguageModel class.
     """
+
     def __init__(self):
-        super(Camembert, self).__init__()
+        super(Camembert, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "camembert"
 
@@ -1395,7 +1404,7 @@ class Camembert(Roberta):
 
         """
         camembert = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             camembert.name = kwargs["farm_lm_name"]
         else:
             camembert.name = pretrained_model_name_or_path
@@ -1420,7 +1429,7 @@ class DPRQuestionEncoder(LanguageModel):
     """
 
     def __init__(self):
-        super(DPRQuestionEncoder, self).__init__()
+        super(DPRQuestionEncoder, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "dpr_question_encoder"
 
@@ -1435,10 +1444,10 @@ class DPRQuestionEncoder(LanguageModel):
 
         :param pretrained_model_name_or_path: The path of the base pretrained language model whose weights are used to initialize DPRQuestionEncoder
         :type pretrained_model_name_or_path: str
-        """
+        """  # noqa: E501
 
         dpr_question_encoder = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             dpr_question_encoder.name = kwargs["farm_lm_name"]
         else:
             dpr_question_encoder.name = pretrained_model_name_or_path
@@ -1456,19 +1465,23 @@ class DPRQuestionEncoder(LanguageModel):
             if original_model_config.model_type == "dpr":
                 # "pretrained dpr model": load existing pretrained DPRQuestionEncoder model
                 dpr_question_encoder.model = transformers.DPRQuestionEncoder.from_pretrained(
-                    str(pretrained_model_name_or_path), **kwargs)
+                    str(pretrained_model_name_or_path), **kwargs
+                )
             else:
                 # "from scratch": load weights from different architecture (e.g. bert) into DPRQuestionEncoder
                 # but keep config values from original architecture
                 # TODO test for architectures other than BERT, e.g. Electra
                 if original_model_config.model_type != "bert":
-                    logger.warning(f"Using a model of type '{original_model_config.model_type}' which might be incompatible with DPR encoders."
-                                   f"Bert based encoders are supported that need input_ids,token_type_ids,attention_mask as input tensors.")
+                    logger.warning(
+                        f"Using a model of type '{original_model_config.model_type}' which might be incompatible with DPR encoders."
+                        f"Bert based encoders are supported that need input_ids,token_type_ids,attention_mask as input tensors."
+                    )
                 original_config_dict = vars(original_model_config)
                 original_config_dict.update(kwargs)
                 dpr_question_encoder.model = transformers.DPRQuestionEncoder(config=transformers.DPRConfig(**original_config_dict))
                 dpr_question_encoder.model.base_model.bert_model = AutoModel.from_pretrained(
-                    str(pretrained_model_name_or_path), **original_config_dict)
+                    str(pretrained_model_name_or_path), **original_config_dict
+                )
             dpr_question_encoder.language = cls._get_or_infer_language_from_name(language, pretrained_model_name_or_path)
 
         return dpr_question_encoder
@@ -1496,12 +1509,9 @@ class DPRQuestionEncoder(LanguageModel):
 
         """
         output_tuple = self.model(
-            input_ids=query_input_ids,
-            token_type_ids=query_segment_ids,
-            attention_mask=query_attention_mask,
-            return_dict=True
+            input_ids=query_input_ids, token_type_ids=query_segment_ids, attention_mask=query_attention_mask, return_dict=True
         )
-        if self.model.question_encoder.config.output_hidden_states == True:
+        if self.model.question_encoder.config.output_hidden_states == True:  # noqa: E712
             pooled_output, all_hidden_states = output_tuple.pooler_output, output_tuple.hidden_states
             return pooled_output, all_hidden_states
         else:
@@ -1521,7 +1531,7 @@ class DPRContextEncoder(LanguageModel):
     """
 
     def __init__(self):
-        super(DPRContextEncoder, self).__init__()
+        super(DPRContextEncoder, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "dpr_context_encoder"
 
@@ -1536,10 +1546,10 @@ class DPRContextEncoder(LanguageModel):
 
         :param pretrained_model_name_or_path: The path of the base pretrained language model whose weights are used to initialize DPRContextEncoder
         :type pretrained_model_name_or_path: str
-        """
+        """  # noqa: E501
 
         dpr_context_encoder = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             dpr_context_encoder.name = kwargs["farm_lm_name"]
         else:
             dpr_context_encoder.name = pretrained_model_name_or_path
@@ -1557,7 +1567,8 @@ class DPRContextEncoder(LanguageModel):
             if original_model_config.model_type == "dpr":
                 # "pretrained dpr model": load existing pretrained DPRContextEncoder model
                 dpr_context_encoder.model = transformers.DPRContextEncoder.from_pretrained(
-                    str(pretrained_model_name_or_path), **kwargs)
+                    str(pretrained_model_name_or_path), **kwargs
+                )
             else:
                 # "from scratch": load weights from different architecture (e.g. bert) into DPRContextEncoder
                 # but keep config values from original architecture
@@ -1565,13 +1576,14 @@ class DPRContextEncoder(LanguageModel):
                 if original_model_config.model_type != "bert":
                     logger.warning(
                         f"Using a model of type '{original_model_config.model_type}' which might be incompatible with DPR encoders."
-                        f"Bert based encoders are supported that need input_ids,token_type_ids,attention_mask as input tensors.")
+                        f"Bert based encoders are supported that need input_ids,token_type_ids,attention_mask as input tensors."
+                    )
                 original_config_dict = vars(original_model_config)
                 original_config_dict.update(kwargs)
-                dpr_context_encoder.model = transformers.DPRContextEncoder(
-                    config=transformers.DPRConfig(**original_config_dict))
+                dpr_context_encoder.model = transformers.DPRContextEncoder(config=transformers.DPRConfig(**original_config_dict))
                 dpr_context_encoder.model.base_model.bert_model = AutoModel.from_pretrained(
-                    str(pretrained_model_name_or_path), **original_config_dict)
+                    str(pretrained_model_name_or_path), **original_config_dict
+                )
             dpr_context_encoder.language = cls._get_or_infer_language_from_name(language, pretrained_model_name_or_path)
 
         return dpr_context_encoder
@@ -1596,18 +1608,15 @@ class DPRContextEncoder(LanguageModel):
            of shape [batch_size,  number_of_hard_negative_passages, max_seq_len]
         :return: Embeddings for each token in the input sequence.
 
-        """
+        """  # noqa: E501
         max_seq_len = passage_input_ids.shape[-1]
         passage_input_ids = passage_input_ids.view(-1, max_seq_len)
         passage_segment_ids = passage_segment_ids.view(-1, max_seq_len)
         passage_attention_mask = passage_attention_mask.view(-1, max_seq_len)
         output_tuple = self.model(
-            input_ids=passage_input_ids,
-            token_type_ids=passage_segment_ids,
-            attention_mask=passage_attention_mask,
-            return_dict=True
+            input_ids=passage_input_ids, token_type_ids=passage_segment_ids, attention_mask=passage_attention_mask, return_dict=True
         )
-        if self.model.ctx_encoder.config.output_hidden_states == True:
+        if self.model.ctx_encoder.config.output_hidden_states == True:  # noqa: E712
             pooled_output, all_hidden_states = output_tuple.pooler_output, output_tuple.hidden_states
             return pooled_output, all_hidden_states
         else:
@@ -1630,7 +1639,7 @@ class BigBird(LanguageModel):
     """
 
     def __init__(self):
-        super(BigBird, self).__init__()
+        super(BigBird, self).__init__()  # noqa: UP008
         self.model = None
         self.name = "big_bird"
 
@@ -1658,7 +1667,7 @@ class BigBird(LanguageModel):
         """
 
         big_bird = cls()
-        if "farm_lm_name" in kwargs:
+        if "farm_lm_name" in kwargs:  # noqa: SIM401
             big_bird.name = kwargs["farm_lm_name"]
         else:
             big_bird.name = pretrained_model_name_or_path
@@ -1702,7 +1711,7 @@ class BigBird(LanguageModel):
             token_type_ids=segment_ids,
             attention_mask=padding_mask,
         )
-        if self.model.encoder.config.output_hidden_states == True:
+        if self.model.encoder.config.output_hidden_states == True:  # noqa: E712
             sequence_output, pooled_output, all_hidden_states = output_tuple[0], output_tuple[1], output_tuple[2]
             return sequence_output, pooled_output, all_hidden_states
         else:

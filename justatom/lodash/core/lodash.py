@@ -1,30 +1,28 @@
-import lib_programname
-from pathlib import Path
-from typing import Optional, Any
-import json
-from itertools import islice
 import logging
-import tempfile
-import tarfile
-import zipfile
-import numpy as np
-import torch
 import os
 import random
-from nicely import Printer
+import tarfile
+import tempfile
+import zipfile
+from itertools import islice
+from pathlib import Path
+from typing import Any
+
+import lib_programname
+import numpy as np
 import requests
-from justatom.lodash.loader import MLoader
+import torch
+from nicely import Printer
 from tqdm import tqdm
 from transformers import cached_path
 
-logger = logging.getLogger('-_- _ _ _ -_-')
+from justatom.lodash.loader import MLoader
 
+logger = logging.getLogger("-_- _ _ _ -_-")
 
 
 class Lodash(MLoader):
-
-
-    def __init__(self, max_seq=128, max_lines=18, indent=''):
+    def __init__(self, max_seq=128, max_lines=18, indent=""):
         self.cout = Printer(max_seq=max_seq, max_lines=max_lines, indent=indent)
 
     def print(self, obj):
@@ -68,9 +66,7 @@ class Lodash(MLoader):
 
         is_not_empty = len(list(Path(path).rglob("*"))) > 0
         if is_not_empty:
-            logger.info(
-                f"Found data stored in `{output_dir}`. Delete this first if you really want to fetch new data."
-            )
+            logger.info(f"Found data stored in `{output_dir}`. Delete this first if you really want to fetch new data.")
             return False
         else:
             logger.info(f"Fetching from {url} to `{output_dir}`")
@@ -110,27 +106,23 @@ class Lodash(MLoader):
             )
 
             if resolved_file is None:
-                raise EnvironmentError
+                raise OSError
 
-        except EnvironmentError:
+        except OSError:
             if pretrained_model_name_or_path in s3_dict:
-                msg = "Couldn't reach server at '{}' to download data.".format(
-                    s3_file
-                )
+                msg = f"Couldn't reach server at '{s3_file}' to download data."
             else:
                 msg = (
-                    "Model name '{}' was not found in model name list. "
-                    "We assumed '{}' was a path, a model identifier, or url to a configuration file or "
-                    "a directory containing such a file but couldn't find any such file at this path or url.".format(
-                        pretrained_model_name_or_path, s3_file,
-                    )
+                    f"Model name '{pretrained_model_name_or_path}' was not found in model name list. "
+                    f"We assumed '{s3_file}' was a path, a model identifier, or url to a configuration file or "
+                    "a directory containing such a file but couldn't find any such file at this path or url."
                 )
-            raise EnvironmentError(msg)
+            raise OSError(msg)  # noqa: B904
 
         if resolved_file == s3_file:
-            logger.info("loading file {}".format(s3_file))
+            logger.info(f"loading file {s3_file}")
         else:
-            logger.info("loading file {} from cache at {}".format(s3_file, resolved_file))
+            logger.info(f"loading file {s3_file} from cache at {resolved_file}")
 
         return resolved_file
 
@@ -164,7 +156,7 @@ class Lodash(MLoader):
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
-        os.environ['PYTHONHASHSEED'] = str(seed)
+        os.environ["PYTHONHASHSEED"] = str(seed)
         torch.cuda.manual_seed_all(seed)
         if deterministic_cudnn:
             torch.backends.cudnn.deterministic = True
@@ -177,7 +169,7 @@ class Lodash(MLoader):
             n_gpu = 0
         elif rank == -1:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            if not torch.cuda.is_available():
+            if not torch.cuda.is_available():  # noqa: SIM108
                 n_gpu = 0
             else:
                 n_gpu = torch.cuda.device_count()
@@ -186,6 +178,6 @@ class Lodash(MLoader):
             torch.cuda.set_device(device)
             n_gpu = 1
             torch.distributed.init_process_group(backend="nccl")
-        logger.info(f'Device: {str(device).upper()}')
-        logger.info(f'GPU(s): {str(n_gpu)}')
-        logger.info(f'Distributed Training: {bool(rank != -1)}')
+        logger.info(f"Device: {str(device).upper()}")
+        logger.info(f"GPU(s): {str(n_gpu)}")
+        logger.info(f"Distributed Training: {bool(rank != -1)}")

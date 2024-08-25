@@ -1,15 +1,15 @@
-from copy import deepcopy
-import torch
-import random
 import copy
-import os
 import itertools
-import numpy as np
-from typing import Union, Dict, List, Optional
+import os
+import random
 from collections.abc import MutableMapping
+from copy import deepcopy
+
+import numpy as np
+import torch
 
 
-class NIterator(object):
+class NIterator:
     __slots__ = ("_is_next", "_the_next", "it")
 
     def __init__(self, it):
@@ -21,7 +21,7 @@ class NIterator(object):
         if self._is_next is None:
             try:
                 self._the_next = next(self.it)
-            except:
+            except:  # noqa: E722
                 self._is_next = False
             else:
                 self._is_next = True
@@ -34,7 +34,7 @@ class NIterator(object):
         return self.next()
 
     def next(self):
-        if self._is_next:
+        if self._is_next:  # noqa: SIM108
             response = self._the_next
         else:
             response = next(self.it)
@@ -56,7 +56,7 @@ def chunkify(f, chunksize=10_000_000, sep="\n"):
     remainder = None  # data from the previous chunk.
     while chunk != "":
         chunk = f.read(chunksize)
-        if remainder:
+        if remainder:  # noqa: SIM108
             piece = remainder + chunk
         else:
             piece = chunk
@@ -89,13 +89,13 @@ def flatten_dict(dictionary, parent_key="", separator="_"):
     return dict(items)
 
 
-def snapshot(data: Union[Dict, List[Dict]], sep: str = "_"):
-    if isinstance(data, Dict):
+def snapshot(data: dict | list[dict], sep: str = "_"):
+    if isinstance(data, dict):
         data = [data]
     response = []
     for cur in data:
         cur_sample = flatten_dict(cur, separator=sep)
-        for k, v in zip(cur_sample.keys(), cur_sample.values()):
+        for k, v in zip(cur_sample.keys(), cur_sample.values(), strict=False):
             response.append(str(k) + "=" + str(v))
     return sep.join(response)
 
@@ -115,7 +115,7 @@ def training_params(x: torch.nn.Module):
     return sum(p.numel() for p in x.parameters() if p.requires_grad)
 
 
-def merge_in_order(a: Optional[Dict] = None, dv: Optional[Dict] = None, do_copy: bool = False):
+def merge_in_order(a: dict | None = None, dv: dict | None = None, do_copy: bool = False):
     """
     This function perfrorm `merge` in a Asymmetric way.
     Standard `a.update(dv)` doesn't change with argument swapping.
@@ -133,7 +133,7 @@ def merge_in_order(a: Optional[Dict] = None, dv: Optional[Dict] = None, do_copy:
     # {**{ key: value }, **default_values} On average it is faster!
     a = a or dict()
     dv = dv or dict()
-    if do_copy:
+    if do_copy:  # noqa: SIM108
         response = copy.deepcopy(a)
     else:
         response = a

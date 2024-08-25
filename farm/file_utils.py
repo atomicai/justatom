@@ -3,18 +3,16 @@ Utilities for working with the local dataset cache.
 This file is adapted from the AllenNLP library at https://github.com/allenai/allennlp
 Copyright by the AllenNLP authors.
 """
-from __future__ import absolute_import, division, print_function, unicode_literals
 
+import builtins
 import json
 import logging
 import os
-import tempfile
 import tarfile
+import tempfile
 import zipfile
-
 from functools import wraps
 from hashlib import sha256
-from io import open
 from pathlib import Path
 
 import boto3
@@ -30,11 +28,7 @@ try:
 
     torch_cache_home = Path(_get_torch_home())
 except ImportError:
-    torch_cache_home = Path(os.path.expanduser(
-        os.getenv(
-            "TORCH_HOME", Path(os.getenv("XDG_CACHE_HOME", "~/.cache")) / "torch"
-        )
-    ))
+    torch_cache_home = Path(os.path.expanduser(os.getenv("TORCH_HOME", Path(os.getenv("XDG_CACHE_HOME", "~/.cache")) / "torch")))
 default_cache_path = torch_cache_home / "farm"
 
 try:
@@ -51,7 +45,6 @@ except (AttributeError, ImportError):
 
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
-
 
 
 def url_to_filename(url, etag=None):
@@ -82,13 +75,13 @@ def filename_to_url(filename, cache_dir=None):
 
     cache_path = cache_dir / filename
     if not os.path.exists(cache_path):
-        raise EnvironmentError("file {} not found".format(cache_path))
+        raise OSError(f"file {cache_path} not found")
 
     meta_path = cache_path + ".json"
     if not os.path.exists(meta_path):
-        raise EnvironmentError("file {} not found".format(meta_path))
+        raise OSError(f"file {meta_path} not found")
 
-    with open(meta_path, encoding="utf-8") as meta_file:
+    with builtins.open(meta_path, encoding="utf-8") as meta_file:
         metadata = json.load(meta_file)
     url = metadata["url"]
     etag = metadata["etag"]
@@ -96,8 +89,9 @@ def filename_to_url(filename, cache_dir=None):
     return url, etag
 
 
-def download_from_s3(s3_url: str, cache_dir: str = None, access_key: str = None,
-                     secret_access_key: str = None, region_name: str = None):
+def download_from_s3(
+    s3_url: str, cache_dir: str = None, access_key: str = None, secret_access_key: str = None, region_name: str = None
+):
     """
     Download a "folder" from s3 to local. Skip already existing files. Useful for downloading all files of one model
     The default and recommended authentication follows boto3's trajectory of checking for ENV variables,
@@ -122,14 +116,10 @@ def download_from_s3(s3_url: str, cache_dir: str = None, access_key: str = None,
     if access_key or secret_access_key:
         assert secret_access_key and access_key, "You only supplied one of secret_access_key and access_key. We need both."
 
-        session = boto3.Session(
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_access_key,
-            region_name=region_name
-        )
-        s3_resource = session.resource('s3')
+        session = boto3.Session(aws_access_key_id=access_key, aws_secret_access_key=secret_access_key, region_name=region_name)
+        s3_resource = session.resource("s3")
     else:
-        s3_resource = boto3.resource('s3')
+        s3_resource = boto3.resource("s3")
 
     bucket_name, s3_path = split_s3_path(s3_url)
     bucket = s3_resource.Bucket(bucket_name)
@@ -153,11 +143,12 @@ def download_from_s3(s3_url: str, cache_dir: str = None, access_key: str = None,
                 bucket.download_file(obj.key, filepath)
     return path
 
+
 def split_s3_path(url):
     """Split a full s3 path into the bucket name and path."""
     parsed = urlparse(url)
     if not parsed.netloc or not parsed.path:
-        raise ValueError("bad s3 path {}".format(url))
+        raise ValueError(f"bad s3 path {url}")
     bucket_name = parsed.netloc
     s3_path = parsed.path
     # Remove '/' at beginning of path.
@@ -178,7 +169,7 @@ def s3_request(func):
             return func(url, *args, **kwargs)
         except ClientError as exc:
             if int(exc.response["Error"]["Code"]) == 404:
-                raise EnvironmentError("file {} not found".format(url))
+                raise OSError(f"file {url} not found")  # noqa: B904
             else:
                 raise
 
@@ -213,6 +204,7 @@ def http_get(url, temp_file, proxies=None):
             temp_file.write(chunk)
     progress.close()
 
+
 def fetch_archive_from_http(url, output_dir, proxies=None):
     """
     Fetch an archive (zip or tar.gz) from a url via http and extract content to an output directory.
@@ -232,9 +224,7 @@ def fetch_archive_from_http(url, output_dir, proxies=None):
 
     is_not_empty = len(list(Path(path).rglob("*"))) > 0
     if is_not_empty:
-        logger.info(
-            f"Found data stored in `{output_dir}`. Delete this first if you really want to fetch new data."
-        )
+        logger.info(f"Found data stored in `{output_dir}`. Delete this first if you really want to fetch new data.")
         return False
     else:
         logger.info(f"Fetching from {url} to `{output_dir}`")
@@ -254,6 +244,7 @@ def fetch_archive_from_http(url, output_dir, proxies=None):
             # temp_file gets deleted here
         return True
 
+
 def load_from_cache(pretrained_model_name_or_path, s3_dict, **kwargs):
     # Adjusted from HF Transformers to fit loading WordEmbeddings from deepsets s3
     # Load from URL or cache if already cached
@@ -265,35 +256,31 @@ def load_from_cache(pretrained_model_name_or_path, s3_dict, **kwargs):
     s3_file = s3_dict[pretrained_model_name_or_path]
     try:
         resolved_file = cached_path(
-                        s3_file,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        proxies=proxies,
-                        resume_download=resume_download,
-                    )
+            s3_file,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            proxies=proxies,
+            resume_download=resume_download,
+        )
 
         if resolved_file is None:
-            raise EnvironmentError
+            raise OSError
 
-    except EnvironmentError:
+    except OSError:
         if pretrained_model_name_or_path in s3_dict:
-            msg = "Couldn't reach server at '{}' to download data.".format(
-                s3_file
-            )
+            msg = f"Couldn't reach server at '{s3_file}' to download data."
         else:
             msg = (
-                "Model name '{}' was not found in model name list. "
-                "We assumed '{}' was a path, a model identifier, or url to a configuration file or "
-                "a directory containing such a file but couldn't find any such file at this path or url.".format(
-                    pretrained_model_name_or_path, s3_file,
-                )
+                f"Model name '{pretrained_model_name_or_path}' was not found in model name list. "
+                f"We assumed '{s3_file}' was a path, a model identifier, or url to a configuration file or "
+                "a directory containing such a file but couldn't find any such file at this path or url."
             )
-        raise EnvironmentError(msg)
+        raise OSError(msg)  # noqa: B904
 
     if resolved_file == s3_file:
-        logger.info("loading file {}".format(s3_file))
+        logger.info(f"loading file {s3_file}")
     else:
-        logger.info("loading file {} from cache at {}".format(s3_file, resolved_file))
+        logger.info(f"loading file {s3_file} from cache at {resolved_file}")
 
     return resolved_file
 
@@ -304,7 +291,7 @@ def read_set_from_file(filename):
     Expected file format is one item per line.
     """
     collection = set()
-    with open(filename, "r", encoding="utf-8") as file_:
+    with builtins.open(filename, encoding="utf-8") as file_:
         for line in file_:
             collection.add(line.rstrip())
     return collection
@@ -318,7 +305,7 @@ def get_file_extension(path, dot=True, lower=True):
 
 def read_config(path):
     if path:
-        with open(path) as json_data_file:
+        with builtins.open(path) as json_data_file:
             conf_args = json.load(json_data_file)
     else:
         raise ValueError("No config provided for classifier")
@@ -346,28 +333,21 @@ def unnestConfig(config):
     nestedVals = []
 
     for gk, gv in config.items():
-        if(gk != "task"):
+        if gk != "task":
             for k, v in gv.items():
                 if isinstance(v, list):
-                    if (
-                        k != "layer_dims"
-                    ):  # exclude layer dims, since it is already a list
+                    if k != "layer_dims":  # exclude layer dims, since it is already a list
                         nestedKeys.append([gk, k])
                         nestedVals.append(v)
                 elif isinstance(v, dict):
-                    logger.warning("Config too deep! Working on %s" %(str(v)))
+                    logger.warning("Config too deep! Working on %s" % (str(v)))  # noqa: UP031
 
     if len(nestedKeys) == 0:
         unnestedConfig = [config]
     else:
-        logger.info(
-            "Nested config at parameters: %s"
-            % (", ".join(".".join(x) for x in nestedKeys))
-        )
+        logger.info("Nested config at parameters: %s" % (", ".join(".".join(x) for x in nestedKeys)))  # noqa: UP031
         unnestedConfig = []
-        mesh = np.meshgrid(
-            *nestedVals
-        )  # get all combinations, each dimension corresponds to one parameter type
+        mesh = np.meshgrid(*nestedVals)  # get all combinations, each dimension corresponds to one parameter type
         # flatten mesh into shape: [num_parameters, num_combinations] so we can iterate in 2d over any paramter combinations
         mesh = [x.flatten() for x in mesh]
 
@@ -376,13 +356,11 @@ def unnestConfig(config):
             tempconfig = config.copy()
             for j, k in enumerate(nestedKeys):
                 if isinstance(k, str):
-                    tempconfig[k] = mesh[j][
-                        i
-                    ]  # get ith val of correct param value and overwrite original config
+                    tempconfig[k] = mesh[j][i]  # get ith val of correct param value and overwrite original config
                 elif len(k) == 2:
                     tempconfig[k[0]][k[1]] = mesh[j][i]  # set nested dictionary keys
                 else:
-                    logger.warning("Config too deep! Working on %s" %(str(k)))
+                    logger.warning("Config too deep! Working on %s" % (str(k)))  # noqa: UP031
             unnestedConfig.append(tempconfig)
 
     return unnestedConfig

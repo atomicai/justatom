@@ -1,19 +1,16 @@
-from typing import List, Any
-from abc import ABC
 import logging
-
+from abc import ABC
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-class Pred(ABC):
+
+class Pred(ABC):  # noqa: B024
     """
     Abstract base class for predictions of every task
     """
 
-    def __init__(self,
-                 id: str,
-                 prediction: List[Any],
-                 context: str):
+    def __init__(self, id: str, prediction: list[Any], context: str):
         self.id = id
         self.prediction = prediction
         self.context = context
@@ -27,18 +24,19 @@ class QACandidate:
     A single QA candidate answer.
     """
 
-    def __init__(self,
-                 answer_type: str,
-                 score: str,
-                 offset_answer_start: int,
-                 offset_answer_end: int,
-                 offset_unit: str,
-                 aggregation_level: str,
-                 probability: float=None,
-                 n_passages_in_doc: int=None,
-                 passage_id: str=None,
-                 confidence: float=None,
-                 ):
+    def __init__(
+        self,
+        answer_type: str,
+        score: str,
+        offset_answer_start: int,
+        offset_answer_end: int,
+        offset_unit: str,
+        aggregation_level: str,
+        probability: float = None,
+        n_passages_in_doc: int = None,
+        passage_id: str = None,
+        confidence: float = None,
+    ):
         """
         :param answer_type: The category that this answer falls into e.g. "no_answer", "yes", "no" or "span"
         :param score: The score representing the model's confidence of this answer
@@ -50,7 +48,7 @@ class QACandidate:
         :param n_passages_in_doc: Number of passages that make up the document
         :param passage_id: The id of the passage which contains this candidate answer
         :param confidence: The (calibrated) confidence score representing the model's predicted accuracy of the index of the start of the answer span
-        """
+        """  # noqa: E501
 
         # self.answer_type can be "no_answer", "yes", "no" or "span"
         self.answer_type = answer_type
@@ -98,22 +96,26 @@ class QACandidate:
         self._add_answer(pred_str)
 
     def _add_answer(self, string):
-        """ Set the answer string. This method will check that the answer given is valid given the start
-        and end indices that are stored in the object. """
+        """Set the answer string. This method will check that the answer given is valid given the start
+        and end indices that are stored in the object."""
         if string == "":
             self.answer = "no_answer"
             if self.offset_answer_start != 0 or self.offset_answer_end != 0:
-                logger.error(f"Both start and end offsets should be 0: \n"
-                             f"{self.offset_answer_start}, {self.offset_answer_end} with a no_answer. ")
+                logger.error(
+                    f"Both start and end offsets should be 0: \n"
+                    f"{self.offset_answer_start}, {self.offset_answer_end} with a no_answer. "
+                )
         else:
             self.answer = string
             if self.offset_answer_end - self.offset_answer_start <= 0:
-                logger.error(f"End offset comes before start offset: \n"
-                             f"({self.offset_answer_start}, {self.offset_answer_end}) with a span answer. ")
+                logger.error(
+                    f"End offset comes before start offset: \n"
+                    f"({self.offset_answer_start}, {self.offset_answer_end}) with a span answer. "
+                )
             elif self.offset_answer_end <= 0:
-                logger.error(f"Invalid end offset: \n"
-                             f"({self.offset_answer_start}, {self.offset_answer_end}) with a span answer. ")
-
+                logger.error(
+                    f"Invalid end offset: \n" f"({self.offset_answer_start}, {self.offset_answer_end}) with a span answer. "
+                )
 
     def _create_context_window(self, context_window_size, clear_text):
         """
@@ -125,7 +127,7 @@ class QACandidate:
         :param context_window_size: The size of the context window to be generated. Note that the window size may be increased if the answer is longer.
         :param clear_text: The text from which the answer is extracted
         :return:
-        """
+        """  # noqa: E501
         if self.offset_answer_start == 0 and self.offset_answer_end == 0:
             return "", 0, 0
         else:
@@ -148,10 +150,10 @@ class QACandidate:
             window_start_ch = max(0, window_start_ch)
             window_end_ch += overhang_start
             window_end_ch = min(len_text, window_end_ch)
-        window_str = clear_text[window_start_ch: window_end_ch]
+        window_str = clear_text[window_start_ch:window_end_ch]
         return window_str, window_start_ch, window_end_ch
 
-    def _span_to_string(self, token_offsets: List[int], clear_text: str):
+    def _span_to_string(self, token_offsets: list[int], clear_text: str):
         """
         Generates a string answer span using self.offset_answer_start and self.offset_answer_end. If the candidate
         is a no answer, an empty string is returned
@@ -184,12 +186,12 @@ class QACandidate:
 
         start_ch = int(token_offsets[start_t])
         # i.e. pointing at the END of the last token
-        if end_t == n_tokens:
+        if end_t == n_tokens:  # noqa: SIM108
             end_ch = len(clear_text)
         else:
             end_ch = token_offsets[end_t]
 
-        final_text = clear_text[start_ch: end_ch].strip()
+        final_text = clear_text[start_ch:end_ch].strip()
         end_ch = int(start_ch + len(final_text))
 
         return final_text, start_ch, end_ch
@@ -210,7 +212,7 @@ class QACandidate:
             self.offset_answer_support_end = self.offset_answer_end
 
     def to_doc_level(self, start, end):
-        """ Populate the start and end indices with document level indices. Changes aggregation level to 'document'"""
+        """Populate the start and end indices with document level indices. Changes aggregation level to 'document'"""
         self.offset_answer_start = start
         self.offset_answer_end = end
         self.aggregation_level = "document"
@@ -220,22 +222,24 @@ class QACandidate:
 
 
 class QAPred(Pred):
-    """ A set of QA predictions for a passage or a document. The candidates are stored in QAPred.prediction which is a
+    """A set of QA predictions for a passage or a document. The candidates are stored in QAPred.prediction which is a
     list of QACandidate objects. Also contains all attributes needed to convert the object into json format and also
     to create a context window for a UI
     """
 
-    def __init__(self,
-                 id: str,
-                 prediction: List[QACandidate],
-                 context: str,
-                 question: str,
-                 token_offsets: List[int],
-                 context_window_size: int,
-                 aggregation_level: str,
-                 no_answer_gap: float,
-                 ground_truth_answer: str = None,
-                 answer_types: List[str] = []):
+    def __init__(
+        self,
+        id: str,
+        prediction: list[QACandidate],
+        context: str,
+        question: str,
+        token_offsets: list[int],
+        context_window_size: int,
+        aggregation_level: str,
+        no_answer_gap: float,
+        ground_truth_answer: str = None,
+        answer_types: list[str] = [],  # noqa: B006
+    ):
         """
         :param id: The id of the passage or document
         :param prediction: A list of QACandidate objects for the given question and document
@@ -247,7 +251,7 @@ class QAPred(Pred):
         :param no_answer_gap: How much the QuestionAnsweringHead.no_ans_boost needs to change to turn a no_answer to a positive answer
         :param ground_truth_answer: Ground truth answers
         :param answer_types: List of answer_types supported by this task e.g. ["span", "yes_no", "no_answer"]
-        """
+        """  # noqa: E501
         super().__init__(id, prediction, context)
         self.question = question
         self.token_offsets = token_offsets
@@ -278,7 +282,7 @@ class QAPred(Pred):
                     "id": self.id,
                     "ground_truth": self.ground_truth_answer,
                     "answers": answers,
-                    "no_ans_gap": self.no_answer_gap, # Add no_ans_gap to current no_ans_boost for switching top prediction
+                    "no_ans_gap": self.no_answer_gap,  # Add no_ans_gap to current no_ans_boost for switching top prediction
                 }
             ],
         }
@@ -300,19 +304,21 @@ class QAPred(Pred):
 
         # iterate over the top_n predictions of the one document
         for qa_candidate in self.prediction:
-            if squad and qa_candidate.answer == "no_answer":
-                    answer_string = ""
+            if squad and qa_candidate.answer == "no_answer":  # noqa: SIM108
+                answer_string = ""
             else:
                 answer_string = qa_candidate.answer
-            curr = {"score": qa_candidate.score,
-                    "probability": None,
-                    "answer": answer_string,
-                    "offset_answer_start": qa_candidate.offset_answer_start,
-                    "offset_answer_end": qa_candidate.offset_answer_end,
-                    "context": qa_candidate.context_window,
-                    "offset_context_start": qa_candidate.offset_context_window_start,
-                    "offset_context_end": qa_candidate.offset_context_window_end,
-                    "document_id": ext_id}
+            curr = {
+                "score": qa_candidate.score,
+                "probability": None,
+                "answer": answer_string,
+                "offset_answer_start": qa_candidate.offset_answer_start,
+                "offset_answer_end": qa_candidate.offset_answer_end,
+                "context": qa_candidate.context_window,
+                "offset_context_start": qa_candidate.offset_context_window_start,
+                "offset_context_end": qa_candidate.offset_context_window_end,
+                "document_id": ext_id,
+            }
             ret.append(curr)
         return ret
 

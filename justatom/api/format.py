@@ -2,7 +2,6 @@ import copy
 import io
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Union
 
 import fire
 import polars as pl
@@ -27,7 +26,6 @@ This API point labels incoming .docx document correctly as long as it follows th
 
 
 class IState:
-
     def __init__(self, name: str = None):
         self.name = name
 
@@ -39,17 +37,11 @@ class IState:
 
     def observe(self, data: str):
         data = data.strip()
-        if (
-            data.startswith("Человек он благонадежный и обеспеченный")
-            or data.startswith("10")
-            or data.startswith("11")
-        ):
+        if data.startswith("Человек он благонадежный и обеспеченный") or data.startswith("10") or data.startswith("11"):
             print()
         _observable = data.strip().lower()
         if _observable.startswith("title:"):
-            return self.process(
-                data, prefix_to_remove="title:", state_to_move=TITLEState
-            )
+            return self.process(data, prefix_to_remove="title:", state_to_move=TITLEState)
         if _observable.startswith(
             (
                 "extractive:dialogue",
@@ -64,21 +56,13 @@ class IState:
         ):
             return self.process(data, prefix_to_remove="", state_to_move=TYPEState)
         elif _observable.startswith("query:"):
-            return self.process(
-                data, prefix_to_remove="query:", state_to_move=QUERYState
-            )
+            return self.process(data, prefix_to_remove="query:", state_to_move=QUERYState)
         elif _observable.startswith("context:"):
-            return self.process(
-                data, prefix_to_remove="context:", state_to_move=CONTEXTState
-            )
+            return self.process(data, prefix_to_remove="context:", state_to_move=CONTEXTState)
         elif _observable.startswith("answer:"):
-            return self.process(
-                data, prefix_to_remove="answer:", state_to_move=ANSWERState
-            )
+            return self.process(data, prefix_to_remove="answer:", state_to_move=ANSWERState)
         elif _observable.startswith("аnswer:"):
-            return self.process(
-                data, prefix_to_remove="аnswer:", state_to_move=ANSWERState
-            )
+            return self.process(data, prefix_to_remove="аnswer:", state_to_move=ANSWERState)
         elif maybe_number(_observable):  # `maybe_real`
             return self.process(data, prefix_to_remove="", state_to_move=ENUMState)
 
@@ -86,20 +70,12 @@ class IState:
         # To determine the exact
 
         if self.__class__.__name__ in ("QUERYState", "QUERYBufferState"):
-            return self.process(
-                data, prefix_to_remove="", state_to_move=QUERYBufferState
-            )
+            return self.process(data, prefix_to_remove="", state_to_move=QUERYBufferState)
         elif self.__class__.__name__ in ("CONTEXTState", "CONTEXTBufferState"):
-            return self.process(
-                data, prefix_to_remove="", state_to_move=CONTEXTBufferState
-            )
+            return self.process(data, prefix_to_remove="", state_to_move=CONTEXTBufferState)
         elif self.__class__.__name__ in ("ANSWERState", "ANSWERBufferState"):
-            return self.process(
-                data, prefix_to_remove="", state_to_move=ANSWERBufferState
-            )
-        raise Exception(
-            f"Couldn't react to the following [{data}] input given current state {self.__class__.__name__}"
-        )
+            return self.process(data, prefix_to_remove="", state_to_move=ANSWERBufferState)
+        raise Exception(f"Couldn't react to the following [{data}] input given current state {self.__class__.__name__}")
 
     @property
     def belongs_to(self):
@@ -120,21 +96,17 @@ class IState:
 
     def process(self, x, prefix_to_remove, state_to_move):
         result = x[len(prefix_to_remove) :].strip()
-        logger.info(
-            f"PROCESSING - NEW STATE [{state_to_move.__name__}] - on LINE {result}"
-        )
+        logger.info(f"PROCESSING - NEW STATE [{state_to_move.__name__}] - on LINE {result}")
         return result, state_to_move.__name__
 
 
 class STARTState(IState):
-
     def __init__(self):
         super().__init__(name=self.__class__.__name__)
         self.transitions = dict(TITLEState=TITLEState)
 
 
 class TITLEState(IState):
-
     # TITLEState is the starting state
 
     def __init__(self):
@@ -143,7 +115,6 @@ class TITLEState(IState):
 
 
 class ENUMState(IState):
-
     # ENUMState is the state you enter upon reading numbered order of the snippet
     # e.g. "22." => The twenty second example follows
     # e.g. "extractive:dialogue"
@@ -154,7 +125,6 @@ class ENUMState(IState):
 
 
 class TYPEState(IState):
-
     # TYPEState is the state you enter upon reading format line: <extractive> or <extractive:dialogue>
     # From this state the <query> should come next
 
@@ -164,21 +134,17 @@ class TYPEState(IState):
 
 
 class QUERYState(IState):
-
-    # QUERYState is the state you enter upon reading query line that follows pattern: <query: What are the rules of the hunger games?>
+    # QUERYState is the state you enter upon reading query line that follows pattern: <query: What are the rules of the hunger games?>  # noqa: E501
     # From this state you can move either
     # (1) directly to the context <context: In punishment for the uprising...>
     # (2) move to the continuation of the query if it's quite long => `QUERYBufferState`
 
     def __init__(self):
         super().__init__(name=self.__class__.__name__)
-        self.transitions = dict(
-            CONTEXTState=CONTEXTState, QUERYBufferState=QUERYBufferState
-        )
+        self.transitions = dict(CONTEXTState=CONTEXTState, QUERYBufferState=QUERYBufferState)
 
 
 class QUERYBufferState(IState):
-
     # QUERYBufferState is the optional state which means you may or may not enter it. Triggering case is upon reading the query line
     #  <query:What are the\n // QUERYState
     #  rules of the hunger games> // QUERYBufferState
@@ -187,9 +153,7 @@ class QUERYBufferState(IState):
 
     def __init__(self):
         super().__init__(name=self.__class__.__name__)
-        self.transitions = dict(
-            CONTEXTState=CONTEXTState, QUERYBufferState=QUERYBufferState
-        )
+        self.transitions = dict(CONTEXTState=CONTEXTState, QUERYBufferState=QUERYBufferState)
 
     @property
     def belongs_to(self):
@@ -201,21 +165,17 @@ class QUERYBufferState(IState):
 
 
 class CONTEXTState(IState):
-
-    # CONTEXTState is the state you enter upon reading context line that follows pattern: <context: The rules of the hunger games ...>
+    # CONTEXTState is the state you enter upon reading context line that follows pattern: <context: The rules of the hunger games ...>  # noqa: E501
     # From this state you can move either
     # (1) directly to the answer <answer: Twenty four tributes, male and female from each district>
     # (2) move to the continuation of the context if it's quite long => `BUFFERState`
 
     def __init__(self):
         super().__init__(name=self.__class__.__name__)
-        self.transitions = dict(
-            ANSWERState=ANSWERState, CONTEXTBufferState=CONTEXTBufferState
-        )
+        self.transitions = dict(ANSWERState=ANSWERState, CONTEXTBufferState=CONTEXTBufferState)
 
 
 class CONTEXTBufferState(IState):
-
     # CONTEXTBufferState is the optional state meaning you may or may not enter it. Triggering case is upon reading context line
     # <context:The rules of the\n // CONTEXTState
     # hunger games are simple. In punishment ... > // CONTEXTBufferState
@@ -224,9 +184,7 @@ class CONTEXTBufferState(IState):
 
     def __init__(self):
         super().__init__(name=self.__class__.__name__)
-        self.transitions = dict(
-            ANSWERState=ANSWERState, CONTEXTBufferState=CONTEXTBufferState
-        )
+        self.transitions = dict(ANSWERState=ANSWERState, CONTEXTBufferState=CONTEXTBufferState)
 
     @property
     def belongs_to(self):
@@ -246,13 +204,10 @@ class ANSWERState(IState):
 
     def __init__(self):
         super().__init__(name=self.__class__.__name__)
-        self.transitions = dict(
-            ENUMState=ENUMState, ANSWERBufferState=ANSWERBufferState
-        )
+        self.transitions = dict(ENUMState=ENUMState, ANSWERBufferState=ANSWERBufferState)
 
 
 class ANSWERBufferState(IState):
-
     # ANSWERBufferState is the optional state meaning you may or may not enter it. Triggering case is upon reading answer line
     # <answer: In punishment for the uprising, each of the twelve districts must provide one girl and one boy,\n // ANSWERState
     # called tributes, to participate. The 24 tributes will be imprisoned in a vast outdoor arena\n // ANSWERBUfferState
@@ -261,9 +216,7 @@ class ANSWERBufferState(IState):
 
     def __init__(self):
         super().__init__(name=self.__class__.__name__)
-        self.transitions = dict(
-            ENUMState=ENUMState, ANSWERBufferState=ANSWERBufferState
-        )
+        self.transitions = dict(ENUMState=ENUMState, ANSWERBufferState=ANSWERBufferState)
 
     @property
     def belongs_to(self) -> str:
@@ -278,21 +231,17 @@ def make_one_full_state_chunk():
     pass
 
 
-def make_one_full_state_chunk():
+def make_one_full_state_chunk():  # noqa: F811
     pass
 
 
-def check_and_flush(
-    cur_state: IState, arr: List[str], sample: Dict, schema_mapping: Dict
-):
+def check_and_flush(cur_state: IState, arr: list[str], sample: dict, schema_mapping: dict):
     """
     This is triggered upon next state followed by any of `state_i`: `state_i`.belongs_to == "BUFFER"
     """
     if cur_state.derives_as is None:
         return sample
-    assert (
-        len(arr) > 0
-    ), f"The buffer is empty even though you've entered [BUFFER] as [{cur_state}]"
+    assert len(arr) > 0, f"The buffer is empty even though you've entered [BUFFER] as [{cur_state}]"
 
     sch_key = schema_mapping[cur_state.group]
     value = "\n".join(arr)
@@ -322,9 +271,7 @@ def main(one_iterator):
         formatted_data, next_state = cur_state.next(data=chunk)
         if next_state.belongs_to == "BUFFER":
             if len(cur_state_buffer) <= 0:
-                cur_state_buffer.append(
-                    cur_state_sample[state_to_sample[str(cur_state)]]
-                )
+                cur_state_buffer.append(cur_state_sample[state_to_sample[str(cur_state)]])
             cur_state_buffer.append(formatted_data)
 
         if next_state.belongs_to == "QUERYState":
@@ -332,19 +279,8 @@ def main(one_iterator):
             key, data = state_to_sample[str(next_state)], formatted_data
             cur_state_sample[key] = data
             #
-            cur_state_sample = check_and_flush(
-                cur_state, cur_state_buffer, cur_state_sample, state_to_sample
-            )
-        elif next_state.belongs_to == "CONTEXTState":
-            key, data = state_to_sample[str(next_state)], formatted_data
-            cur_state_sample[key] = data
-            cur_state_sample = check_and_flush(
-                cur_state,
-                arr=cur_state_buffer,
-                sample=cur_state_sample,
-                schema_mapping=state_to_sample,
-            )
-        elif next_state.belongs_to == "ANSWERState":
+            cur_state_sample = check_and_flush(cur_state, cur_state_buffer, cur_state_sample, state_to_sample)
+        elif next_state.belongs_to == "CONTEXTState" or next_state.belongs_to == "ANSWERState":
             key, data = state_to_sample[str(next_state)], formatted_data
             cur_state_sample[key] = data
             cur_state_sample = check_and_flush(
@@ -373,9 +309,7 @@ def main(one_iterator):
                 # `cur_state_sample` had only `title` so we skip
                 samples.append(copy.deepcopy(cur_state_sample))
             else:
-                logger.info(
-                    f"Incomplete sample yet, present fields are {','.join(cur_state_sample.keys())}"
-                )
+                logger.info(f"Incomplete sample yet, present fields are {','.join(cur_state_sample.keys())}")
             logger.info(f"LOCDOC - STEP {len(samples)}")
         elif next_state.belongs_to == "TYPEState":
             key, data = state_to_sample[str(next_state)], formatted_data
@@ -397,36 +331,32 @@ def main(one_iterator):
 def io_wrapper_txt(fp, chunk_size: int = 10_000_000, sep: str = "\n"):
     fp = Path(fp)
     if fp.suffix != ".txt":
-        message = (
-            f"Calling `io_wrapper_txt` on a file ending with [{fp.suffix}] suffix."
-        )
+        message = f"Calling `io_wrapper_txt` on a file ending with [{fp.suffix}] suffix."
         logger.error(message)
         raise ValueError(message)
     with open(fp) as fin:
-        for chunk in stl.chunkify(fin, chunksize=chunk_size, sep=sep):
+        for chunk in stl.chunkify(fin, chunksize=chunk_size, sep=sep):  # noqa: UP028
             yield chunk
 
 
 def io_wrapper_docx(fp, chunk_size: int = 10_000_000, sep: str = "\n"):
     fp = Path(fp)
     if fp.suffix != ".docx":
-        message = (
-            f"Calling `io_wrapper_docx` on a file ending with [{fp.suffix}] suffix."
-        )
+        message = f"Calling `io_wrapper_docx` on a file ending with [{fp.suffix}] suffix."
         logger.error(message)
         raise ValueError(message)
     try:
         data = docx2txt.process(fp)
-    except:
+    except:  # noqa: E722
         message = f"Error reading [{fp}] docx file."
         logger.error(message)
-        raise ValueError(message)
+        raise ValueError(message)  # noqa: B904
     else:
-        for chunk in stl.chunkify(io.StringIO(data), chunksize=chunk_size, sep=sep):
+        for chunk in stl.chunkify(io.StringIO(data), chunksize=chunk_size, sep=sep):  # noqa: UP028
             yield chunk
 
 
-def ignite_io_loaders(fpaths: List[Union[str, Path]]) -> stl.NIterator:
+def ignite_io_loaders(fpaths: list[str | Path]) -> stl.NIterator:
     iterators = []
     for fpath in fpaths:
         fp = Path(fpath)
@@ -442,8 +372,8 @@ def ignite_io_loaders(fpaths: List[Union[str, Path]]) -> stl.NIterator:
 
 def parse(
     filepath_or_dir,
-    extensions: Optional[List[str]] = None,
-    out_path: Optional[str] = None,
+    extensions: list[str] | None = None,
+    out_path: str | None = None,
 ):
     AVAILABLE_EXTENSIONS = [".docx", ".txt"]
     fpath_or_dir = Path(filepath_or_dir)
@@ -472,11 +402,7 @@ def parse(
     pl_wrapper = pl.from_dicts(samples)
     logger.info(f"There are {pl_wrapper.shape[0]} samples")
 
-    out_path = (
-        Path(os.getcwd()) / ".data" / "outputs" / f"{fpath_or_dir.stem}.csv"
-        if out_path is None
-        else Path(out_path)
-    )
+    out_path = Path(os.getcwd()) / ".data" / "outputs" / f"{fpath_or_dir.stem}.csv" if out_path is None else Path(out_path)
 
     if out_path.suffix != ".csv":
         _wrong_suffix = out_path.suffix

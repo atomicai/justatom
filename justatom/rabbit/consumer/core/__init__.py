@@ -1,1 +1,1 @@
-from .consumer import Consumer
+from .consumer import Consumer  # noqa: F401

@@ -1,5 +1,4 @@
 from math import ceil
-from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -13,8 +12,8 @@ class NamedDataLoader(DataLoader):
         self,
         dataset: Dataset,
         batch_size: int,
-        sampler: Optional[Sampler] = None,
-        tensor_names: Optional[List[str]] = None,
+        sampler: Sampler | None = None,
+        tensor_names: list[str] | None = None,
         num_workers: int = 0,
         pin_memory: bool = False,
     ):
@@ -35,7 +34,7 @@ class NamedDataLoader(DataLoader):
             A custom collate function that formats the batch as a dictionary where the key is
             the name of the tensor and the value is the tensor itself
             """
-            if type(dataset).__name__ == "_StreamingDataSet":
+            if type(dataset).__name__ == "_StreamingDataSet":  # noqa: SIM108
                 _tensor_names = dataset.tensor_names
             else:
                 _tensor_names = tensor_names
@@ -53,7 +52,7 @@ class NamedDataLoader(DataLoader):
 
             ret = {name: [] for name in tensor_names}
             for example in batch:
-                for name, tensor in zip(_tensor_names, example):
+                for name, tensor in zip(_tensor_names, example, strict=False):
                     # each example may have a different number of answers/labels,
                     # so we need to pad the corresponding tensors to the max number of labels
                     if name == "labels" and tensor.ndim > 0:
@@ -92,7 +91,7 @@ class NamedDataLoader(DataLoader):
         """
         max_num_labels = 0
         for example in batch:
-            for name, tensor in zip(tensor_names, example):
+            for name, tensor in zip(tensor_names, example, strict=False):
                 if name == "labels" and tensor.ndim > 0:
                     max_num_labels = max(max_num_labels, tensor.size(0))
         return max_num_labels

@@ -1,7 +1,7 @@
 import abc
 import inspect
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
 
 import simplejson as json
 import torch
@@ -42,7 +42,6 @@ def ignite_tensor_features(features):
 
 
 class IProcessor(abc.ABC):
-
     subclasses = {}
 
     def __init_subclass__(cls, **kwargs):
@@ -52,8 +51,8 @@ class IProcessor(abc.ABC):
     @abc.abstractmethod
     def dataset_from_dicts(
         self,
-        dicts: List[Dict],
-        indices: Optional[List[int]] = None,
+        dicts: list[dict],
+        indices: list[int] | None = None,
         return_baskets: bool = False,
         debug: bool = False,
     ):
@@ -167,8 +166,8 @@ class IProcessor(abc.ABC):
                 config[key] = value
         return config
 
-    def _create_dataset(self, baskets: List[SampleBasket]):
-        features_flat: List = []
+    def _create_dataset(self, baskets: list[SampleBasket]):
+        features_flat: list = []
         basket_to_remove = []
         for basket in baskets:
             if self._check_sample_features(basket):

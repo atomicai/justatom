@@ -1,23 +1,23 @@
 import logging
-import sys
-import torch
-from pathlib import Path
-from tqdm import tqdm
-import numpy
 import shutil
-import dill
+import sys
+from pathlib import Path
 
-from farm.utils import WANDBLogger as MlLogger
-from farm.utils import GracefulKiller, set_all_seeds
+import dill
+import numpy
+import torch
+from tqdm import tqdm
+
 from farm.eval import Evaluator
-from farm.data_handler.data_silo import DataSilo
-from farm.visual.ascii.images import GROWING_TREE
 from farm.modeling.adaptive_model import AdaptiveModel
-from farm.modeling.biadaptive_model import BiAdaptiveModel
 from farm.modeling.optimization import get_scheduler
+from farm.utils import GracefulKiller
+from farm.utils import WANDBLogger as MlLogger
+from farm.visual.ascii.images import GROWING_TREE
 
 try:
     from apex import amp
+
     AMP_AVAILABLE = True
 except ImportError:
     AMP_AVAILABLE = False
@@ -32,14 +32,14 @@ class EarlyStopping:
     """
 
     def __init__(
-            self,
-            head=0,
-            metric="loss",
-            save_dir=None,
-            mode="min",
-            patience=0,
-            min_delta=0.001,
-            min_evals=0,
+        self,
+        head=0,
+        metric="loss",
+        save_dir=None,
+        mode="min",
+        patience=0,
+        min_delta=0.001,
+        min_evals=0,
     ):
         """
         :param head: the prediction head referenced by the metric.
@@ -65,9 +65,9 @@ class EarlyStopping:
         self.eval_values = []  # for more complex modes
         self.n_since_best = None
         if mode == "min":
-            self.best_so_far = 1.0E99
+            self.best_so_far = 1.0e99
         elif mode == "max":
-            self.best_so_far = -1.0E99
+            self.best_so_far = -1.0e99
         else:
             raise Exception("Mode must be 'min' or 'max'")
 
@@ -81,7 +81,7 @@ class EarlyStopping:
                  and if the current model should get saved and the evaluation value used.
         """
 
-        if isinstance(self.metric, str):
+        if isinstance(self.metric, str):  # noqa: SIM108
             eval_value = eval_result[self.head][self.metric]
         else:
             eval_value = self.metric(eval_result)
@@ -89,7 +89,7 @@ class EarlyStopping:
         stopprocessing, savemodel = False, False
         if len(self.eval_values) <= self.min_evals:
             return stopprocessing, savemodel, eval_value
-        if self.mode == "min":
+        if self.mode == "min":  # noqa: SIM108
             delta = self.best_so_far - eval_value
         else:
             delta = eval_value - self.best_so_far
@@ -135,7 +135,7 @@ class Trainer:
         global_step=0,
         evaluator_test=True,
         disable_tqdm=False,
-        max_grad_norm=1.0
+        max_grad_norm=1.0,
     ):
         """
         :param optimizer: An optimizer object that determines the learning strategy to be used during training
@@ -214,9 +214,11 @@ class Trainer:
         self.test_result = None
 
         if use_amp and not AMP_AVAILABLE:
-            raise ImportError(f'Got use_amp = {use_amp}, but cannot find apex. '
-                              'Please install Apex if you want to make use of automatic mixed precision. '
-                              'https://github.com/NVIDIA/apex')
+            raise ImportError(
+                f"Got use_amp = {use_amp}, but cannot find apex. "
+                "Please install Apex if you want to make use of automatic mixed precision. "
+                "https://github.com/NVIDIA/apex"
+            )
         self.checkpoint_on_sigterm = checkpoint_on_sigterm
         if checkpoint_on_sigterm:
             self.sigterm_handler = GracefulKiller()
@@ -252,8 +254,10 @@ class Trainer:
         self.model.connect_heads_with_processor(self.data_silo.processor.tasks, require_labels=True)
         # Check that the tokenizer(s) fits the language model(s)
         if hasattr(self.model, "language_model2"):
-            self.model.verify_vocab_size(vocab_size1=len(self.data_silo.processor.query_tokenizer),
-                                         vocab_size2=len(self.data_silo.processor.passage_tokenizer))
+            self.model.verify_vocab_size(
+                vocab_size1=len(self.data_silo.processor.query_tokenizer),
+                vocab_size2=len(self.data_silo.processor.passage_tokenizer),
+            )
         else:
             self.model.verify_vocab_size(vocab_size=len(self.data_silo.processor.tokenizer))
         self.model.train()
@@ -276,8 +280,8 @@ class Trainer:
                 if resume_from_step and step <= resume_from_step:
                     # TODO: Improve skipping for StreamingDataSilo
                     # The seeds before and within the loop are currently needed, if you need full reproducibility
-                    # of runs with vs. without checkpointing using StreamingDataSilo. Reason: While skipping steps in StreamingDataSilo,
-                    # we update the state of the random number generator (e.g. due to masking words), which can impact the model behaviour (e.g. dropout)
+                    # of runs with vs. without checkpointing using StreamingDataSilo. Reason: While skipping steps in StreamingDataSilo,  # noqa: E501
+                    # we update the state of the random number generator (e.g. due to masking words), which can impact the model behaviour (e.g. dropout)  # noqa: E501
                     if step % 10000 == 0:
                         logger.info(f"Skipping {step} out of {resume_from_step} steps ...")
                     if resume_from_step == step:
@@ -289,23 +293,28 @@ class Trainer:
                 progress_bar.set_description(f"Train epoch {epoch}/{self.epochs-1} (Cur. train loss: {loss:.4f})")
 
                 # Only for distributed training: we need to ensure that all ranks still have a batch left for training
-                if self.local_rank != -1:
+                if self.local_rank != -1:  # noqa: SIM102
                     if not self._all_ranks_have_data(has_data=1, step=step):
                         early_break = True
                         break
 
                 # Perform  evaluation
-                if self.evaluate_every != 0 \
-                        and self.global_step % self.evaluate_every == 0 \
-                        and self.global_step != 0\
-                        and self.local_rank in [0,-1]:
+                if (
+                    self.evaluate_every != 0
+                    and self.global_step % self.evaluate_every == 0
+                    and self.global_step != 0
+                    and self.local_rank in [0, -1]
+                ):
                     # When using StreamingDataSilo, each evaluation creates a new instance of
                     # dev_data_loader. In cases like training from scratch, this could cause
                     # some variance across evaluators due to the randomness in word masking.
                     dev_data_loader = self.data_silo.get_data_loader("dev")
                     if dev_data_loader is not None:
                         evaluator_dev = Evaluator(
-                            data_loader=dev_data_loader, tasks=self.data_silo.processor.tasks, device=self.device, report=self.eval_report
+                            data_loader=dev_data_loader,
+                            tasks=self.data_silo.processor.tasks,
+                            device=self.device,
+                            report=self.eval_report,
                         )
                         evalnr += 1
                         result = evaluator_dev.eval(self.model)
@@ -313,17 +322,15 @@ class Trainer:
                         if self.early_stopping:
                             do_stopping, save_model, eval_value = self.early_stopping.check_stopping(result)
                             if save_model:
-                                logger.info(
-                                    "Saving current best model to {}, eval={}".format(
-                                        self.early_stopping.save_dir, eval_value))
+                                logger.info(f"Saving current best model to {self.early_stopping.save_dir}, eval={eval_value}")
                                 self.model.save(self.early_stopping.save_dir)
                                 self.data_silo.processor.save(self.early_stopping.save_dir)
                             if do_stopping:
                                 # log the stopping
-                                logger.info("STOPPING EARLY AT EPOCH {}, STEP {}, EVALUATION {}".format(epoch, step, evalnr))
+                                logger.info(f"STOPPING EARLY AT EPOCH {epoch}, STEP {step}, EVALUATION {evalnr}")
                 if do_stopping:
                     break
-                
+
                 # Move batch of samples to device
                 batch = {key: batch[key].to(self.device) for key in batch}
                 # Forward & backward pass through model
@@ -359,7 +366,7 @@ class Trainer:
 
         # With early stopping we want to restore the best model
         if self.early_stopping and self.early_stopping.save_dir:
-            logger.info("Restoring best model so far from {}".format(self.early_stopping.save_dir))
+            logger.info(f"Restoring best model so far from {self.early_stopping.save_dir}")
             lm_name = self.model.language_model.name
             self.model = AdaptiveModel.load(self.early_stopping.save_dir, self.device, lm_name=lm_name)
             self.model.connect_heads_with_processor(self.data_silo.processor.tasks, require_labels=True)
@@ -368,24 +375,21 @@ class Trainer:
         if self.evaluator_test and self.local_rank in [0, -1]:
             test_data_loader = self.data_silo.get_data_loader("test")
             if test_data_loader is not None:
-                evaluator_test = Evaluator(
-                    data_loader=test_data_loader, tasks=self.data_silo.processor.tasks, device=self.device
-                )
+                evaluator_test = Evaluator(data_loader=test_data_loader, tasks=self.data_silo.processor.tasks, device=self.device)
                 self.test_result = evaluator_test.eval(self.model)
                 evaluator_test.log_results(self.test_result, "Test", self.global_step)
         return self.model
 
     def backward_propagate(self, loss, step):
         loss = self.adjust_loss(loss)
-        if self.global_step % self.log_loss_every == 0 and self.local_rank in [-1, 0]:
+        if self.global_step % self.log_loss_every == 0 and self.local_rank in [-1, 0]:  # noqa: SIM102
             if self.local_rank in [-1, 0]:
                 MlLogger.log_metrics(
                     {"Train_loss_total": float(loss.detach().cpu().numpy())},
                     step=self.global_step,
                 )
                 if self.log_learning_rate:
-                    MlLogger.log_metrics({"learning_rate": self.lr_schedule.get_last_lr()[0]},
-                                         step=self.global_step)
+                    MlLogger.log_metrics({"learning_rate": self.lr_schedule.get_last_lr()[0]}, step=self.global_step)
         if self.use_amp:
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                 scaled_loss.backward()
@@ -415,8 +419,9 @@ class Trainer:
         MlLogger.log_params(params)
 
     @classmethod
-    def create_or_load_checkpoint(cls, data_silo, checkpoint_root_dir, model, optimizer,
-                                  local_rank=-1, resume_from_checkpoint="latest", **kwargs):
+    def create_or_load_checkpoint(
+        cls, data_silo, checkpoint_root_dir, model, optimizer, local_rank=-1, resume_from_checkpoint="latest", **kwargs
+    ):
         """
         Try loading a saved Trainer checkpoint. If no checkpoint found, it creates a new instance of Trainer.
 
@@ -430,26 +435,33 @@ class Trainer:
         :type resume_from_checkpoint: str
         """
         checkpoint_to_load = None
-        if checkpoint_root_dir:
+        if checkpoint_root_dir:  # noqa: SIM102
             if checkpoint_root_dir.exists():
-               if resume_from_checkpoint == "latest":
-                   saved_checkpoints = cls._get_checkpoints(checkpoint_root_dir)
-                   if saved_checkpoints:
-                       checkpoint_to_load = saved_checkpoints[0]  # latest checkpoint
-                   else:
-                       checkpoint_to_load = None
-               else:
-                   checkpoint_to_load = checkpoint_root_dir / resume_from_checkpoint
+                if resume_from_checkpoint == "latest":
+                    saved_checkpoints = cls._get_checkpoints(checkpoint_root_dir)
+                    if saved_checkpoints:  # noqa: SIM108
+                        checkpoint_to_load = saved_checkpoints[0]  # latest checkpoint
+                    else:
+                        checkpoint_to_load = None
+                else:
+                    checkpoint_to_load = checkpoint_root_dir / resume_from_checkpoint
 
         if checkpoint_to_load:
-            #TODO load empty model class from config instead of passing here?
-            trainer = cls._load_checkpoint(path=checkpoint_to_load, data_silo=data_silo,
-                                           model=model, optimizer=optimizer, local_rank=local_rank)
+            # TODO load empty model class from config instead of passing here?
+            trainer = cls._load_checkpoint(
+                path=checkpoint_to_load, data_silo=data_silo, model=model, optimizer=optimizer, local_rank=local_rank
+            )
             logging.info(f"Resuming training from the train checkpoint at {checkpoint_to_load} ...")
         else:
-            logging.info(f"No train checkpoints found. Starting a new training ...")
-            trainer = Trainer(data_silo=data_silo, model=model, optimizer=optimizer, local_rank=local_rank,
-                              checkpoint_root_dir=checkpoint_root_dir, **kwargs)
+            logging.info("No train checkpoints found. Starting a new training ...")
+            trainer = Trainer(
+                data_silo=data_silo,
+                model=model,
+                optimizer=optimizer,
+                local_rank=local_rank,
+                checkpoint_root_dir=checkpoint_root_dir,
+                **kwargs,
+            )
         return trainer
 
     @classmethod
@@ -473,7 +485,7 @@ class Trainer:
             map_location = None
         else:
             device = torch.device(f"cuda:{local_rank}")
-            map_location = {'cuda:0': f'cuda:{local_rank}'}
+            map_location = {"cuda:0": f"cuda:{local_rank}"}
 
         trainer_checkpoint = torch.load(path / "trainer", map_location=map_location)
         trainer_state_dict = trainer_checkpoint["trainer_state"]
@@ -499,13 +511,7 @@ class Trainer:
         scheduler = get_scheduler(optimizer, scheduler_opts)
         scheduler.load_state_dict(scheduler_state_dict)
 
-        trainer = Trainer(
-            data_silo=data_silo,
-            model=model,
-            optimizer=optimizer,
-            lr_schedule=scheduler,
-            **trainer_state_dict
-        )
+        trainer = Trainer(data_silo=data_silo, model=model, optimizer=optimizer, lr_schedule=scheduler, **trainer_state_dict)
 
         logger.info(f"Loaded a train checkpoint from {path}")
         return trainer
@@ -519,12 +525,14 @@ class Trainer:
 
         checkpoints_with_epoch_and_step = []  # list of tuple(checkpoint_dir, epoch, step)
         for d in dirs:
-            epoch, step = [int(s) for s in str(d).split("_") if s.isdigit()]
+            epoch, step = (int(s) for s in str(d).split("_") if s.isdigit())
             checkpoints_with_epoch_and_step.append((d, epoch, step))
 
-        sorted_checkpoints_with_epoch_and_step = sorted(checkpoints_with_epoch_and_step,
-                                                        key=lambda tup: (tup[1], tup[2]),  # sort by epoch and step
-                                                        reverse=True)
+        sorted_checkpoints_with_epoch_and_step = sorted(
+            checkpoints_with_epoch_and_step,
+            key=lambda tup: (tup[1], tup[2]),  # sort by epoch and step
+            reverse=True,
+        )
         sorted_checkpoints = [tup[0] for tup in sorted_checkpoints_with_epoch_and_step]
 
         return sorted_checkpoints
@@ -573,7 +581,7 @@ class Trainer:
 
         saved_checkpoints = self._get_checkpoints(self.checkpoint_root_dir)
         if len(saved_checkpoints) > self.checkpoints_to_keep:
-            for cp in saved_checkpoints[self.checkpoints_to_keep:]:
+            for cp in saved_checkpoints[self.checkpoints_to_keep :]:
                 shutil.rmtree(cp)
 
         logger.info(f"Saved a training checkpoint after {checkpoint_name}")
@@ -599,7 +607,7 @@ class Trainer:
             "global_step": self.global_step,
             "log_learning_rate": self.log_learning_rate,
             "log_loss_every": self.log_loss_every,
-            "disable_tqdm": self.disable_tqdm
+            "disable_tqdm": self.disable_tqdm,
         }
 
         return state_dict
@@ -615,7 +623,7 @@ class Trainer:
         :return: bool, whether all ranks have training data left
         """
 
-        if has_data:
+        if has_data:  # noqa: SIM108
             ranks_with_data = torch.ones(1).to(self.device)
         else:
             ranks_with_data = torch.zeros(1).to(self.device)
@@ -626,7 +634,8 @@ class Trainer:
             if step is not None:
                 logger.info(
                     f"Stopping epoch {self.from_epoch} at step {step} for rank {self.local_rank} since at least one other rank "
-                    f"(~ one GPU) in distributed training doesn't have any more batches... ")
+                    f"(~ one GPU) in distributed training doesn't have any more batches... "
+                )
             return False
         else:
             return True

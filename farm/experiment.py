@@ -2,16 +2,16 @@ import logging
 from pathlib import Path
 
 from farm.data_handler.data_silo import DataSilo
+from farm.data_handler.processor import Processor
+from farm.file_utils import read_config, unnestConfig
 from farm.modeling.adaptive_model import AdaptiveModel
 from farm.modeling.language_model import LanguageModel
 from farm.modeling.optimization import initialize_optimizer
 from farm.modeling.prediction_head import PredictionHead
 from farm.modeling.tokenization import Tokenizer
-from farm.data_handler.processor import Processor
-from farm.train import Trainer, EarlyStopping
-from farm.utils import set_all_seeds, initialize_device_settings
+from farm.train import EarlyStopping, Trainer
 from farm.utils import MLFlowLogger as MlLogger
-from farm.file_utils import read_config, unnestConfig
+from farm.utils import initialize_device_settings, set_all_seeds
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +51,12 @@ def run_experiment(args):
         use_amp=args.general.use_amp,
     )
 
-    args.parameter.batch_size = int(
-        args.parameter.batch_size // args.parameter.gradient_accumulation_steps
-    )
+    args.parameter.batch_size = int(args.parameter.batch_size // args.parameter.gradient_accumulation_steps)
 
     set_all_seeds(args.general.seed)
 
     # Prepare Data
-    tokenizer = Tokenizer.load(
-        args.parameter.model, do_lower_case=args.parameter.lower_case
-    )
+    tokenizer = Tokenizer.load(args.parameter.model, do_lower_case=args.parameter.lower_case)
 
     processor = Processor.load(
         tokenizer=tokenizer,
@@ -79,7 +75,9 @@ def run_experiment(args):
     if args.parameter.balance_classes:
         task_names = list(processor.tasks.keys())
         if len(task_names) > 1:
-            raise NotImplementedError(f"Balancing classes is currently not supported for multitask experiments. Got tasks:  {task_names} ")
+            raise NotImplementedError(
+                f"Balancing classes is currently not supported for multitask experiments. Got tasks:  {task_names} "
+            )
         class_weights = data_silo.calculate_class_weights(task_name=task_names[0])
 
     model = get_adaptive_model(
@@ -104,12 +102,10 @@ def run_experiment(args):
         n_batches=len(data_silo.loaders["train"]),
         grad_acc_steps=args.parameter.gradient_accumulation_steps,
         n_epochs=args.parameter.epochs,
-        device=device
+        device=device,
     )
 
-    model_name = (
-        f"{model.language_model.name}-{model.language_model.language}-{args.task.name}"
-    )
+    model_name = f"{model.language_model.name}-{model.language_model.language}-{args.task.name}"
 
     # An early stopping instance can be used to save the model that performs best on the dev set
     # according to some metric and stop training when no improvement is happening for some iterations.
@@ -118,7 +114,7 @@ def run_experiment(args):
             metric=args.task.metric,
             mode=args.early_stopping.mode,
             save_dir=Path(f"{args.general.output_dir}/{model_name}_early_stopping"),  # where to save the best model
-            patience=args.early_stopping.patience    # number of evaluations to wait for improvement before terminating the training
+            patience=args.early_stopping.patience,  # number of evaluations to wait for improvement before terminating the training
         )
     else:
         early_stopping = None
@@ -135,7 +131,7 @@ def run_experiment(args):
         lr_schedule=lr_schedule,
         evaluate_every=args.logging.eval_every,
         device=device,
-        early_stopping=early_stopping
+        early_stopping=early_stopping,
     )
 
     model = trainer.train()
@@ -144,6 +140,7 @@ def run_experiment(args):
     model.save(Path(f"{args.general.output_dir}/{model_name}"))
 
     ml_logger.end_run()
+
 
 def get_adaptive_model(
     lm_output_type,
@@ -183,9 +180,7 @@ def validate_args(args):
 
     if args.parameter.gradient_accumulation_steps < 1:
         raise ValueError(
-            "Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
-                args.parameter.gradient_accumulation_steps
-            )
+            f"Invalid gradient_accumulation_steps parameter: {args.parameter.gradient_accumulation_steps}, should be >= 1"
         )
 
 
