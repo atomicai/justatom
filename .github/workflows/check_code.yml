@@ -28,7 +28,7 @@ jobs:
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
     - name: Lint with ruff
       run:
-        ruff check --fix
+        ruff check
     - name: Test with pytest
       if: always()
       run: |
