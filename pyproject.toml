@@ -20,7 +20,7 @@ indent-width = 4
 [tool.ruff.lint]
 select = [
     # pycodestyle
-    "E",
+    "E", "W1", "W2",
     # Pyflakes
     "F",
     # pyupgrade
