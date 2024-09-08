@@ -25,24 +25,6 @@ from justatom.tooling.stl import merge_in_order
 
 # See https://weaviate.io/developers/weaviate/config-refs/datatypes#:~:text=DataType%3A%20object%20%E2%80%8B&text=The%20object%20type%20allows%20you,be%20nested%20to%20any%20depth.&text=As%20of%201.22%20%2C%20object%20and,not%20indexed%20and%20not%20vectorized.
 
-# {
-#     "class": "Person",
-#     "properties": [
-#         {
-#             "dataType": ["text"],
-#             "name": "last_name",
-#         },
-#         {
-#             "dataType": ["object"],
-#             "name": "address",
-#             "nestedProperties": [
-#                 {"dataType": ["text"], "name": "street"},
-#                 {"dataType": ["text"], "name": "city"}
-#             ],
-#         }
-#     ],
-# }
-
 
 DOCUMENT_COLLECTION_PROPERTIES = [
     {"name": "_original_id", "dataType": ["text"]},
@@ -51,6 +33,7 @@ DOCUMENT_COLLECTION_PROPERTIES = [
     {"name": "blob_data", "dataType": ["blob"]},
     {"name": "blob_mime_type", "dataType": ["text"]},
     {"name": "score", "dataType": ["number"]},
+    {"name": "keywords", "dataType": ["text[]"]},
     {
         "name": "meta",
         "dataType": ["object"],
@@ -317,6 +300,12 @@ class WeaviateDocStore:
 
         return Document.from_dict(document_data)
 
+    def _check_keywords(self, docs: list[Document], keywords: list[str] | None = None):
+        response = docs
+        if keywords:
+            response = [doc for doc in response if any([kw in doc.keywords for kw in keywords])]
+        return response
+
     def _query(self) -> list[dict[str, Any]]:
         # properties = [p.name for p in self._collection.config.get().properties]
         try:
@@ -493,6 +482,7 @@ class WeaviateDocStore:
         query: str,
         policy: SearchPolicy | None = SearchPolicy.BM25,
         filters: dict[str, Any] | None = None,
+        keywords: list | None = None,
         top_k: int | None = None,
         include_vector: bool | None = False,
     ) -> list[Document]:
@@ -511,8 +501,9 @@ class WeaviateDocStore:
             msg = f"You specified {str(policy)} that is not compatable with [search_by_keywords]. Only [BM25] is avalaible"
             logger.error(msg)
             raise ValueError(msg)
-
-        return [self._to_document(doc) for doc in result.objects]
+        response = [self._to_document(doc) for doc in result.objects]
+        response = self._check_keywords(response, keywords=keywords)
+        return response
 
     def search(
         self,
@@ -521,6 +512,7 @@ class WeaviateDocStore:
         rank_policy: str | None = None,
         alpha: float | None = 0.22,
         filters: dict[str, Any] | None = None,
+        keywords: list | None = None,
         top_k: int | None = None,
         return_metadata: list[str] | None = None,
         include_vector: bool | None = False,
@@ -538,17 +530,21 @@ class WeaviateDocStore:
             vector=query_embedding,
             alpha=alpha,
             limit=top_k,
+            filters=convert_filters(filters) if filters else None,
             return_metadata=return_metadata,
             include_vector=include_vector,
             query_properties=["content"],
         )
 
-        return [self._to_document(doc) for doc in result.objects]
+        response = [self._to_document(doc) for doc in result.objects]
+        response = self._check_keywords(response, keywords)
+        return response
 
     def search_by_embedding(
         self,
         query_embedding: list[float],
         filters: dict[str, Any] | None = None,
+        keywords: list[str] | None = None,
         top_k: int | None = None,
         distance: float | None = None,
         certainty: float | None = None,
@@ -570,7 +566,9 @@ class WeaviateDocStore:
             return_metadata=return_metadata,
         )
 
-        return [self._to_document(doc) for doc in result.objects]
+        response = [self._to_document(doc) for doc in result.objects]
+        response = self._check_keywords(response)
+        return response
 
 
 @singleton
