@@ -152,3 +152,13 @@ class IEvaluatorRunner(abc.ABC):
         top_k: int = 5,
     ):
         pass
+
+
+class IPromptRunner(abc.ABC):
+    @abc.abstractmethod
+    def _prepare(self, **props):
+        pass
+
+    def prompt(self, **props):
+        obj = self._prepare(**props)
+        return obj
