@@ -12,6 +12,8 @@ class Document:
     id: str
     content: str | pd.DataFrame
     content_type: str = ("text",)
+    dataframe: str | None = None
+    keywords: list[str] | None = None
     meta: dict[str, Any] = (None,)
     score: float | None = None
     embedding: np.ndarray | None = None
@@ -25,6 +27,8 @@ class Document:
         self,
         content: str | pd.DataFrame,
         content_type: str = "text",
+        dataframe: str | None = None,
+        keywords: list[str] | None = None,
         id: str | None = None,
         score: float | None = None,
         meta: dict[str, Any] | None = None,
@@ -60,12 +64,16 @@ class Document:
 
         self.content = content
         self.content_type = content_type
+        self.dataframe = dataframe
+        self.keywords = keywords
         self.score = score
         self.meta = meta or {}
 
         allowed_hash_key_attributes = [
             "content",
             "content_type",
+            "dataframe",
+            "keywords",
             "score",
             "meta",
             "embedding",
@@ -157,6 +165,8 @@ class Document:
         init_args = [
             "content",
             "content_type",
+            "dataframe",
+            "keywords",
             "id",
             "score",
             "question",
@@ -205,6 +215,8 @@ class Document:
             isinstance(other, self.__class__)
             and getattr(other, "content", None) == self.content
             and getattr(other, "content_type", None) == self.content_type
+            and getattr(other, "dataframe", None) == self.dataframe
+            and getattr(other, "keywords", None) == self.keywords
             and getattr(other, "id", None) == self.id
             and getattr(other, "score", None) == self.score
             and getattr(other, "meta", None) == self.meta
