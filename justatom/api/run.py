@@ -43,10 +43,10 @@ async def search():
         data.get("top_k", 2),
     )
     store = StoreFinder.find(collection_name)
-    retriever = IGNIRunner.RETRIEVER(store=store, search_by=search_by, prefix_to_use="query:")
+    retriever = await IGNIRunner.RETRIEVER(store=store, search_by=search_by, prefix_to_use="query:")
     session["searching"] = query  # TODO: wrap around with meta fields and prepare for logging
     filters = check_filters_and_cast(filter_by)
-    response = retriever.retrieve_topk(queries=[query], top_k=top_k, filters=filters, keywords=keywords)
+    response = retriever.retrieve_topk(queries=[query], top_k=top_k, filters=filters, keywords=keywords)[0]
     logger.info(response)
     return json.dumps(
         {
@@ -75,7 +75,7 @@ async def index():
         data.get("batch_size", 16),
     )
     store = StoreFinder.find(collection_name)
-    indexer = IGNIRunner.INDEXER(store=store, index_by=index_by, prefix_to_use="passage:")
+    indexer = await IGNIRunner.INDEXER(store=store, index_by=index_by, prefix_to_use="passage:")
     session["indexing"] = dataset_name_or_docs  # TODO: wrap around with meta fields and prepare for logging
     docs = (
         list(DatasetApi.named(dataset_name_or_docs).iterator())
