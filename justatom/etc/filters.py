@@ -8,11 +8,14 @@ from weaviate.collections.classes.filters import Filter, FilterReturn
 from justatom.etc.errors import FilterError
 
 
-def check_filters_and_cast(filters: list[str], field: str = "dataframe") -> dict[str, Any]:
+def check_filters_and_cast(filters: list[str] | str = None, field: str = "dataframe") -> dict[str, Any] | None:
+    if filters is None:
+        return None
+    filters = [filters] if isinstance(filters, str) else filters
     cast_conditions = []
     for _filter in filters:
         condition = dict(field=field, operator="==", value=_filter)
-        cast_conditions += condition
+        cast_conditions.append(condition)
     return dict(operator="AND", conditions=cast_conditions)
 
 
