@@ -4,6 +4,13 @@ extern:
     - gpt-4-0314
   save_extern_path: ".data/external"
 
+api:
+  devices_to_use:
+    - cuda:0
+    - cpu
+    - mps
+  model_name_or_path: intfloat/multilingual-e5-base
+
 index:
   index_name: Default
   dataset_name_or_url: justatom
