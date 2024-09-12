@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 from loguru import logger
 from more_itertools import chunked
@@ -52,6 +54,7 @@ class HybridRetriever(IRetrieverRunner):
         alpha: float = 0.85,
         include_scores: bool = False,
         batch_size: int = 16,
+        filters: dict | None = None,
     ):
         queries = [queries] if isinstance(queries, str) else queries
         queries = [({"content": q} if prefix is None else {"content": q, "meta": {"prefix": prefix}}) for q in queries]
@@ -98,6 +101,8 @@ class EmbeddingRetriever(IRetrieverRunner):
         include_embedding: bool = False,
         include_scores: bool = False,
         batch_size: int = 16,
+        filters: dict | None = None,
+        keywords: list[str] | None = None,
     ):
         queries = [queries] if isinstance(queries, str) else queries
         queries = [({"content": q} if prefix is None else {"content": q, "meta": {"prefix": prefix}}) for q in queries]
@@ -109,7 +114,7 @@ class EmbeddingRetriever(IRetrieverRunner):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
             vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
             for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
-                res_topk = self.store.search_by_embedding(vector, top_k=top_k)
+                res_topk = self.store.search_by_embedding(vector, top_k=top_k, filters=filters, keywords=keywords)
                 answer.append(res_topk)
         return answer
 
@@ -124,11 +129,13 @@ class KWARGRetriever(IRetrieverRunner):
         queries: str | list[str],
         top_k: int = 5,
         include_scores: bool = False,
+        filters: dict | None = None,
+        keywords: list[str] | None = None,
     ):
         queries = [queries] if isinstance(queries, str) else queries
         answer = []
         for query in queries:
-            response = self.store.search_by_keywords(query=query, top_k=top_k)
+            response = self.store.search_by_keywords(query=query, top_k=top_k, filters=filters, keywords=keywords)
             answer.append(response)
         return answer
 
