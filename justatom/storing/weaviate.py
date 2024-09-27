@@ -37,9 +37,7 @@ DOCUMENT_COLLECTION_PROPERTIES = [
     {
         "name": "meta",
         "dataType": ["object"],
-        "nestedProperties": [
-            {"dataType": ["text[]"], "name": "queries"},
-        ],
+        "nestedProperties": [{"dataType": ["text[]"], "name": "queries"}, {"dataType": ["text"], "name": "url"}],
     },
 ]
 
