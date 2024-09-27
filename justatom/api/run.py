@@ -1,9 +1,10 @@
+import asyncio as asio
 import os
 from pathlib import Path
 
 import simplejson as json
 from loguru import logger
-from quart import Quart, request, session
+from quart import Quart, request, send_from_directory, session
 from quart_session import Session
 
 from justatom.etc.filters import check_filters_and_cast
@@ -14,11 +15,48 @@ from justatom.storing.weaviate import Finder as StoreFinder
 app = Quart(
     __name__,
     static_url_path="",
-    static_folder=str(Path(os.getcwd()) / "justatom" / "build" / "static"),
+    static_folder=str(Path(os.getcwd()) / "justatom" / "build"),
     template_folder=str(Path(os.getcwd()) / "justatom" / "build"),
 )
 app.config["SESSION_TYPE"] = "redis"
 Session(app)
+
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+async def main(path):
+    if path != "" and os.path.exists(app.static_folder + "/" + path):
+        response = await send_from_directory(app.static_folder, path)
+    else:
+        response = await send_from_directory(app.static_folder, "index.html")
+    return response
+
+
+@app.before_serving
+async def serve():
+    from justatom.mq.clients.rabbitmq import RabbitMQClient
+    from justatom.mq.settings.rabbitmq import SettingsRabbitMQ
+
+    settings = SettingsRabbitMQ()
+
+    CLIENT_NAME = "consumer"
+
+    client = RabbitMQClient(settings, client_name=CLIENT_NAME)
+
+    server = await IGNIRunner.SERVER()
+
+    app.run_and_serve = asio.get_event_loop().create_task(client.consume_with_callback(callback=server, routing_key=CLIENT_NAME))
+
+
+@app.after_serving
+async def finish():
+    loop = asio.get_event_loop()
+    try:
+        app.run_and_serve.cancel()
+    except asio.CancelledError:
+        logger.warning(f"Coulnd't stop the task with id {app.run_and_serve}")
+    finally:
+        loop.close()
 
 
 @app.post("/echo")
@@ -85,9 +123,10 @@ async def index():
                 content=di["content"],
                 dataframe=di.get("dataframe", None),
                 keywords=di.get("keywords", None),
+                meta=di.get("meta", {}),
             )
             if "dataframe" in di
-            else dict(content=di["content"], dataframe=di["title"], keywords=di["keywords"])
+            else dict(content=di["content"], dataframe=di["title"], keywords=di["keywords"], meta=di.get("meta", {}))
             for di in dataset_name_or_docs
         ]
     )
