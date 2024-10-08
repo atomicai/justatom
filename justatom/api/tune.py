@@ -94,7 +94,7 @@ class ILDataModule(L.LightningDataModule):
             shuffle=self.shuffle,
             dtypes=self.dtypes,
         )
- 
+
     def train_dataloader(self):
         if self.trainer.current_epoch in self._dbs:
             self.batch_size = self._dbs[self.trainer.current_epoch]
