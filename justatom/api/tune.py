@@ -1,7 +1,6 @@
 import os
 from collections.abc import Iterable
 from pathlib import Path
-from typing import List
 
 import dotenv
 import numpy as np
@@ -59,8 +58,8 @@ class ILDataModule(L.LightningDataModule):
         prefix_content_field: str = None,
         filters: dict | None = None,
         dtypes: dict | None = None,
-        dbs_epochs: List[int] | None = None,
-        dbs_batch_sizes: List[int]| None = None,
+        dbs_epochs: list[int] | None = None,
+        dbs_batch_sizes: list[int]| None = None,
     ):
         super().__init__()
         dbs_epochs = dbs_epochs or []
@@ -581,8 +580,8 @@ def main(
     save_model_path: str = None,
     opts: dict = None,
     dtypes: dict | None = None,
-    dynamic_bs_epochs: List[int] | None = None,
-    dynamic_bs_batch_sizes: List[int] | None = None,
+    dynamic_bs_epochs: list[int] | None = None,
+    dynamic_bs_batch_sizes: list[int] | None = None,
 ):
     max_seq_len = max_seq_len or Config.train.max_seq_len
     index_name = index_name or Config.train.index_name
