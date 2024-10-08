@@ -1,6 +1,7 @@
 import os
 from collections.abc import Iterable
 from pathlib import Path
+from typing import List
 
 import dotenv
 import numpy as np
@@ -34,6 +35,84 @@ from justatom.training.loss import ContrastiveLoss, TripletLoss
 dotenv.load_dotenv()
 
 logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK')}")
+
+
+
+class ILDataModule(L.LightningDataModule):
+    """
+    Wrapper class for handling data loading with dynamic batch size.
+    """
+    def __init__(
+        self,
+        processor: IProcessor | None = None,
+        train_filepath: str | Path = None,
+        dev_filepath: str | Path = None,
+        test_filepath: str | Path = None,
+        split_ratio: float = None,
+        shuffle: bool = True,
+        group_field: str = None,  # group
+        batch_size: int = 4,
+        search_field: str = None,
+        content_field: str = None,  # content
+        prefix_field: str = None,
+        prefix_search_field: str = None,
+        prefix_content_field: str = None,
+        filters: dict | None = None,
+        dtypes: dict | None = None,
+        dbs_epochs: List[int] | None = None,
+        dbs_batch_sizes: List[int]| None = None,
+    ):
+        super().__init__()
+        dbs_epochs = dbs_epochs or []
+        dbs_batch_sizes = dbs_batch_sizes or []
+        self._dbs = {epoch: batch_size for epoch, batch_size in zip(dbs_epochs, dbs_batch_sizes)}
+        self.processor = processor
+        self.train_filepath = train_filepath
+        self.batch_size = self._dbs.get(min(dbs_epochs), 1) if self._dbs else batch_size
+        self.search_field = search_field
+        self.content_field = content_field
+        self.group_field = group_field
+        self.prefix_field = prefix_field
+        self.prefix_search_field = prefix_search_field
+        self.prefix_content_field = prefix_content_field
+        self.shuffle = shuffle
+        self.dtypes = dtypes
+        self._train_dataloader, self._val_dataloader, self._test_dataloader, _ = self.ignite_loaders(self.batch_size)
+        self.min_train_dataloader_len = self._min_train_dataloader_len()
+        return
+    
+    def ignite_loaders(self, batch_size: int = 1):
+        return ignite_loaders(
+            processor=self.processor,
+            train_filepath=self.train_filepath,
+            batch_size=batch_size,
+            search_field=self.search_field,
+            content_field=self.content_field,
+            group_field=self.group_field,
+            prefix_field=self.prefix_field,
+            prefix_search_field=self.prefix_search_field,
+            prefix_content_field=self.prefix_content_field,
+            shuffle=self.shuffle,
+            dtypes=self.dtypes,
+        )
+    
+    def train_dataloader(self):
+        if self.trainer.current_epoch in self._dbs:
+            self.batch_size = self._dbs[self.trainer.current_epoch]
+            self._train_dataloader, _, _, _ = self.ignite_loaders(self.batch_size)
+        return self._train_dataloader
+        
+    def val_dataloader(self):
+        return self._val_dataloader
+    
+    def test_dataloader(self):
+        return self._test_dataloader
+
+    def _min_train_dataloader_len(self) -> int:
+        return (
+            len(self._train_dataloader) if not self._dbs 
+            else len(self._train_dataloader) * self.batch_size // max(self._dbs.values())
+        )
 
 
 def to_numpy(container):
@@ -502,6 +581,8 @@ def main(
     save_model_path: str = None,
     opts: dict = None,
     dtypes: dict | None = None,
+    dynamic_bs_epochs: List[int] | None = None,
+    dynamic_bs_batch_sizes: List[int] | None = None,
 ):
     max_seq_len = max_seq_len or Config.train.max_seq_len
     index_name = index_name or Config.train.index_name
@@ -555,7 +636,7 @@ def main(
         f'All components (1) [Model {model.__class__.__name__}] (2) [Head(s) "{len(runner.prediction_heads)}" - {runner.prediction_heads[0].__class__.__name__}] (3) Loss {runner.prediction_heads[0].loss}'  # noqa: E501
     )
 
-    train_loader, dev_loader, test_loader, tensor_names = ignite_loaders(
+    datamodule = ILDataModule(
         processor=processor,
         train_filepath=Path(os.getcwd()) / dataset_path,
         batch_size=batch_size,
@@ -567,6 +648,8 @@ def main(
         prefix_content_field=prefix_content_field,
         shuffle=_shuffle,
         dtypes=dtypes,
+        dbs_epochs=dynamic_bs_epochs,
+        dbs_batch_sizes=dynamic_bs_batch_sizes,
     )
 
     # ML Logger
@@ -589,16 +672,17 @@ def main(
         devices="auto",
         callbacks=[es_callback, mc_callback],
         logger=ml_logger,
-        val_check_interval=min(val_check_interval, len(train_loader)),
+        val_check_interval=min(val_check_interval, datamodule.min_train_dataloader_len),
         log_every_n_steps=log_every_n_steps,
+        reload_dataloaders_every_n_epochs=1,
         # limit_train_batches=300,
         # limit_val_batches=100
     )
 
     # Early stopping on which metric ?
 
-    pipeline.fit(model=pl_runner, train_dataloaders=train_loader, val_dataloaders=dev_loader)
-    pipeline.test(model=pl_runner, dataloaders=test_loader)
+    pipeline.fit(model=pl_runner, datamodule=datamodule)
+    pipeline.test(model=pl_runner, dataloaders=datamodule.test_dataloader())
 
     # Save the model and (index) ?
     logger.info(f"{mc_callback.best_model_path}")
