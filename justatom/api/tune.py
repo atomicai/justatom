@@ -64,7 +64,7 @@ class ILDataModule(L.LightningDataModule):
         super().__init__()
         dbs_epochs = dbs_epochs or []
         dbs_batch_sizes = dbs_batch_sizes or []
-        self._dbs = {epoch: batch_size for epoch, batch_size in zip(dbs_epochs, dbs_batch_sizes)}
+        self._dbs = {epoch: batch_size for epoch, batch_size in zip(dbs_epochs, dbs_batch_sizes, strict=False)}
         self.processor = processor
         self.train_filepath = train_filepath
         self.batch_size = self._dbs.get(min(dbs_epochs), 1) if self._dbs else batch_size
@@ -79,7 +79,7 @@ class ILDataModule(L.LightningDataModule):
         self._train_dataloader, self._val_dataloader, self._test_dataloader, _ = self.ignite_loaders(self.batch_size)
         self.min_train_dataloader_len = self._min_train_dataloader_len()
         return
-    
+
     def ignite_loaders(self, batch_size: int = 1):
         return ignite_loaders(
             processor=self.processor,
@@ -94,22 +94,22 @@ class ILDataModule(L.LightningDataModule):
             shuffle=self.shuffle,
             dtypes=self.dtypes,
         )
-    
+ 
     def train_dataloader(self):
         if self.trainer.current_epoch in self._dbs:
             self.batch_size = self._dbs[self.trainer.current_epoch]
             self._train_dataloader, _, _, _ = self.ignite_loaders(self.batch_size)
         return self._train_dataloader
-        
+
     def val_dataloader(self):
         return self._val_dataloader
-    
+
     def test_dataloader(self):
         return self._test_dataloader
 
     def _min_train_dataloader_len(self) -> int:
         return (
-            len(self._train_dataloader) if not self._dbs 
+            len(self._train_dataloader) if not self._dbs
             else len(self._train_dataloader) * self.batch_size // max(self._dbs.values())
         )
 
