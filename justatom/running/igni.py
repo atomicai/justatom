@@ -11,7 +11,6 @@ from justatom.running.indexer import IIndexerRunner
 from justatom.running.m1 import M1LMRunner
 from justatom.running.retriever import API as RetrieverApi
 from justatom.running.retriever import IRetrieverRunner
-from justatom.tooling.hardware import initialize_device_settings
 
 
 @singleton

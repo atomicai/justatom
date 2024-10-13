@@ -1,5 +1,3 @@
-from typing import Optional
-
 import torch
 from loguru import logger
 from more_itertools import chunked
