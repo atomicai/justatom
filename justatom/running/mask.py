@@ -159,6 +159,10 @@ class IPromptRunner(abc.ABC):
     def _prepare(self, **props):
         pass
 
-    def prompt(self, **props):
+    def prompt(self, **props) -> list[dict]:
         obj = self._prepare(**props)
-        return obj
+        return [dict(role="system", content=self.system_prompt), dict(role="user", content=obj)]
+
+    def finalize(self, **props) -> str:
+        ans = self.finalize(**props)
+        return ans
