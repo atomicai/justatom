@@ -32,6 +32,7 @@ polars==0.19.19
 weaviate-client==4.5.4
 docx2txt==0.8
 simplejson==3.19.2
+json_repair==0.30.0
 lazy-imports==0.3.1
 fastnumbers==5.1.0
 datasets==2.18.0
