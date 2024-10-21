@@ -33,7 +33,7 @@ except ImportError:
     print("Warning: mlx or mlx_lm not available. Some functionality will be limited.")
 
 
-TOOLS_PATH = str(Path(os.getcwd()) / "justatom" / "api" / "tools")
+TOOLS_PATH = Path(os.getcwd()) / "justatom" / "api" / "tools"
 
 
 def get_model_type_list(models, type="vlm"):
@@ -95,7 +95,7 @@ def get_tool_prompt(model_name, tools, prompt):
     available_models = tool_config["models"].keys()
     model_type = get_model_type(model_name, available_models)
     model_config = tool_config["models"].get(model_type, tool_config["models"]["default"])
-    env = Environment(loader=FileSystemLoader(TOOLS_PATH))
+    env = Environment(loader=FileSystemLoader(str(TOOLS_PATH)))
     template = env.get_template(model_config["prompt_template"])
     if model_config.get("query", False):
         return (
