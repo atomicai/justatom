@@ -399,7 +399,7 @@ class IHead(nn.Module, abc.ABC):
     generates logits for a given task. Can also convert logits to loss and and logits to predictions.
     """
 
-    subclasses = {}  # type: Dict
+    subclasses = {}  # type: dict
 
     def __init_subclass__(cls, **kwargs):
         """This automatically keeps track of all available subclasses.
@@ -409,8 +409,20 @@ class IHead(nn.Module, abc.ABC):
         cls.subclasses[cls.__name__] = cls
 
     @classmethod
-    def load(cls, klass, **props):
-        return cls.subclasses[klass].load(**props)
+    def load(
+        cls,
+        path: Path | str,
+        **kwargs,
+    ):
+        config_file = Path(path) / "config.json"
+        # assert config_file.exists(), "The config is not found, couldn't load the model"
+        if config_file.exists():
+            logger.info(f"Head found locally at {path}")
+            # it's a local directory in FARM format
+            with open(config_file) as f:
+                config = json.load(f)
+            language_model = cls.subclasses[config["klass"]].load(path, **kwargs)
+        return language_model
 
     def generate_config(self):
         config = self.config or {}
@@ -423,6 +435,10 @@ class IHead(nn.Module, abc.ABC):
 
     @abc.abstractmethod
     def logits_to_preds(self, logits):
+        pass
+
+    @abc.abstractmethod
+    def save(self, path: str):
         pass
 
 
