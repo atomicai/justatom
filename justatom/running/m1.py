@@ -51,7 +51,9 @@ class M1LMRunner(IMODELRunner, torch.nn.Module):
         heads = []
         heads_dir = Path(data_dir) / "heads"
         if heads_dir.is_dir():
-            for head_path in heads_dir.iterdir():
+            n_dirs = len(list(heads_dir.iterdir()))
+            for idx in range(n_dirs):
+                head_path = heads_dir / f"head_{idx}"
                 hi = IHead.load(head_path)
                 heads.append(hi)
         return cls(model=model, prediction_heads=heads)
