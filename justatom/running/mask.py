@@ -155,6 +155,9 @@ class IEvaluatorRunner(abc.ABC):
 
 
 class IPromptRunner(abc.ABC):
+    def __init__(self, system_prompt: str):
+        self.system_prompt = system_prompt
+
     @abc.abstractmethod
     def _prepare(self, **props):
         pass
