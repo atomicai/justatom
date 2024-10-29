@@ -25,7 +25,8 @@ class M1LMRunner(IMODELRunner, torch.nn.Module):
         self.device = device
         self.dropout = torch.nn.Dropout(0.1)
         self.loss_aggregation_fn = loss_per_head_sum
-        self.config = dict(prediction_heads=[hi.generate_config() for hi in prediction_heads or []])
+        # self.config = dict(prediction_heads=[hi.generate_config() for hi in prediction_heads or []])
+        self.config = dict()
         self.processor = processor
 
     def to(self, device):
@@ -48,10 +49,13 @@ class M1LMRunner(IMODELRunner, torch.nn.Module):
             with open(_runner_config) as f:
                 config = json.load(f)
         heads = []
-        for head in config["prediction_heads"]:
-            props = {k: v for k, v in head.items() if k != "klass"}
-            hi = IHead.load(head["klass"], **props)
-            heads.append(hi)
+        heads_dir = Path(data_dir) / "heads"
+        if heads_dir.is_dir():
+            n_dirs = len(list(heads_dir.iterdir()))
+            for idx in range(n_dirs):
+                head_path = heads_dir / f"head_{idx}"
+                hi = IHead.load(head_path)
+                heads.append(hi)
         return cls(model=model, prediction_heads=heads)
 
     def save(self, save_dir: str):
@@ -64,6 +68,11 @@ class M1LMRunner(IMODELRunner, torch.nn.Module):
         super().save(save_dir)
         if self.processor is not None:
             self.processor.save(save_dir)
+        if len(self.prediction_heads) > 0:
+            # TODO: Добавить создание под-директории <heads> для весов голов. + конфиг
+            heads_dir = Path(save_dir) / "heads"
+            for idx, head in enumerate(self.prediction_heads):
+                head.save(str(heads_dir / f"head_{idx}"))
 
     def logits_to_loss_per_head(self, logits: torch.Tensor, labels: torch.Tensor):
         """
