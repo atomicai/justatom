@@ -126,18 +126,13 @@ class E5SModel(E5GeneralWrapper):
             outputs.last_hidden_state,
             attention_mask=attention_mask,
             norm=norm,
-            average=average,
+            average=average
         )
         if pos_input_ids is not None and pos_attention_mask is not None:
-            pos_outputs = self.model(
-                input_ids=pos_input_ids,
-                attention_mask=pos_attention_mask,
-                norm=norm,
-                average=average,
-            )
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask)
             pos_response = self.maybe_norm_or_average(
-                pos_outputs,
-                attention_mask=attention_mask,
+                pos_outputs.last_hidden_state,
+                attention_mask=pos_attention_mask,
                 norm=norm,
                 average=average,
             )
