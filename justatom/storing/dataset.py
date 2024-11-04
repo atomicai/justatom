@@ -25,6 +25,15 @@ class JUSTATOMDataset(IDataset):
                 yield doc
 
 
+class JSONDataset(IDataset):
+    def __init__(self, fp):
+        self.fp = fp
+
+    def iterator(self, **kwargs) -> pl.DataFrame:
+        pl_view = pl.read_json(self.fp, **kwargs)
+        return pl_view
+
+
 class CSVDataset(IDataset):
     def __init__(self, fp):
         self.fp = fp
@@ -62,6 +71,8 @@ class ByName:
                 return CSVDataset(fp=name)
             elif fp.suffix in [".xlsx"]:
                 return XLSXDataset(fp=name)
+            elif fp.suffix in [".json", ".jsonl"]:
+                return JSONDataset(fp=name)
             else:
                 msg = f"File exists however loading from the [{fp.suffix}] file is not supported"
                 logger.error(msg)
