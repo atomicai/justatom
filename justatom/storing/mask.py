@@ -46,23 +46,23 @@ def scale_to_unit_interval(self, score: float, similarity: str | None) -> float:
 
 class IEVENTDocStore(abc.ABC):
     @abc.abstractmethod
-    def add_event(self, e):
+    async def add_event(self, e):
         pass
 
     @abc.abstractmethod
-    def add_user(self, username, creds, uuid):
+    async def add_user(self, username, creds, uuid):
         pass
 
     @abc.abstractmethod
-    def del_user(self, uuid):
+    async def del_user(self, uuid):
         pass
 
     @abc.abstractmethod
-    def add_document(self, doc):
+    async def add_document(self, doc):
         pass
 
     @abc.abstractmethod
-    def del_document(self, uuid):
+    async def del_document(self, uuid):
         pass
 
 
