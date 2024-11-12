@@ -25,7 +25,6 @@ from justatom.tooling.stl import merge_in_order
 
 # See https://weaviate.io/developers/weaviate/config-refs/datatypes#:~:text=DataType%3A%20object%20%E2%80%8B&text=The%20object%20type%20allows%20you,be%20nested%20to%20any%20depth.&text=As%20of%201.22%20%2C%20object%20and,not%20indexed%20and%20not%20vectorized.
 
-
 DOCUMENT_COLLECTION_PROPERTIES = [
     {"name": "_original_id", "dataType": ["text"]},
     {"name": "content", "dataType": ["text"]},
@@ -33,11 +32,21 @@ DOCUMENT_COLLECTION_PROPERTIES = [
     {"name": "blob_data", "dataType": ["blob"]},
     {"name": "blob_mime_type", "dataType": ["text"]},
     {"name": "score", "dataType": ["number"]},
-    {"name": "keywords", "dataType": ["text[]"]},
     {
         "name": "meta",
         "dataType": ["object"],
-        "nestedProperties": [{"dataType": ["text[]"], "name": "queries"}, {"dataType": ["text"], "name": "url"}],
+        "nestedProperties": [
+            {"dataType": ["text[]"], "name": "queries"},
+            {"dataType": ["text"], "name": "url"},
+            {
+                "dataType": ["object[]"],
+                "name": "keywords_or_phrases",
+                "nestedProperties": [
+                    {"name": "keyword_or_phrase", "dataType": "text"},
+                    {"name": "explanation", "dataType": "text"},
+                ],
+            },
+        ],
     },
 ]
 

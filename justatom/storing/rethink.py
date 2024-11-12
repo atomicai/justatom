@@ -1,26 +1,26 @@
 from rethinkdb import r
 
-from justatom.storing.mask import IDBDocStore
+from justatom.storing.mask import IEVENTDocStore
 
 
-class IReDocStore(IDBDocStore):
+class IReDocStore(IEVENTDocStore):
     def __init__(self, host, port, **props):
         super().__init__()
         self.client = r.connect(host=host, port=port)
 
-    def add_event(self, e):
+    async def add_event(self, e):  #
         pass
 
-    def add_user(self, username, creds, uuid):
+    async def add_user(self, username, creds, uuid):
         pass
 
-    def del_user(self, uuid):
+    async def del_user(self, uuid):
         pass
 
-    def add_document(self, doc):
+    async def add_document(self, doc):
         pass
 
-    def del_document(self, uuid):
+    async def del_document(self, uuid):
         pass
 
 
