@@ -33,10 +33,9 @@ class ATOMICRetriever(IRetrieverRunner):
         self.runner = runner.eval()
         self.device = device
         if runner.device != device:
-            logger.info(
-                f"Callback from {self.__class__.__name__} is fired to move to new device {device}. Old device = {runner.device}"
-            )
-            self.runner.to(device)
+            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
+
+        self.runner.to(device)
         if ranker not in self.RANKER:
             msg = f"Ranker=[{str(ranker)}] is NOT supported. Use one of the following options: {','.join(self.RANKER.keys())}"
             logger.error(msg)
@@ -121,10 +120,9 @@ class HybridRetriever(IRetrieverRunner):
         self.runner = runner.eval()
         self.device = device
         if runner.device != device:
-            logger.info(
-                f"Callback from {self.__class__.__name__} is fired to move to new device {device}. Old device = {runner.device}"
-            )
-            self.runner.to(device)
+            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
+
+        self.runner.to(device)
 
     @torch.no_grad()
     def retrieve_topk(
@@ -167,10 +165,7 @@ class EmbeddingRetriever(IRetrieverRunner):
         self.runner = runner.eval()
         self.device = device
         if runner.device != device:
-            logger.info(
-                f"Callback from {self.__class__.__name__} is fired to move to new device {device}. Old device = {runner.device}"
-            )
-            self.runner.to(device)
+            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
 
         self.runner.to(device)
 
