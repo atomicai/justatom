@@ -30,23 +30,22 @@ class NNIndexer(IIndexerRunner):
         self.processor = processor
         self.device = device
         if runner.device != device:
-            logger.info(
-                f"Callback from {self.__class__.__name__} is fired to move to new device {device}. Old device = {runner.device}"
-            )
-            self.runner.to(device)
+            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
+        self.runner.to(device)
 
     @torch.no_grad()
-    async def index(
-        self,
-        documents: list[dict | Document],
-        batch_size: int = 1,
-        device: str = "cpu",
-    ):
+    async def index(self, documents: list[dict | Document], batch_size: int = 1, device: str = None, **props):
+        device = device or self.device
+        if device != self.device:
+            logger.info(
+                f"Moving [{self.runner.__class__.__name__}] to the new device = {device}. Old device = {self.runner.device}"
+            )
+            self.runner.to(device)
         documents_as_dicts = [d.to_dict() if isinstance(d, Document) else d for d in documents]
         dataset, tensor_names = igniset(dicts=documents_as_dicts, processor=self.processor, batch_size=batch_size)
         loader = NamedDataLoader(dataset=dataset, tensor_names=tensor_names, batch_size=batch_size)
         for i, (docs, batch) in tqdm(enumerate(zip(chunked(documents_as_dicts, n=batch_size), loader, strict=False))):  # noqa: B007
-            batches = {k: v.to(self.device) for k, v in batch.items()}
+            batches = {k: v.to(device) for k, v in batch.items()}
             vectors = self.runner(batch=batches)[0].cpu()
             _docs = copy.deepcopy(docs)
             for doc, vec in zip(_docs, vectors, strict=False):
