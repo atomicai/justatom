@@ -40,3 +40,21 @@ class KEYPromptRunner(IPromptRunner):
         if as_json_string:
             return json.dumps(response)
         return response
+
+
+class TRLSPromptRunner(IPromptRunner):
+    def __init__(self, system_prompt: str):
+        super().__init__(system_prompt=system_prompt.strip())
+
+    def _prepare(self, content: str, title: str, **props):
+        prompt = f"""\n
+        Параграф из вселенной \"{title}\":\n{content}\n\n
+        Выдай ответ в виде  json в формате: {{"translation": "<Твой перевод, учитывающий контекст параграфа из вселенной {title}>}}"
+        Выдай только json.
+        """.strip()
+        return prompt
+
+    def finalize(self, content: str, raw_response: str, as_json_string: bool = False, **props):
+        if as_json_string:
+            return json_repair.loads(raw_response)
+        return raw_response
