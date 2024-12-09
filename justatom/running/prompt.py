@@ -14,8 +14,8 @@ class KEYPromptRunner(IPromptRunner):
         prompt = f"""
         Обрати внимание, что ключевые слова или фразы должны быть подстрокой параграфа и состоять из НЕ более двух, максимум трех слов.\n
         Каждая фраза или ключевое слово должны объясняться на {source_language} языке и иметь краткое, но емкое объяснение в зависимости от контекста, в котором они употреблены. \n
-        Параграф из вселенной {title}:  {content}\n\n
-        Выдай ответ в виде  json в формате: {{"keywords_or_phrases": [{{"keyword_or_phrase": <Выделенная тобою фраза>, "explanation": <Объяснение на {source_language} языке для ребенка в соответствии с контекстом, в котором употреблена фраза (слово)>}}]}}.\n
+        Параграф из вселенной \"{title}\":\n{content}\n\n
+        Выдай ответ в виде  json в формате: {{"keywords_or_phrases": [{{"keyword_or_phrase": <Выделенная тобою фраза>, "explanation": <Объяснение на {source_language} языке для ребенка в соответствии с контекстом, в котором употреблена ключевая фраза или слово}}]}}.\n
         Выдай только json.
         """.strip()
         return prompt
@@ -37,9 +37,10 @@ class KEYPromptRunner(IPromptRunner):
             else:
                 new_js_phrase = js_phrase
             response.append(new_js_phrase)
+        final_response = {"keywords_or_phrases": response, **props}
         if as_json_string:
-            return json.dumps(response)
-        return response
+            return json.dumps(final_response)
+        return final_response
 
 
 class TRLSPromptRunner(IPromptRunner):
