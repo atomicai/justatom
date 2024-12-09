@@ -67,7 +67,7 @@ class TRLSPromptRunner(IPromptRunner):
 
 class REPHRASEPromptRunner(IPromptRunner):
     def __init__(self, system_prompt: str, **props):
-        super().__init__(system_prompt=system_prompt.stirp())
+        super().__init__(system_prompt=system_prompt.strip())
 
     def _prepare(self, content, title: str, **props):
         prompt = f"""
