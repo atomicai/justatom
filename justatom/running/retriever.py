@@ -30,6 +30,7 @@ class ATOMICRetriever(IRetrieverRunner):
     ):
         super().__init__()
         self.store = store
+        self.processor = processor
         self.runner = runner.eval()
         self.device = device
         if runner.device != device:
