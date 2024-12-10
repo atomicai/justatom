@@ -54,5 +54,6 @@ nbformat==4.2.0
 redis==5.0.4
 quart==0.19.6
 quart-session==3.0.0
+openai-async==0.0.3
 # Rabbitmq
 aio-pika==9.4.3

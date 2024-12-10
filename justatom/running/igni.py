@@ -9,6 +9,7 @@ from justatom.processing.prime import INFERProcessor, ITokenizer
 from justatom.running.indexer import API as IndexerApi
 from justatom.running.indexer import IIndexerRunner
 from justatom.running.m1 import M1LMRunner
+from justatom.running.prompt import KEYPromptRunner, REPHRASEPromptRunner, TRLSPromptRunner
 from justatom.running.retriever import API as RetrieverApi
 from justatom.running.retriever import IRetrieverRunner
 
@@ -94,6 +95,18 @@ class IIGNIRunner:
             logger.info(metadata)
 
         return callback
+
+    async def KEYWORDER(self, system_prompt: str, **props):
+        pr_key_runner = KEYPromptRunner(system_prompt=system_prompt, **props)
+        return pr_key_runner
+
+    async def TRANLSATOR(self, system_prompt: str, **props):
+        pr_trls_runner = TRLSPromptRunner(system_prompt=system_prompt, **props)
+        return pr_trls_runner
+
+    async def REPHRASER(self, system_prompt, **props):
+        pr_rphr_runner = REPHRASEPromptRunner(system_prompt=system_prompt, **props)
+        return pr_rphr_runner
 
 
 IGNIRunner = IIGNIRunner()

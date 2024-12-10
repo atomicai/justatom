@@ -2,6 +2,7 @@ import copy
 import itertools
 import os
 import random
+import uuid
 from collections.abc import MutableMapping
 from copy import deepcopy
 
@@ -115,6 +116,26 @@ def training_params(x: torch.nn.Module):
     return sum(p.numel() for p in x.parameters() if p.requires_grad)
 
 
+def reuuid(text, namespace_uuid="91461c99-f89d-49d2-af96-d8e2e14e9b58"):
+    """
+    Генерирует детерминированный UUID в стиле RethinkDB на основе входного текста и заданного namespace.
+
+    Args:
+    text (str): Текст, на основе которого нужно сгенерировать UUID.
+    namespace_uuid (str): Строка UUID для namespace, используемого RethinkDB для генерации детерминированных UUID.
+
+    Returns:
+    str: Строковое представление детерминированного UUID.
+    """
+    # Преобразование строки namespace в объект UUID
+    namespace = uuid.UUID(namespace_uuid)
+
+    # Генерация детерминированного UUID версии 5
+    deterministic_uuid = uuid.uuid5(namespace, text)
+
+    return str(deterministic_uuid)
+
+
 def merge_in_order(a: dict | None = None, dv: dict | None = None, do_copy: bool = False):
     """
     This function perfrorm `merge` in a Asymmetric way.
@@ -168,4 +189,5 @@ __all__ = [
     "merge_in_order",
     "training_params",
     "seed_everything",
+    "reuuid",
 ]
