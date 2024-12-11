@@ -43,6 +43,21 @@ class ATOMICRetriever(IRetrieverRunner):
             raise ValueError(msg)
         self.ranker = self.RANKER[ranker]
 
+    def compute_fusion_score(self, distance: float, keyword_score: float, gamma: float = 0.5) -> float:
+        """
+        distance: Semantic score from ANN search (e.g. Weaviate)
+        keyword_score: Keyword intersection, Precision, Recall in terms of keywords intersection
+        gamma: Weight parameter to include to
+        """
+
+        # Semantic score conversion
+        semantic_relevance = 1.0 / (1 + distance)  # значения ~ от (0,1], ближе = выше скор.
+
+        # Final score
+        combined_score = gamma * semantic_relevance + (1 - gamma) * keyword_score
+
+        return combined_score
+
     @torch.no_grad()
     def retrieve_topk(
         self,
@@ -57,6 +72,8 @@ class ATOMICRetriever(IRetrieverRunner):
         include_explanation: bool = True,
         batch_size: int = 16,
         filters: dict | None = None,
+        score_cutoff: float = 0.9,
+        gamma: float = 0.5,
         **props,
     ):
         if not include_keywords and not include_explanation:
@@ -98,9 +115,15 @@ class ATOMICRetriever(IRetrieverRunner):
                     else:
                         keywords_content = "\n".join([kwp["explanation"].strip() for kwp in keywords_or_phrases])
 
-                    score: float = self.ranker(query, keywords_content)
-                    fusion.append({"rank": i, "keywords_content": keywords_content, "kwp_score": score})
-                    fusion = sorted(fusion, key=cmp_to_key(lambda obj1, obj2: obj1["kwp_score"] - obj2["kwp_score"]))
+                    keyword_score: float = self.ranker(query, keywords_content, score_cutoff=score_cutoff)
+                    semantic_score: float = doc.score
+                    fusion_score: float = self.compute_fusion_score(
+                        distance=semantic_score, keyword_score=keyword_score, gamma=gamma
+                    )
+                    fusion.append({"rank": i, "keywords_content": keywords_content, "fusion_score": fusion_score})
+                    fusion = sorted(
+                        fusion, key=cmp_to_key(lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]), reverse=True
+                    )
 
                 res_topk = [res_topp[pos["rank"]] for pos in fusion[:top_k]]
                 answer.append(copy.deepcopy(res_topk))
@@ -221,7 +244,7 @@ class KWARGRetriever(IRetrieverRunner):
 @singleton
 class ByName:
     def named(self, name: str, **kwargs):
-        OPS = ["keywords", "emebedding", "hybrid", "justatom"]
+        OPS = ["keywords", "emebedding", "hybrid", "atomicai"]
 
         if name == "keywords":
             klass = KWARGRetriever
@@ -229,7 +252,7 @@ class ByName:
             klass = EmbeddingRetriever
         elif name == "hybrid":
             klass = HybridRetriever
-        elif name == "atomic":
+        elif name == "atomicai":
             klass = ATOMICRetriever
         else:
             msg = f"Unknown name=[{name}] to init IRetrieverRunner instance. Use one of {','.join(OPS)}"
