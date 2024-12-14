@@ -42,8 +42,8 @@ DOCUMENT_COLLECTION_PROPERTIES = [
                 "dataType": ["object[]"],
                 "name": "keywords_or_phrases",
                 "nestedProperties": [
-                    {"name": "keyword_or_phrase", "dataType": "text"},
-                    {"name": "explanation", "dataType": "text"},
+                    {"name": "keyword_or_phrase", "dataType": ["text"]},
+                    {"name": "explanation", "dataType": ["text"]},
                 ],
             },
         ],

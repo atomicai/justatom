@@ -1,4 +1,7 @@
 import copy
+import math
+import string
+from collections import Counter
 from functools import cmp_to_key
 
 import torch
@@ -15,18 +18,41 @@ from justatom.running.m1 import M1LMRunner
 from justatom.running.m2 import M2LMRunner
 from justatom.running.mask import IRetrieverRunner
 from justatom.storing.mask import INNDocStore
+from justatom.tooling import stl
 
 
 class ATOMICRetriever(IRetrieverRunner):
-    RANKER: dict = {"jarowinkler": jarowinkler_similarity}
+    def _compute_recall(query: str, keywords_or_phrases: list[str], **props):
+        k_words = Counter(stl.flatten_list([kwp.lower().split(" ") for kwp in keywords_or_phrases]))
+        q_words = "".join(w for w in query if w not in string.punctuation).lower().strip().split()
+        recall = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words])
+
+        return recall
+
+    def _compute_inverse_recall(query: str, keywords_or_phrases: list[str], **props):
+        k_words = Counter(stl.flatten_list([kwp.lower().split(" ") for kwp in keywords_or_phrases]))
+        q_words = "".join(w for w in query if w not in string.punctuation).lower().strip().split()
+        idf_recall = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words]) / sum(
+            [1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words]
+        )
+        return idf_recall
+
+    RANKER: dict = {"JaroWinkler": jarowinkler_similarity, "Recall": _compute_recall, "IDFRecall": _compute_inverse_recall}
 
     def __init__(
         self,
         store: INNDocStore,
         runner: M1LMRunner | M2LMRunner,
         processor: IProcessor,
-        ranker: str | None = "jarowinkler",
+        ranker: str | None = "IDFRecall",
         device: str = "cpu",
+        alpha: float = 0.78,
+        top_p: int = 128,
+        prefix: str = None,
+        cutoff_score: float = 0.8,
+        gamma: float = 0.5,
+        include_keywords: bool = True,
+        include_explanation: bool = False,
     ):
         super().__init__()
         self.store = store
@@ -43,6 +69,14 @@ class ATOMICRetriever(IRetrieverRunner):
             raise ValueError(msg)
         self.ranker = self.RANKER[ranker]
 
+        self.alpha = alpha
+        self.top_p = top_p
+        self.prefix = prefix
+        self.cutoff_score = cutoff_score
+        self.gamma = gamma
+        self.include_keywords = include_keywords
+        self.include_explanation = include_explanation
+
     def compute_fusion_score(self, distance: float, keyword_score: float, gamma: float = 0.5) -> float:
         """
         distance: Semantic score from ANN search (e.g. Weaviate)
@@ -50,8 +84,7 @@ class ATOMICRetriever(IRetrieverRunner):
         gamma: Weight parameter to include to
         """
 
-        # Semantic score conversion
-        semantic_relevance = 1.0 / (1 + distance)  # значения ~ от (0,1], ближе = выше скор.
+        semantic_relevance = distance  # значения ~ от (0,1], ближе = выше скор.
 
         # Final score
         combined_score = gamma * semantic_relevance + (1 - gamma) * keyword_score
@@ -63,19 +96,27 @@ class ATOMICRetriever(IRetrieverRunner):
         self,
         queries: str | list[str],
         top_k: int = 5,
-        top_p: int = 128,
+        top_p: int = None,
         prefix: str = None,
         include_embedding: bool = False,
-        alpha: float = 0.85,
+        alpha: float = None,
         include_scores: bool = False,
-        include_keywords: bool = True,
-        include_explanation: bool = True,
+        include_keywords: bool = None,
+        include_explanation: bool = None,
         batch_size: int = 16,
         filters: dict | None = None,
-        score_cutoff: float = 0.9,
-        gamma: float = 0.5,
+        cutoff_score: float = None,
+        gamma: float = None,
+        return_keywords_or_phrases: bool = False,
         **props,
     ):
+        alpha = alpha or self.alpha
+        top_p = top_p or self.top_p
+        prefix = prefix or self.prefix
+        cutoff_score = cutoff_score or self.cutoff_score
+        gamma = gamma or self.gamma
+        include_keywords = include_keywords or self.include_keywords
+        include_explanation = include_explanation or self.include_explanation
         if not include_keywords and not include_explanation:
             msg = f"""
             You've initialized `{self.__class__.__name__}` IR but not using any of the atomic keywords features.
@@ -107,12 +148,13 @@ class ATOMICRetriever(IRetrieverRunner):
                     keywords_or_phrases = doc.meta.get("keywords_or_phrases", [])
                     keywords_content: str = None
                     if include_keywords and include_explanation:
-                        keywords_content = "\n".join(
-                            [kwp["keyword_or_phrase"].strip() + " - " + kwp["explanation"].strip() for kwp in keywords_or_phrases]
-                        )
+                        keywords_content = [
+                            kwp["keyword_or_phrase"].strip() + " " + kwp["explanation"].strip() for kwp in keywords_or_phrases
+                        ]
                     elif include_keywords:
-                        keywords_content = "\n".join([kwp["keyword_or_phrase"].strip() for kwp in keywords_or_phrases])
+                        keywords_content = [kwp["keyword_or_phrase"].strip() for kwp in keywords_or_phrases]
                     else:
+                        keywords_content = [kwp["explanation"].strip() for kwp in keywords_or_phrases]
                         keywords_content = "\n".join([kwp["explanation"].strip() for kwp in keywords_or_phrases])
 
                     keyword_score: float = self.ranker(query, keywords_content, score_cutoff=score_cutoff)
@@ -125,6 +167,15 @@ class ATOMICRetriever(IRetrieverRunner):
                         fusion, key=cmp_to_key(lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]), reverse=True
                     )
 
+                    keyword_score: float = self.ranker(query, keywords_content, score_cutoff=cutoff_score)
+                    semantic_score: float = doc.score
+                    fusion_score: float = self.compute_fusion_score(
+                        distance=semantic_score, keyword_score=keyword_score, gamma=gamma
+                    )
+                    fusion.append({"rank": i, "keywords_content": keywords_content, "fusion_score": fusion_score})
+                fusion = sorted(
+                    fusion, key=cmp_to_key(lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]), reverse=True
+                )
                 res_topk = [res_topp[pos["rank"]] for pos in fusion[:top_k]]
                 answer.append(copy.deepcopy(res_topk))
         return answer
@@ -137,6 +188,8 @@ class HybridRetriever(IRetrieverRunner):
         runner: M1LMRunner | M2LMRunner,
         processor: IProcessor,
         device="cpu",
+        alpha: float = 0.5,
+        prefix: str = None,
     ):
         super().__init__()
         self.store = store
@@ -147,6 +200,8 @@ class HybridRetriever(IRetrieverRunner):
             logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
 
         self.runner.to(device)
+        self.alpha = alpha
+        self.prefix = prefix
 
     @torch.no_grad()
     def retrieve_topk(
@@ -155,11 +210,13 @@ class HybridRetriever(IRetrieverRunner):
         top_k: int = 5,
         prefix: str = None,
         include_embedding: bool = False,
-        alpha: float = 0.85,
+        alpha: float = None,
         include_scores: bool = False,
         batch_size: int = 16,
         filters: dict | None = None,
     ):
+        alpha = alpha or self.alpha
+        prefix = prefix or self.prefix
         queries = [queries] if isinstance(queries, str) else queries
         js_queries = [({"content": q} if prefix is None else {"content": q, "meta": {"prefix": prefix}}) for q in queries]
         dataset, tensor_names = igniset(js_queries, processor=self.processor, batch_size=batch_size)
@@ -182,6 +239,7 @@ class EmbeddingRetriever(IRetrieverRunner):
         runner: M1LMRunner | M2LMRunner | ATOMICLMRunner,
         processor: IProcessor,
         device: str = "cpu",
+        prefix: str = None,
     ):
         super().__init__()
         self.store = store
@@ -192,6 +250,7 @@ class EmbeddingRetriever(IRetrieverRunner):
             logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
 
         self.runner.to(device)
+        self.prefix = prefix
 
     @torch.no_grad()
     def retrieve_topk(
@@ -205,6 +264,7 @@ class EmbeddingRetriever(IRetrieverRunner):
         filters: dict | None = None,
         keywords: list[str] | None = None,
     ):
+        prefix = prefix or self.prefix
         queries = [queries] if isinstance(queries, str) else queries
         js_queries = [({"content": q} if prefix is None else {"content": q, "meta": {"prefix": prefix}}) for q in queries]
         dataset, tensor_names = igniset(js_queries, processor=self.processor, batch_size=batch_size)

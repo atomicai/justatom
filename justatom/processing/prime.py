@@ -18,7 +18,6 @@ class INFERProcessor(IProcessor):
         max_seq_len: int = 512,
         do_lower_case: bool = False,
         content_field: str = "content",
-        prefix_field: str = "prefix",
         prefix: str = "",
     ):
         super(INFERProcessor, self).__init__()  # noqa: UP008
@@ -26,20 +25,13 @@ class INFERProcessor(IProcessor):
         self.max_seq_len = max_seq_len
         self.do_lower_case = do_lower_case
         self.content_field = content_field
-        self.prefix_field = prefix_field
         self.prefix = prefix
 
     def dataset_from_dicts(self, dicts, indices=None, return_baskets=False):
         if indices is None:
             indices = []
         baskets = []
-        docs = [
-            self.do_prefix(
-                x.get(self.content_field),
-                pref=x.get("meta", {}).get(self.prefix_field, self.prefix),
-            )
-            for x in dicts
-        ]
+        docs = [self.do_prefix(x=x.get(self.content_field), pref=self.prefix) for x in dicts]
 
         tokenized_batch = self.tokenizer(docs, truncation=True, max_length=self.max_seq_len, padding="max_length")
 
