@@ -84,7 +84,6 @@ class ATOMICRetriever(IRetrieverRunner):
         gamma: Weight parameter to include to
         """
 
-        # Semantic score conversion
         semantic_relevance = distance  # значения ~ от (0,1], ближе = выше скор.
 
         # Final score
@@ -156,6 +155,17 @@ class ATOMICRetriever(IRetrieverRunner):
                         keywords_content = [kwp["keyword_or_phrase"].strip() for kwp in keywords_or_phrases]
                     else:
                         keywords_content = [kwp["explanation"].strip() for kwp in keywords_or_phrases]
+                        keywords_content = "\n".join([kwp["explanation"].strip() for kwp in keywords_or_phrases])
+
+                    keyword_score: float = self.ranker(query, keywords_content, score_cutoff=score_cutoff)
+                    semantic_score: float = doc.score
+                    fusion_score: float = self.compute_fusion_score(
+                        distance=semantic_score, keyword_score=keyword_score, gamma=gamma
+                    )
+                    fusion.append({"rank": i, "keywords_content": keywords_content, "fusion_score": fusion_score})
+                    fusion = sorted(
+                        fusion, key=cmp_to_key(lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]), reverse=True
+                    )
 
                     keyword_score: float = self.ranker(query, keywords_content, score_cutoff=cutoff_score)
                     semantic_score: float = doc.score
