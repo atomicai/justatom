@@ -1,6 +1,6 @@
 import asyncio as asio
 import os
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from pathlib import Path
 
 import dotenv
@@ -8,7 +8,6 @@ import numpy as np
 import polars as pl
 import torch
 from loguru import logger
-from more_itertools import chunked
 from torch.utils.data import ConcatDataset
 from tqdm.auto import tqdm
 
@@ -94,6 +93,18 @@ def check_and_raise(
     return fp
 
 
+def source_from_dataset(dataset_name_or_path):
+    import polars as pl
+
+    maybe_df_or_iter = DatasetApi.named(dataset_name_or_path).iterator()
+    if isinstance(maybe_df_or_iter, pl.DataFrame):
+        pl_data = maybe_df_or_iter
+    else:
+        dataset = list(maybe_df_or_iter)
+        pl_data = pl.from_dicts(dataset)
+    return pl_data
+
+
 def check_store_and_message(store: WeaviateDocStore, delete_if_not_empty: bool):
     if store.count_documents() <= 0:
         return store
@@ -109,131 +120,173 @@ def check_store_and_message(store: WeaviateDocStore, delete_if_not_empty: bool):
     return store
 
 
-def wrapper_docs_with_queries(pl_data: pl.DataFrame, search_field: str, content_field: str, batch_size: int = 128) -> list[dict]:
-    pl_data = pl_data.group_by(content_field).agg(pl.col(search_field))
-    queries, documents = (
-        pl_data.select(search_field).to_series().to_list(),
-        pl_data.select(content_field).to_series().to_list(),
-    )
-    docs = []
-    for i, chunk in tqdm(enumerate(chunked(zip(queries, documents, strict=False), n=batch_size))):  # noqa: B007
-        _the_docs = [{"content": c[1], "meta": {"labels": c[0]}} for c in chunk]
-        docs.extend(_the_docs)
-    return docs
+def wrapper_for_docs(
+    pl_data: pl.DataFrame,
+    search_or_id_field: str,
+    content_field: str,
+    keywords_or_phrases_field: str = None,
+    batch_size: int = 128,
+    filters: dict | None = None,
+) -> Generator[dict]:
+    if keywords_or_phrases_field is None:
+        pl_data = pl_data.group_by(content_field).agg(pl.col(search_or_id_field)).explode(pl.col(search_or_id_field))
+    else:
+        pl_data = (
+            pl_data.group_by(content_field)
+            .agg(pl.col(search_or_id_field), pl.col(keywords_or_phrases_field))
+            .explode(pl.col(search_or_id_field), pl.col(keywords_or_phrases_field))
+        )
+    js_data = pl_data.to_dicts()
+    for js_chunk in tqdm(js_data):
+        js_queries = [q for q in js_chunk["queries"] if q is not None]
+        if keywords_or_phrases_field is None:
+            yield dict(content=js_chunk[content_field], meta=dict(labels=js_queries))
+        else:
+            js_keywords_or_phrases = [
+                kwp
+                for kwp in js_chunk[keywords_or_phrases_field]
+                if kwp["keyword_or_phrase"] is not None and kwp["explanation"] is not None
+            ]
+            yield dict(content=js_chunk[content_field], meta=dict(labels=js_queries), keywords_or_phrases=js_keywords_or_phrases)
 
 
 def igni_runners(
     store,
-    index_by: str,
+    search_pipeline: str,
     model_name_or_path,
     query_prefix: str = "",
     content_prefix: str = "",
     device: str = "cpu",
+    **props,
 ):
     ix_runner, ir_runner = None, None
-    if index_by == "keywords":
-        ix_runner = IndexerAPI.named(index_by, store=store)
-        ir_runner = RetrieverApi.named(index_by, store=store)
+    if search_pipeline == "keywords":
+        ix_runner = IndexerAPI.named(search_pipeline, store=store)
+        ir_runner = RetrieverApi.named(search_pipeline, store=store)
     else:
         if model_name_or_path is None:
-            msg = f"You have specified `index_by`=[{index_by}] but `model_name_or_path` is None."
+            msg = f"You have specified `runner_name`=[{search_pipeline}] but `model_name_or_path` is None."
             logger.error(msg)
             raise ValueError(msg)
         lm_model = ILanguageModel.load(model_name_or_path)
-        # processor = IProcessor.load(model_name_or_path)
         ix_processor = INFERProcessor(ITokenizer.from_pretrained(model_name_or_path), prefix=content_prefix)
         ir_processor = INFERProcessor(ITokenizer.from_pretrained(model_name_or_path), prefix=query_prefix)
         runner = M1LMRunner(model=lm_model, prediction_heads=[], device=device)
-        ix_runner = IndexerAPI.named(index_by, store=store, runner=runner, processor=ix_processor, device=device)
-        ir_runner = RetrieverApi.named(index_by, store=store, runner=runner, processor=ir_processor, device=device)
+        ix_runner = IndexerAPI.named(search_pipeline, store=store, runner=runner, processor=ix_processor, device=device)
+        ir_runner = RetrieverApi.named(search_pipeline, store=store, runner=runner, processor=ir_processor, device=device, **props)
 
     return ix_runner, ir_runner
 
 
-async def maybe_index_and_ir(
+async def do_index_and_prepare_for_search(
     collection_name: str,
     pl_data: pl.DataFrame,
     model_name_or_path: str | None = None,
     index_and_eval_by: str = "embedding",
-    search_field: str = "query",
+    search_or_id_field: str = "queries",
     content_field: str = "content",
+    keywords_or_phrases_field: str = None,
     query_prefix: str = None,
     content_prefix: str = None,
     filters: dict | None = None,
     batch_size: int = 4,
-    top_k: int = 5,
-    delete_if_not_empty: bool = False,
+    flush_collection: bool = False,
     devices: list[str] = None,
+    weaviate_host: str = None,
+    weaviate_port: int = None,
+    **props,
 ) -> tuple[IRetrieverRunner, list[str]]:
-    delete_if_not_empty = delete_if_not_empty or Config.eval.delete_if_not_empty
+    flush_collection = flush_collection or Config.eval.flush_collection
     # Here we don't need any model to load. Only `DocumentStore`
-    store: WeaviateDocStore = WeaviateApi.find(collection_name)
-    store = check_store_and_message(store, delete_if_not_empty=delete_if_not_empty)
+    store: WeaviateDocStore = WeaviateApi.find(collection_name, WEAVIATE_HOST=weaviate_host, WEAVIATE_PORT=weaviate_port)
+    store = check_store_and_message(store, delete_if_not_empty=flush_collection)
 
     device = maybe_cuda_or_mps(devices=devices)
 
     ix_runner, ir_runner = igni_runners(
         store=store,
-        index_by=index_and_eval_by,
+        search_pipeline=index_and_eval_by,
         model_name_or_path=model_name_or_path,
         device=device,
         query_prefix=query_prefix,
         content_prefix=content_prefix,
+        **props,
     )
-    assert search_field in pl_data.columns, f"Search field [{search_field}] is not present within dataset."
+    assert search_or_id_field in pl_data.columns, f"Search field [{search_or_id_field}] is not present within dataset."
     assert content_field in pl_data.columns, f"Content field [{content_field}] is not present within dataset."
 
-    docs = wrapper_docs_with_queries(pl_data, search_field=search_field, content_field=content_field)
+    if not flush_collection:
+        return ir_runner
+    js_docs = list(
+        wrapper_for_docs(
+            pl_data,
+            search_or_id_field=search_or_id_field,
+            content_field=content_field,
+            keywords_or_phrases_field=keywords_or_phrases_field,
+        )
+    )
     print()
-    await ix_runner.index(documents=docs, batch_size=batch_size, device=device)
+    await ix_runner.index(documents=js_docs, batch_size=batch_size, device=device)
     print()
     return ir_runner
 
 
 async def main(
     model_name_or_path: str | None = None,
-    index_and_eval_by: str = "embedding",
+    search_pipeline: str = "embedding",
+    query_prefix: str = None,
+    content_prefix: str = None,
     collection_name: str = None,
+    flush_collection: bool = False,
     dataset_name_or_path: str = None,
+    save_results_to_dir: str = None,
     top_k: int = 20,
+    index_batch_size: int = 4,
+    search_batch_size: int = 32,
     filters: dict | None = None,
     metrics=None,
     metrics_top_k=["HitRate"],  # noqa: B006
     eval_top_k=None,
-    search_field: str = "query",
+    search_field: str = "queries",
     content_field: str = "content",
+    keywords_or_phrases_field: str = None,
+    weaviate_host: str = None,
+    weaviate_port: int = None,
     **props,
 ):
     collection_name = "Document" if collection_name is None else collection_name
-    dataset_name_or_path = Path(dataset_name_or_path) / "eval.csv" if Path(dataset_name_or_path).is_dir() else dataset_name_or_path
-    maybe_df_or_iter = DatasetApi.named(dataset_name_or_path).iterator()
-    if isinstance(maybe_df_or_iter, pl.DataFrame):
-        pl_data = maybe_df_or_iter
-    else:
-        dataset = list(maybe_df_or_iter)
-        pl_data = pl.from_dicts(dataset)
+    dataset_name_or_path = Path(dataset_name_or_path)
+    save_results_to_dir = Path(os.getcwd()) / "evals" if save_results_to_dir is None else Path(save_results_to_dir)
+    pl_data = source_from_dataset(str(dataset_name_or_path))
     if filters is not None:
         fields = filters.get("fields", [])
         for field in fields:
             pl_data = pl_data.filter(pl.col(field).is_not_null())
     logger.info(f"Total {pl_data.shape[0]} dataset for test.")
 
-    ir = await maybe_index_and_ir(
+    ir_runner = await do_index_and_prepare_for_search(
         collection_name=collection_name,
         pl_data=pl_data,
-        index_and_eval_by=index_and_eval_by,
+        batch_size=index_batch_size,
+        flush_collection=flush_collection,
+        index_and_eval_by=search_pipeline,
+        query_prefix=query_prefix,
+        content_prefix=content_prefix,
         model_name_or_path=model_name_or_path,
         filters=filters,
-        search_field=search_field,
+        search_or_id_field=search_field,
         content_field=content_field,
+        keywords_or_phrases_field=keywords_or_phrases_field,
+        weaviate_host=weaviate_host,
+        weaviate_port=weaviate_port,
         **props,
     )
 
-    logger.info(f"Indexing stage is completed. Using evaluation per {ir.store.count_documents()}")
+    logger.info(f"INDEXING stage is completed. Using evaluation per {ir_runner.store.count_documents()}")
 
-    el: IEvaluatorRunner = EvaluatorRunner(ir=ir)
+    el: IEvaluatorRunner = EvaluatorRunner(ir=ir_runner)
 
-    queries = pl_data.select(search_field).to_series().to_list()
+    queries = pl_data.select(search_field).explode(search_field).to_series().to_list()
 
     eval_metrics = el.evaluate_topk(
         queries=queries,
@@ -241,36 +294,54 @@ async def main(
         metrics=metrics,
         metrics_top_k=metrics_top_k,
         eval_top_k=eval_top_k,
+        batch_size=search_batch_size,
     )
-    print()
+    logger.info("EVALUATION stage is completed.")
     comp_eval_metrics = {k: list(v.compute()) for k, v in eval_metrics.items()}
     comp_eval_metrics = [
         {"name": k, "mean": v[0], "std": v[1], "dataset": str(dataset_name_or_path)} for k, v in comp_eval_metrics.items()
     ]
     pl_metrics = pl.from_dicts(comp_eval_metrics)
     snap_eval_metrics = [] if eval_metrics is None else eval_metrics
-    snap_name = stl.snapshot(
-        {
-            "evaluation": " ".join(snap_eval_metrics),
-            "model": Path(model_name_or_path).stem,
-        }
-    )
-    pl_metrics.write_csv(f"{snap_name}.csv")
+    snap_name = stl.snapshot({"Evaluation": " ".join(snap_eval_metrics), "Model": Path(model_name_or_path).stem}, sep="|")
+    snap_props = stl.snapshot(props, sep="|")
+    snap_props = "|" if snap_props == "" else "|" + snap_props + "|"
+    save_results_to_dir.mkdir(exist_ok=True, parents=False)
+    save_final_path = save_results_to_dir / f"{search_pipeline}{snap_props}{snap_name}.csv"
+    pl_metrics.write_csv(str(save_final_path))
 
 
 if __name__ == "__main__":
-    filters = {"fields": ["query"]}
-    asio.run(
-        *[
-            main(
-                index_and_eval_by="embedding",
-                filters={"fields": ["query", "content"]},
-                model_name_or_path="intfloat/multilingual-e5-base",
-                dataset_name_or_path=str(Path(os.getcwd()) / ".data"),
-                query_prefix="query:",
-                content_prefix="passage:",
-                metrics_top_k=["HitRate"],
-                eval_top_k=[2, 5, 10, 15, 20],
-            )
-        ]
-    )
+    for gamma in [0.1, 0.3, 0.45, 0.5, 0.55, 0.7, 0.9]:
+        for ranker in ["JaroWinkler", "Recall", "IDFRecall"]:
+            for j, top_p in enumerate([16, 24, 32, 64, 128, 256]):
+                asio.run(
+                    *[
+                        main(
+                            collection_name="EvalDefault",
+                            flush_collection=False,
+                            search_field="queries",
+                            content_field="content",
+                            keywords_or_phrases_field="keywords_or_phrases",
+                            filters={"fields": ["queries", "content"]},
+                            search_pipeline="atomicai",
+                            model_name_or_path="intfloat/multilingual-e5-base",
+                            dataset_name_or_path=str(Path(os.getcwd()) / ".data" / "polaroids.ai.data.json"),
+                            query_prefix="query:",
+                            content_prefix="passage:",
+                            metrics_top_k=["HitRate"],
+                            index_batch_size=32,
+                            search_batch_size=64,
+                            eval_top_k=[2, 5, 10, 15, 20],
+                            weaviate_host="localhost",
+                            weaviate_port=2211,
+                            alpha=0.7,
+                            top_p=top_p,
+                            gamma=gamma,
+                            include_keywords=True,
+                            include_explanation=True,
+                            ranker=ranker,
+                        )
+                    ]
+                )
+                logger.info(f"Done step=[{str(j + 1)}] top_p=[{str(top_p)}] alpha=[{str(0.7)}]")
