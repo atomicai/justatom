@@ -45,8 +45,7 @@ class IIGNIRunner:
                 )
                 prefix_to_use = str(Config.api.model_prefix_content_default) if prefix_to_use is None else str(prefix_to_use)
                 logger.info(
-                    f"Creating new `IX` Runner instance. Might take a while. Loading model on {device} device and using prefix \
-                    {prefix_to_use}"
+                    f"Creating new `IX` Runner instance. Might take a while. Loading model on {device} device and using prefix=[{prefix_to_use}]"  # noqa
                 )
                 tokenizer = ITokenizer.from_pretrained(model_name_or_path)
                 processor = INFERProcessor(tokenizer=tokenizer, prefix=prefix_to_use)
@@ -75,8 +74,7 @@ class IIGNIRunner:
 
                 prefix_to_use = str(Config.api.model_prefix_content_default) if prefix_to_use is None else str(prefix_to_use)
                 logger.info(
-                    f"Creating new `IR` Runner instance. Might take a while. Loading model on {device} device and using prefix \
-                    {prefix_to_use}"
+                    f"Creating new `IR` Runner instance. Might take a while. Loading model on {device} device and using prefix=[{prefix_to_use}]"  # noqa
                 )
 
                 tokenizer = ITokenizer.from_pretrained(model_name_or_path)

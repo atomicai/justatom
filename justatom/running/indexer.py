@@ -68,19 +68,6 @@ class KWARGIndexer(IIndexerRunner):
             logger.info(f"{self.__class__.__name__} - index - {i / len(documents)}")
 
 
-class ATOMICIndexer(IIndexerRunner):
-    def __init__(self, store: INNDocStore, model: ATOMICLMRunner):
-        self.store = store
-
-    async def index(
-        self,
-        documents: list[dict | Document],
-        batch_size: int = 1,
-        device: str = "cpu",
-    ):
-        pass
-
-
 @singleton
 class ByName:
     def named(self, name: str, **kwargs):
@@ -88,10 +75,8 @@ class ByName:
 
         if name == "keywords":
             klass = KWARGIndexer
-        elif name in ["embedding", "hybrid"]:
+        elif name in ["embedding", "hybrid", "fusion", "atomicai", "justatom"]:
             klass = NNIndexer
-        elif name == "justatom":
-            klass = ATOMICIndexer
         else:
             msg = f"Unknown name=[{name}] to init IIndexerRunner instance. Use one of {','.join(OPS)}"
             logger.error(msg)
