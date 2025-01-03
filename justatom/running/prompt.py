@@ -66,14 +66,51 @@ class TRLSPromptRunner(IPromptRunner):
 
 
 class REPHRASEPromptRunner(IPromptRunner):
-    def __init__(self, system_prompt: str, **props):
+    def __init__(self, system_prompt: str, styles: list[str] | None = None, **props):
         super().__init__(system_prompt=system_prompt.strip())
+        self.styles = styles
 
     def _prepare(self, content, title: str, **props):
+        styles: str = self.styles if self.styles is not None else ["AI ассистент"]
         prompt = f"""
         Сделай несколько (две или более) парафраз из исходного параграфа или вопроса.\n
+        Представь, что ты один из следующих профессоналов: \"{[' | '.join(styles)]}\". Создавай перефраз в соответствии с речевыми оборотами твоей професии (роли). Можешь использовать сленговые слова и добавлять приветствия, неформальную, ненормативную лексику и другие речевые обороты.\n
         Параграф (вопрос) из вселенной\"{title}\":\n{content}\n\n
-        Выдай ответ в виде json в формате: {{"rephrase_phrases": "[{{"phrase": <Твой пересказ, учитывающий контекст параграфа или вопроса из вселенной {title}>}}"}}
+        Выдай ответ в виде json в формате: {{"rephrase_phrases": "[{{"phrase": <Твой пересказ, учитывающий контекст параграфа или вопроса из вселенной {title}>}}, ...]"}}
+        """.strip()  # noqa
+        return prompt
+
+    def finalize(self, content: str, raw_response: str, as_json_string: bool = False, **props):
+        if as_json_string:
+            return json_repair.loads(raw_response)
+        return raw_response
+
+
+class QUERIESPropmtRunner(IPromptRunner):
+    def __init__(
+        self,
+        system_prompt: str,
+        styles: list[str] | None = None,
+        source_language: str | None = None,
+        title: str | None = None,
+        **props,
+    ):
+        super().__init__(system_prompt=system_prompt.strip())
+        self.styles = styles
+        self.source_language = source_language
+        self.title = title
+
+    def _prepare(self, content, title: str | None = None, source_language: str | None = None, **props):
+        source_language = source_language or self.source_language
+        styles: str = self.styles if self.styles is not None else ["AI ассистент"]
+        title = title or self.title
+        prompt = f"""
+        Сделай несколько (два или более) вопросов на {source_language} языке, используя контекст заданного тебе параграфа.\n
+        Представь, что ты один из следующих профессионалов: \"{[' | '.join(styles)]}\". Задавай вопрос в соответствии с речевыми оборотами твоей професии (роли). Можешь использовать сленговые слова и добавлять приветствия, неформальную, ненормативную лексику и другие речевые обороты.\n
+        В вопросе укажи, что речь идет про вселенную {title}. Вопросы должны быть строго на {source_language} языке!\n
+        Параграф из вселенной \"{title}\":\n{content}\n\n
+        Выдай ответ в виде  json в формате: {{"queries": "[{{"query": <Твой вопрос на {source_language} языке, учитывающий контекст параграфа из вселенной {title}>}}, ... ]}}"
+        Выдай только json.
         """.strip()  # noqa
         return prompt
 
