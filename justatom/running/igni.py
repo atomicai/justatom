@@ -9,7 +9,7 @@ from justatom.processing.prime import INFERProcessor, ITokenizer
 from justatom.running.indexer import API as IndexerApi
 from justatom.running.indexer import IIndexerRunner
 from justatom.running.m1 import M1LMRunner
-from justatom.running.prompt import KEYPromptRunner, REPHRASEPromptRunner, TRLSPromptRunner
+from justatom.running.prompt import KEYPromptRunner, QUERIESPropmtRunner, REPHRASEPromptRunner, TRLSPromptRunner
 from justatom.running.retriever import API as RetrieverApi
 from justatom.running.retriever import IRetrieverRunner
 
@@ -105,6 +105,10 @@ class IIGNIRunner:
     async def REPHRASER(self, system_prompt, **props):
         pr_rphr_runner = REPHRASEPromptRunner(system_prompt=system_prompt, **props)
         return pr_rphr_runner
+
+    async def QUERIES(self, system_prompt, **props):
+        pr_queries_runner = QUERIESPropmtRunner(system_prompt=system_prompt, **props)
+        return pr_queries_runner
 
 
 IGNIRunner = IIGNIRunner()

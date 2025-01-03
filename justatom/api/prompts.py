@@ -112,7 +112,9 @@ async def main(
     :return: status message if all processing went good, or error if some trouble arise (e.g. ConnectionError)
     """
 
-    PR_RUNNER_MAPPING = dict(KEYWORD=IGNIRunner.KEYWORDER, TRANSLATE=IGNIRunner.TRANLSATOR, REPHRASE=IGNIRunner.REPHRASER)
+    PR_RUNNER_MAPPING = dict(
+        KEYWORD=IGNIRunner.KEYWORDER, TRANSLATE=IGNIRunner.TRANLSATOR, REPHRASE=IGNIRunner.REPHRASER, QUERIES=IGNIRunner.QUERIES
+    )
     if prompt_component is not None and prompt_as_string is not None:
         msg = f"""
         You've specified both `prompt_component`=[{prompt_component}] and `prompt_as_string`=[{prompt_as_string}]
@@ -146,9 +148,9 @@ async def main(
         must_include_keys=must_include_keys,
     )
     dataset_save_path = (
-        Path(os.getcwd()) / "outputs" / str(Path(__name__)) + ".json" if dataset_save_path is None else Path(dataset_save_path)
+        Path(os.getcwd()) / "outputs" / ("prompts.dataset" + ".json") if dataset_save_path is None else Path(dataset_save_path)
     )
-    dataset_save_path.mkdir(exist_ok=True, parents=False)
+    dataset_save_path.parent.mkdir(exist_ok=True, parents=False)
     with open(dataset_save_path, "w+") as fp:
         json.dump(js_pipe_answer, fp, ensure_ascii=False)
 
@@ -157,20 +159,23 @@ if __name__ == "__main__":
     asio.run(
         *[
             main(
-                dataset_name_or_path=str(Path(os.getcwd()) / ".data" / "polaroids.ai.data.json"),
-                must_include_keys=["title", "chunk_id"],
+                # dataset_name_or_path=str(Path(os.getcwd()) / ".data" / "polaroids.ai.data.json"),
+                dataset_name_or_path=str(Path(os.getcwd()) / ".data" / "sber.polaroids.ai.data.json"),
+                must_include_keys=["chunk_id"],
                 prompt_component="KEYWORD",
                 snapshot_every_iters=1,
                 batch_size=4,
                 content_field="content",
                 system_prompt="""
-                Ты эксперт-лингвит. Твоя задача отвечать четко и понятно выполнять задачи по заданному тебе параграфу.
-                Параграф может быть диалогом, текстом или повествованием из книги, игры или фильма.
+                Твоя задача отвечать четко и понятно выполнять задачи по заданному тебе параграфу.
+                Параграф может быть из разных книг, игр, фильмов или является фрагментом научной литературы или исторического события.
                 """,
-                snapshot_prefix="RU_EN_KWARG_",
+                snapshot_prefix="KWARGS",
                 snapshot_where="outputs",
                 openai_model_name="gpt-4-turbo",
-                source_language="английском",
+                source_language="русском",
+                styles=["Школьник", "Геймер", "SMM специалист", "Блоггер", "Учитель литературы", " IT - специалист", "Банкир"],
+                title="содержимое параграфа",
             )
         ]
     )
