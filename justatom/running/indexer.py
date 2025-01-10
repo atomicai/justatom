@@ -10,7 +10,6 @@ from justatom.etc.schema import Document
 from justatom.processing import igniset
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.mask import IProcessor
-from justatom.running.atomic import ATOMICLMRunner
 from justatom.running.m1 import M1LMRunner
 from justatom.running.m2 import M2LMRunner
 from justatom.running.mask import IIndexerRunner
@@ -71,7 +70,7 @@ class KWARGIndexer(IIndexerRunner):
 @singleton
 class ByName:
     def named(self, name: str, **kwargs):
-        OPS = ["keywords", "emebedding", "justatom"]
+        OPS = ["keywords", "emebedding", "hybrid", "fusion", "atomicai", "justatom"]
 
         if name == "keywords":
             klass = KWARGIndexer

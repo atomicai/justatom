@@ -32,7 +32,7 @@ class ATOMICRetriever(IRetrieverRunner):
     def _compute_inverse_recall(query: str, keywords_or_phrases: list[str], **props):
         k_words = Counter(stl.flatten_list([kwp.lower().split(" ") for kwp in keywords_or_phrases]))
         q_words = "".join(w for w in query if w not in string.punctuation).lower().strip().split()
-        idf_recall = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words]) / sum(
+        idf_recall = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words if w in k_words]) / sum(
             [1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words]
         )
         return idf_recall
@@ -157,7 +157,7 @@ class ATOMICRetriever(IRetrieverRunner):
                         keywords_content = [kwp["explanation"].strip() for kwp in keywords_or_phrases]
                         keywords_content = "\n".join([kwp["explanation"].strip() for kwp in keywords_or_phrases])
 
-                    keyword_score: float = self.ranker(query, keywords_content, score_cutoff=score_cutoff)
+                    keyword_score: float = self.ranker(query, keywords_content, score_cutoff=cutoff_score)
                     semantic_score: float = doc.score
                     fusion_score: float = self.compute_fusion_score(
                         distance=semantic_score, keyword_score=keyword_score, gamma=gamma
