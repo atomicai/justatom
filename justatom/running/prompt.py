@@ -105,12 +105,18 @@ class QUERIESPropmtRunner(IPromptRunner):
         styles: str = self.styles if self.styles is not None else ["AI ассистент"]
         title = title or self.title
         prompt = f"""
-        Сделай несколько (два или более) вопросов на {source_language} языке, используя контекст заданного тебе параграфа.\n
-        Представь, что ты один из следующих профессионалов: \"{[' | '.join(styles)]}\". Задавай вопрос в соответствии с речевыми оборотами твоей професии (роли). Можешь использовать сленговые слова и добавлять приветствия, неформальную, ненормативную лексику и другие речевые обороты.\n
-        В вопросе укажи, что речь идет про вселенную {title}. Вопросы должны быть строго на {source_language} языке!\n
-        Параграф из вселенной \"{title}\":\n{content}\n\n
-        Выдай ответ в виде  json в формате: {{"queries": "[{{"query": <Твой вопрос на {source_language} языке, учитывающий контекст параграфа из вселенной {title}>}}, ... ]}}"
-        Выдай только json.
+        Generate multiple (two or more) queries in {source_language} language using provided paragraph (context).\n
+        Imagine, you are one of the professional: \"{[' | '.join(styles)]}\". Ask your question in line with the speech patterns of your profession (role). Feel free to use slang, greetings, informal or even profane language, and any other turns of phrase.\n
+        In your question, refer to the universe (theme) \"{title}\" if the question is broad enough or might be misunderstood. Avoid doing so whenever possible, but if, for example, it's about a book or a unique section, be sure to specify it.\n
+        Questions must be strictly in the {source_language} language!\n
+        Paragraph belongs to the topic - \"{title}\".\n
+        Paragraph:\n\n{content}\n\n
+        Each synthetic dataset should be in JSON format containing:
+        - "answer": [{{
+            "question": [Generated short question],
+            "response": [The answer can be found directly in the text of the document]
+        }}, ...]
+        Respond with JSON only.
         """.strip()  # noqa
         return prompt
 
