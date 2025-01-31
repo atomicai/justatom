@@ -1,0 +1,7 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "justatom"
+url: "https://github.com/atomicai/justatom"
+authors:
+- family-names: "Tarlinskiy"
+  given-names: "Igor"
