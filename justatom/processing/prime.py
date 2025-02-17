@@ -202,14 +202,14 @@ class ContrastiveProcessor(IProcessor):
         queries = [
             self.do_prefix(
                 x.get(self.queries_field),  # query
-                pref=x.get("meta", {}).get("queries_prefix", self.queries_prefix),
+                pref=self.queries_prefix,
             )
             for x in dicts
         ]
         pos_queries = [
             self.do_prefix(
                 x.get(self.pos_queries_field),  # content
-                pref=x.get("meta", {}).get("pos_queries_prefix", self.pos_queries_prefix),
+                pref=self.pos_queries_prefix,
             )
             for x in dicts
         ]
@@ -256,7 +256,7 @@ class ContrastiveProcessor(IProcessor):
                 tokenized={},
                 features=[features],
             )
-            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            cur_basket = SampleBasket(id_internal=None, raw=None, id_external=None, samples=[cur_sample])
             baskets.append(cur_basket)
 
         problematic_ids = set()
