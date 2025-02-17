@@ -294,8 +294,8 @@ class WeaviateDocStore:
         for key, value in document_data.items():
             if isinstance(value, datetime.datetime):
                 document_data[key] = value.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        if weaviate_meta := getattr(data, "metadata", None):
+        weaviate_meta = getattr(data, "metadata", None)
+        if getattr(weaviate_meta, "score", None) is not None:
             # Depending on the type of retrieval we get score from different fields.
             # score is returned when using BM25 retrieval.
             # certainty is returned when using embedding retrieval.
@@ -460,6 +460,9 @@ class WeaviateDocStore:
         props = dict(include_vector=include_vector)
         for obj in self._collection.iterator(**props):  # noqa: UP028
             yield obj
+
+    def get_document_by_id(self):
+        pass
 
     def delete_documents(self, document_ids: list[str]) -> None:
         """
