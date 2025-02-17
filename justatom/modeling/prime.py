@@ -244,6 +244,54 @@ class MBERTModel(ILanguageModel):
         return (outputs,)
 
 
+class BGEModel(ILanguageModel):
+    def __init__(
+        self,
+        model_name_or_instance: str | nn.Module = "deepvk/USER-bge-m3",
+        device: str = "cpu",
+        **kwargs,
+    ):
+        super().__init__()
+        self.model = (
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
+        )
+        self.name = "deepvk/USER-bge-m3"
+        self.model.to(device)
+
+    @classmethod
+    def load(cls, model_name_or_path: str, **kwargs):
+        model = AutoModel.from_pretrained(model_name_or_path)
+        return cls(model, **kwargs)
+
+    def maybe_norm(self, xs, norm: bool):
+        if norm:
+            return F.normalize(xs, p=2, dim=len(xs.shape) - 1)
+        return xs
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        group_ids: torch.Tensor = None,
+        pos_input_ids: torch.Tensor = None,
+        pos_attention_mask: torch.Tensor = None,
+        norm: bool = True,
+        average: bool = True,
+    ):
+        # embedding of CLS token
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state[:, 0]
+
+        outputs = self.maybe_norm(outputs, norm=norm)
+        if pos_input_ids is not None and pos_attention_mask is not None:
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask).last_hidden_state[:, 0]
+
+            pos_outputs = self.maybe_norm(pos_outputs, norm=norm)
+
+            return outputs, pos_outputs
+
+        return (outputs,)
+
+
 class ATOMICModel(ILanguageModel):
     """A Transformer Orchestration Model Involving Classification module. Base version for both inferene and high quality."""
 
@@ -439,6 +487,7 @@ HF_CLASS_MAPPING = {
     "intfloat/multilingual-e5-small": E5SModel,
     "intfloat/multilingual-e5-large": E5LModel,
     "google-bert/bert-base-multilingual-cased": MBERTModel,
+    "deepvk/USER-bge-m3": BGEModel,
 }
 
 COMMON_CLASS_MAPPING = {"pfbert": IPFBERTModel, "rec": IRECModel}
