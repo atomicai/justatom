@@ -1,3 +1,5 @@
+import copy
+import uuid
 from datetime import datetime
 from itertools import islice
 from pathlib import Path
@@ -24,6 +26,18 @@ def convert_date_to_rfc3339(date: str) -> str:
         converted_date = parsed_datetime.isoformat()
 
     return converted_date
+
+
+def maybe_cast_to_str(d: dict, uuid_to_str: bool = False):
+    ans = copy.deepcopy(d)
+    for k, v in d.items():
+        if isinstance(k, str) and (k.endswith("id")) and uuid_to_str and isinstance(v, uuid.UUID):
+            ans[k] = str(v)
+        elif isinstance(v, dict):
+            ans[k] = maybe_cast_to_str(v, uuid_to_str=uuid_to_str)
+        elif isinstance(v, list):
+            ans[k] = [str(x) for x in v]
+    return ans
 
 
 def maybe_number(x):

@@ -29,9 +29,23 @@ class ATOMICRetriever(IRetrieverRunner):
 
         return recall
 
-    def _compute_inverse_recall(query: str, keywords_or_phrases: list[str], **props):
-        k_words = Counter(stl.flatten_list([kwp.lower().split(" ") for kwp in keywords_or_phrases]))
-        q_words = "".join(w for w in query if w not in string.punctuation).lower().strip().split()
+    def _compute_inverse_recall(query: str, keywords_or_phrases_or_content: list[str], stopsyms: str | None = None, **props):
+        stopsyms = "«»\":'" if stopsyms is None else stopsyms
+        stopsyms = stopsyms + string.punctuation
+        if isinstance(keywords_or_phrases_or_content, list):
+            k_words = Counter(
+                stl.flatten_list(
+                    [
+                        "".join([w for w in kwp.lower().strip() if w not in stopsyms]).split()
+                        for kwp in keywords_or_phrases_or_content
+                    ]
+                )
+            )
+        else:
+            k_words = Counter(
+                ["".join([ch for ch in w.lower().strip() if ch not in stopsyms]) for w in keywords_or_phrases_or_content.split()]
+            )
+        q_words = "".join(w for w in query if w not in stopsyms).lower().strip().split()
         idf_recall = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words if w in k_words]) / sum(
             [1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words]
         )
@@ -50,9 +64,11 @@ class ATOMICRetriever(IRetrieverRunner):
         top_p: int = 128,
         prefix: str = None,
         cutoff_score: float = 0.8,
-        gamma: float = 0.5,
+        gamma1: float = 1.0,
+        gamma2: float = 1.0,
         include_keywords: bool = True,
         include_explanation: bool = False,
+        include_content: bool = False,
     ):
         super().__init__()
         self.store = store
@@ -73,11 +89,13 @@ class ATOMICRetriever(IRetrieverRunner):
         self.top_p = top_p
         self.prefix = prefix
         self.cutoff_score = cutoff_score
-        self.gamma = gamma
+        self.gamma1 = gamma1
+        self.gamma2 = gamma2
         self.include_keywords = include_keywords
         self.include_explanation = include_explanation
+        self.include_content = include_content
 
-    def compute_fusion_score(self, distance: float, keyword_score: float, gamma: float = 0.5) -> float:
+    def compute_fusion_score(self, distance: float, keyword_score: float, gamma1: float = 1.0, gamma2: float = 1.0) -> float:
         """
         distance: Semantic score from ANN search (e.g. Weaviate)
         keyword_score: Keyword intersection, Precision, Recall in terms of keywords intersection
@@ -87,7 +105,7 @@ class ATOMICRetriever(IRetrieverRunner):
         semantic_relevance = distance  # значения ~ от (0,1], ближе = выше скор.
 
         # Final score
-        combined_score = gamma * semantic_relevance + (1 - gamma) * keyword_score
+        combined_score = gamma1 * semantic_relevance + gamma2 * keyword_score
 
         return combined_score
 
@@ -103,10 +121,12 @@ class ATOMICRetriever(IRetrieverRunner):
         include_scores: bool = False,
         include_keywords: bool = None,
         include_explanation: bool = None,
+        include_content: bool = None,
         batch_size: int = 16,
         filters: dict | None = None,
         cutoff_score: float = None,
-        gamma: float = None,
+        gamma1: float = None,
+        gamma2: float = None,
         return_keywords_or_phrases: bool = False,
         **props,
     ):
@@ -114,13 +134,15 @@ class ATOMICRetriever(IRetrieverRunner):
         top_p = top_p or self.top_p
         prefix = prefix or self.prefix
         cutoff_score = cutoff_score or self.cutoff_score
-        gamma = gamma or self.gamma
+        gamma1 = gamma1 or self.gamma1
+        gamma2 = gamma2 or self.gamma2
         include_keywords = include_keywords or self.include_keywords
         include_explanation = include_explanation or self.include_explanation
-        if not include_keywords and not include_explanation:
+        include_content = include_content or self.include_content
+        if not include_keywords and not include_explanation and not include_content:
             msg = f"""
             You've initialized `{self.__class__.__name__}` IR but not using any of the atomic keywords features.
-            If you don't need or your dataset is free of keywords, please you one of the following: 
+            If you don't need any additional ranking, please you one of the following: 
             {','.join(
                 [
                     KWARGRetriever.__class__.__name__,
@@ -143,40 +165,30 @@ class ATOMICRetriever(IRetrieverRunner):
             for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
                 res_topk = []
                 res_topp = self.store.search(query=query, query_embedding=vector, alpha=alpha, filters=filters, top_k=top_p)
-                fusion = []
+                fus_topk = []
                 for i, doc in enumerate(res_topp):
                     keywords_or_phrases = doc.meta.get("keywords_or_phrases", [])
-                    keywords_content: str = None
+                    keywords_content: str = [doc.content] if include_content else []
                     if include_keywords and include_explanation:
-                        keywords_content = [
+                        keywords_content += [
                             kwp["keyword_or_phrase"].strip() + " " + kwp["explanation"].strip() for kwp in keywords_or_phrases
                         ]
                     elif include_keywords:
-                        keywords_content = [kwp["keyword_or_phrase"].strip() for kwp in keywords_or_phrases]
+                        keywords_content += [kwp["keyword_or_phrase"].strip() for kwp in keywords_or_phrases]
                     else:
-                        keywords_content = [kwp["explanation"].strip() for kwp in keywords_or_phrases]
-                        keywords_content = "\n".join([kwp["explanation"].strip() for kwp in keywords_or_phrases])
-
+                        keywords_content += [kwp["explanation"].strip() for kwp in keywords_or_phrases]
+                        keywords_content += "\n".join([kwp["explanation"].strip() for kwp in keywords_or_phrases])
                     keyword_score: float = self.ranker(query, keywords_content, score_cutoff=cutoff_score)
                     semantic_score: float = doc.score
                     fusion_score: float = self.compute_fusion_score(
-                        distance=semantic_score, keyword_score=keyword_score, gamma=gamma
+                        distance=semantic_score, keyword_score=keyword_score, gamma1=gamma1, gamma2=gamma2
                     )
-                    fusion.append({"rank": i, "keywords_content": keywords_content, "fusion_score": fusion_score})
-                    fusion = sorted(
-                        fusion, key=cmp_to_key(lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]), reverse=True
-                    )
+                    fus_topk.append({"rank": i, "keywords_content": keywords_content, "fusion_score": fusion_score})
 
-                    keyword_score: float = self.ranker(query, keywords_content, score_cutoff=cutoff_score)
-                    semantic_score: float = doc.score
-                    fusion_score: float = self.compute_fusion_score(
-                        distance=semantic_score, keyword_score=keyword_score, gamma=gamma
-                    )
-                    fusion.append({"rank": i, "keywords_content": keywords_content, "fusion_score": fusion_score})
-                fusion = sorted(
-                    fusion, key=cmp_to_key(lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]), reverse=True
-                )
-                res_topk = [res_topp[pos["rank"]] for pos in fusion[:top_k]]
+                fus_topk = sorted(
+                    fus_topk, key=cmp_to_key(lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]), reverse=True
+                )[:top_k]
+                res_topk = [res_topp[pos["rank"]] for pos in fus_topk]
                 answer.append(copy.deepcopy(res_topk))
         return answer
 
@@ -190,6 +202,7 @@ class HybridRetriever(IRetrieverRunner):
         device="cpu",
         alpha: float = 0.5,
         prefix: str = None,
+        **props,
     ):
         super().__init__()
         self.store = store
@@ -214,6 +227,7 @@ class HybridRetriever(IRetrieverRunner):
         include_scores: bool = False,
         batch_size: int = 16,
         filters: dict | None = None,
+        **props,
     ):
         alpha = alpha or self.alpha
         prefix = prefix or self.prefix
@@ -240,6 +254,7 @@ class EmbeddingRetriever(IRetrieverRunner):
         processor: IProcessor,
         device: str = "cpu",
         prefix: str = None,
+        **props,
     ):
         super().__init__()
         self.store = store
@@ -263,6 +278,7 @@ class EmbeddingRetriever(IRetrieverRunner):
         batch_size: int = 16,
         filters: dict | None = None,
         keywords: list[str] | None = None,
+        **props,
     ):
         prefix = prefix or self.prefix
         queries = [queries] if isinstance(queries, str) else queries
@@ -281,7 +297,7 @@ class EmbeddingRetriever(IRetrieverRunner):
 
 
 class KWARGRetriever(IRetrieverRunner):
-    def __init__(self, store: INNDocStore):
+    def __init__(self, store: INNDocStore, **props):
         super().__init__()
         self.store = store
 
@@ -292,6 +308,7 @@ class KWARGRetriever(IRetrieverRunner):
         include_scores: bool = False,
         filters: dict | None = None,
         keywords: list[str] | None = None,
+        **props,
     ):
         queries = [queries] if isinstance(queries, str) else queries
         answer = []

@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 import simplejson
 
+from justatom.etc.format import maybe_cast_to_str
+
 
 class Document:
     id: str
@@ -117,7 +119,7 @@ class Document:
 
         return f"{mmh3.hash128(final_hash_key, signed=False):02x}"
 
-    def to_dict(self, field_map={}) -> dict:  # noqa: B006
+    def to_dict(self, field_map={}, uuid_to_str: bool = False) -> dict:  # noqa: B006
         """
         Convert Document to dict. An optional field_map can be supplied to change the names of the keys in the
         resulting dict. This way you can work with standardized Document objects in Haystack, but adjust the format that
@@ -141,6 +143,8 @@ class Document:
                     v = [self.content.columns.tolist()] + self.content.values.tolist()
             k = k if k not in inv_field_map else inv_field_map[k]  # noqa: SIM401
             _doc[k] = v
+        if uuid_to_str:
+            return maybe_cast_to_str(_doc, uuid_to_str=True)
         return _doc
 
     @classmethod
