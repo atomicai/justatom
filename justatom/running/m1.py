@@ -25,24 +25,26 @@ class M1LMRunner(IMODELRunner, torch.nn.Module):
         self.device = device
         self.dropout = torch.nn.Dropout(0.1)
         self.loss_aggregation_fn = loss_per_head_sum
-        # self.config = dict(prediction_heads=[hi.generate_config() for hi in prediction_heads or []])
         self.config = dict()
         self.processor = processor
+        self.to(device)
 
     def to(self, device):
         logger.info(f"Moving to device {str(device)}")
-        for mod in self.prediction_heads:
+        self.model.to(device)
+        for i, mod in enumerate(self.prediction_heads):
             if mod.device != device:
-                logger.info("Head is not on the same device")
+                logger.info(f"Moving head[{str(i)}].to[device={device}]")
+                mod.to(device)
             if mod.loss.device != device:
-                logger.info("Loss on the other device :(")
+                logger.info(f"Moving head[{str(i)}].LOSS.to[device={device}]")
         super(M1LMRunner, self).to(device)  # noqa: UP008
 
     @classmethod
     def load(cls, data_dir: Path | str, config=None, **props):
         # model_config.json supposed to be present in directory
         _model_config = Path(data_dir) / "runner_config.json"
-        assert _model_config.exists(), "The model file is not found for `M1Runner`"
+        assert _model_config.exists(), logger.error(f"The model file is not found for klass=[{cls.__class__.__name__}]")
         model = ILanguageModel.load(Path(data_dir))
         if config is None:
             _runner_config = Path(data_dir) / "runner_config.json"

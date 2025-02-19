@@ -12,4 +12,6 @@ async def openai_chat(content_or_messages: str | list[dict], model: str = "gpt-4
     )
     response = coro_response.json()
     props = {} if props is None else props
-    return dict(response=response["choices"][0]["message"]["content"], **props)
+    if "choices" in response:
+        return dict(response=response["choices"][0]["message"]["content"], **props)
+    return response

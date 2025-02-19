@@ -154,6 +154,30 @@ class IEvaluatorRunner(abc.ABC):
         pass
 
 
+class IPatcherRunner(abc.ABC):
+    @abc.abstractmethod
+    def patch(self, collection_name: str, new_collection_name: str, **kwargs):
+        pass
+
+
+class IReqsRunner(abc.ABC):
+    @abc.abstractmethod
+    async def INDEX(self, **props):
+        pass
+
+    @abc.abstractmethod
+    async def SEARCH(self, **props):
+        pass
+
+    @abc.abstractmethod
+    async def DELETE(self, **props):
+        pass
+
+    @abc.abstractmethod
+    async def PATCH(self, **props):
+        pass
+
+
 class IPromptRunner(abc.ABC):
     def __init__(self, system_prompt: str):
         self.system_prompt = system_prompt
