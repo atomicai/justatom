@@ -9,7 +9,14 @@ from justatom.processing.prime import INFERProcessor, ITokenizer
 from justatom.running.indexer import API as IndexerApi
 from justatom.running.indexer import IIndexerRunner
 from justatom.running.m1 import M1LMRunner
-from justatom.running.prompt import KEYPromptRunner, QUERIESPropmtRunner, REPHRASEPromptRunner, TRLSPromptRunner
+from justatom.running.mask import IPatcherRunner
+from justatom.running.patcher import PatcherRunner
+from justatom.running.prompt import (
+    KEYPromptRunner,
+    QUERIESPromptRunner,
+    REPHRASEPromptRunner,
+    TRLSPromptRunner,
+)
 from justatom.running.retriever import API as RetrieverApi
 from justatom.running.retriever import IRetrieverRunner
 
@@ -28,11 +35,19 @@ class IIGNIRunner:
         self._ix_runner = None
         self._ir_runner = None
 
+    async def PATCHER(self, collection_name: str, new_collection_name: str) -> IPatcherRunner:
+        """
+        Asynchronous function to ignite `PATCHER` runner. `PATCHER` is responsible to re-write docs from one collection to the other.
+        """
+
+        patcher = PatcherRunner(collection_name=collection_name, new_collection_name=new_collection_name)
+        return patcher
+
     async def INDEXER(
         self, store, index_by: str, model_name_or_path: str | None = None, prefix_to_use: str = None, device: str = "cpu", **props
     ) -> IIndexerRunner:
         """
-        Asynchronous function to ignite IX (aka IndeXer) runner by caching the underlying model if one uses it.
+        Asynchronous function to ignite INDEXER runner by caching the underlying model if one uses it.
         """
         if self._ix_runner is None:
             if index_by == "keywords":
@@ -107,7 +122,7 @@ class IIGNIRunner:
         return pr_rphr_runner
 
     async def QUERIES(self, system_prompt, **props):
-        pr_queries_runner = QUERIESPropmtRunner(system_prompt=system_prompt, **props)
+        pr_queries_runner = QUERIESPromptRunner(system_prompt=system_prompt, **props)
         return pr_queries_runner
 
 

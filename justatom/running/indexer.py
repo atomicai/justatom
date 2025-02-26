@@ -33,23 +33,35 @@ class NNIndexer(IIndexerRunner):
         self.runner.to(device)
 
     @torch.no_grad()
-    async def index(self, documents: list[dict | Document], batch_size: int = 1, device: str = None, **props):
+    async def index(
+        self, documents: list[dict | Document], batch_size: int = 1, device: str = None, flush_memory_every: int = 10, **props
+    ):
         device = device or self.device
         if device != self.device:
             logger.info(
                 f"Moving [{self.runner.__class__.__name__}] to the new device = {device}. Old device = {self.runner.device}"
             )
             self.runner.to(device)
+            self.runner = self.runner.eval()
         documents_as_dicts = [d.to_dict() if isinstance(d, Document) else d for d in documents]
         dataset, tensor_names = igniset(dicts=documents_as_dicts, processor=self.processor, batch_size=batch_size)
         loader = NamedDataLoader(dataset=dataset, tensor_names=tensor_names, batch_size=batch_size)
         for i, (docs, batch) in tqdm(enumerate(zip(chunked(documents_as_dicts, n=batch_size), loader, strict=False))):  # noqa: B007
             batches = {k: v.to(device) for k, v in batch.items()}
-            vectors = self.runner(batch=batches)[0].cpu()
+            with torch.no_grad():
+                vectors = self.runner(batch=batches)[0].cpu().numpy()
             _docs = copy.deepcopy(docs)
             for doc, vec in zip(_docs, vectors, strict=False):
                 doc["embedding"] = vec
-            self.store.write_documents([Document.from_dict(doc) for doc in _docs])
+            if i % flush_memory_every:
+                if device == "mps":
+                    torch.mps.empty_cache()
+                elif device == "cuda":
+                    torch.cuda.empty_cache()
+            if self.store is not None:
+                self.store.write_documents([Document.from_dict(doc) for doc in _docs])
+            else:
+                yield _docs
 
 
 class KWARGIndexer(IIndexerRunner):
