@@ -13,8 +13,6 @@ Information retrieval - <a href="https://en.wikipedia.org/wiki/Information_retri
 \varphi(R)_{K}=\sum_{i=1}^{|C|}\frac{R_{K}(q_i)\cap\{c_i\}}{|C|}
 ```
 
-<!-- ![equation](https://latex.codecogs.com/svg.image?$\varphi(R)_{K}=\sum_{i=1}^{|C|}\frac{R_{K}(q_i)\cap\{c_i\}}{|C|}$) -->
-
 > Basically, for each query $q_i$ we find closest $top_k$ paragraphs and see whether the correct one - $c_i$ has been retrieved.
 
 The good-old-fashioned solution is to use the well-known <a href="https://en.wikipedia.org/wiki/Elasticsearch">Elasticsearch</a>, which is fast and performant. However, it lacks the “smart” understanding of what you’ve asked it to search for, because under the hood it uses an inverted index algorithm (BM25). As a result, it doesn’t distinguish between “apple fruits” and “apple stocks.”
