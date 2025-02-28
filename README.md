@@ -9,7 +9,11 @@ Information retrieval - <a href="https://en.wikipedia.org/wiki/Information_retri
 
 > Given the `K` and the collection of question-answer pairs `C`, «how good the retrieval system is» could be defined mathematically as 
 
-![equation](https://latex.codecogs.com/svg.image?$\varphi(R)_{K}=\sum_{i=1}^{|C|}\frac{R_{K}(q_i)\cap\{c_i\}}{|C|}$)
+```math
+\varphi(R)_{K}=\sum_{i=1}^{|C|}\frac{R_{K}(q_i)\cap\{c_i\}}{|C|}
+```
+
+<!-- ![equation](https://latex.codecogs.com/svg.image?$\varphi(R)_{K}=\sum_{i=1}^{|C|}\frac{R_{K}(q_i)\cap\{c_i\}}{|C|}$) -->
 
 > Basically, for each query $q_i$ we find closest $top_k$ paragraphs and see whether the correct one - $c_i$ has been retrieved.
 
