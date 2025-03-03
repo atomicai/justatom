@@ -583,17 +583,13 @@ class WeaviateDocStore:
 
 @singleton
 class IFinder:
-    store: dict[str, WeaviateDocStore] = dict()
-
     def find(self, collection_name: str, **kwargs):
-        if collection_name not in self.store:
-            WEAVIATE_HOST = kwargs.get("WEAVIATE_HOST") or os.environ.get("WEAVIATE_HOST")
-            WEAVIATE_PORT = kwargs.get("WEAVIATE_PORT") or os.environ.get("WEAVIATE_PORT")
-            self.store[collection_name] = WeaviateDocStore(
-                collection_name=collection_name,
-                url=f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}",
-            )
-        return self.store[collection_name]
+        WEAVIATE_HOST = kwargs.get("WEAVIATE_HOST") or os.environ.get("WEAVIATE_HOST")
+        WEAVIATE_PORT = kwargs.get("WEAVIATE_PORT") or os.environ.get("WEAVIATE_PORT")
+        return WeaviateDocStore(
+            collection_name=collection_name,
+            url=f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}",
+        )
 
 
 Finder = IFinder()
