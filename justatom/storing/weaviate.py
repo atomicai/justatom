@@ -9,6 +9,7 @@ from typing import Any
 import weaviate
 from loguru import logger
 from weaviate.classes.query import MetadataQuery
+from weaviate.classes.tenants import Tenant
 from weaviate.collections.classes.data import DataObject
 from weaviate.config import AdditionalConfig
 from weaviate.embedded import EmbeddedOptions
@@ -165,6 +166,7 @@ class WeaviateDocStore:
                 "class": collection_name.capitalize(),
                 "invertedIndexConfig": {"indexNullState": True},
                 "properties": DOCUMENT_COLLECTION_PROPERTIES,
+                "multiTenancyConfig": {"enabled": True},
             }
         else:
             # Set the class if not set
@@ -174,7 +176,6 @@ class WeaviateDocStore:
 
         if not self._client.collections.exists(collection_settings["class"]):
             self._client.collections.create_from_dict(collection_settings)
-
         self._url = url
         self._collection_settings = collection_settings
         self._auth_client_secret = auth_client_secret
@@ -182,6 +183,9 @@ class WeaviateDocStore:
         self._embedded_options = embedded_options
         self._additional_config = additional_config
         self._collection = self._client.collections.get(collection_settings["class"])
+        # Manually add `Tenant` for managing multiple connections at once
+        if self._collection.name not in self._collection.tenants.get():
+            self._collection.tenants.create([Tenant(name=self._collection.name)])
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -228,7 +232,7 @@ class WeaviateDocStore:
         """
         Returns the number of documents present in the DocumentStore.
         """
-        total = self._collection.aggregate.over_all(total_count=True).total_count
+        total = self._collection.with_tenant(self._collection.name).aggregate.over_all(total_count=True).total_count
         return total if total else 0
 
     def _to_data_object(self, document: Document) -> dict[str, Any]:
@@ -316,7 +320,7 @@ class WeaviateDocStore:
     def _query(self) -> list[dict[str, Any]]:
         # properties = [p.name for p in self._collection.config.get().properties]
         try:
-            result = self._collection.iterator(include_vector=True, return_properties=None)
+            result = self._collection.with_tenant(self._collection.name).iterator(include_vector=True, return_properties=None)
         except weaviate.exceptions.WeaviateQueryError as e:
             msg = f"Failed to query documents in Weaviate. Error: {e.message}"
             raise DocumentStoreError(msg) from e
@@ -339,7 +343,7 @@ class WeaviateDocStore:
         # Keep querying until we get all documents matching the filters
         while partial_result is None or len(partial_result.objects) == DEFAULT_QUERY_LIMIT:
             try:
-                partial_result = self._collection.query.fetch_objects(
+                partial_result = self._collection.with_tenant(self._collection.name).query.fetch_objects(
                     filters=convert_filters(filters),
                     include_vector=True,
                     limit=DEFAULT_QUERY_LIMIT,
@@ -376,8 +380,7 @@ class WeaviateDocStore:
         Documents with the same id will be overwritten.
         Raises in case of errors.
         """
-
-        with self._client.batch.dynamic() as batch:
+        with self._collection.with_tenant(self._collection.name).batch.dynamic() as batch:
             for doc in documents:
                 if not isinstance(doc, Document):
                     msg = f"Expected a Document, got '{type(doc)}' instead."
@@ -385,11 +388,10 @@ class WeaviateDocStore:
 
                 batch.add_object(
                     properties=self._to_data_object(doc),
-                    collection=self._collection.name,
                     uuid=generate_uuid5(doc.id),
                     vector=doc.embedding,
                 )
-        if failed_objects := self._client.batch.failed_objects:
+        if failed_objects := self._collection.with_tenant(self._collection.name).batch.failed_objects:
             # We fallback to use the UUID if the _original_id is not present, this is just to be
             mapped_objects = {}
             for obj in failed_objects:
@@ -422,12 +424,14 @@ class WeaviateDocStore:
                 msg = f"Expected a Document, got '{type(doc)}' instead."
                 raise ValueError(msg)
 
-            if policy == DuplicatePolicy.SKIP and self._collection.data.exists(uuid=generate_uuid5(doc.id)):
+            if policy == DuplicatePolicy.SKIP and self._collection.with_tenant(self._collection.name).data.exists(
+                uuid=generate_uuid5(doc.id)
+            ):
                 # This Document already exists, we skip it
                 continue
 
             try:
-                self._collection.data.insert(
+                self._collection.with_tenant(self._collection.name).data.insert(
                     uuid=generate_uuid5(doc.id),
                     properties=self._to_data_object(doc),
                     vector=doc.embedding,
@@ -458,7 +462,7 @@ class WeaviateDocStore:
 
     def get_all_documents(self, include_vector: bool = False) -> Generator:
         props = dict(include_vector=include_vector)
-        for obj in self._collection.iterator(**props):  # noqa: UP028
+        for obj in self._collection.with_tenant(self._collection.name).iterator(**props):  # noqa: UP028
             yield obj
 
     def get_document_by_id(self):
@@ -471,7 +475,9 @@ class WeaviateDocStore:
         :param document_ids: The object_ids to delete.
         """
         weaviate_ids = [generate_uuid5(doc_id) for doc_id in document_ids]
-        self._collection.data.delete_many(where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids))
+        self._collection.with_tenant(self._collection.name).data.delete_many(
+            where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids)
+        )
 
     def delete_all_documents(self) -> bool:
         it = self.get_all_documents()
@@ -498,7 +504,7 @@ class WeaviateDocStore:
     ) -> list[Document]:
         # properties = [p.name for p in self._collection.config.get().properties]
         if policy == SearchPolicy.BM25:
-            result = self._collection.query.bm25(
+            result = self._collection.with_tenant(self._collection.name).query.bm25(
                 query=query,
                 filters=convert_filters(filters) if filters else None,
                 limit=top_k,
@@ -535,7 +541,7 @@ class WeaviateDocStore:
             if return_metadata is None
             else return_metadata
         )
-        result = self._collection.query.hybrid(
+        result = self._collection.with_tenant(self._collection.name).query.hybrid(
             query=query,
             vector=query_embedding,
             alpha=alpha,
@@ -565,7 +571,7 @@ class WeaviateDocStore:
             raise ValueError(msg)
         return_metadata = ["certainty"] if return_metadata is None else return_metadata
         # properties = [p.name for p in self._collection.config.get().properties]
-        result = self._collection.query.near_vector(
+        result = self._collection.with_tenant(self._collection.name).query.near_vector(
             near_vector=query_embedding,
             distance=distance,
             certainty=certainty,
@@ -586,9 +592,9 @@ class IFinder:
     def find(self, collection_name: str, **kwargs):
         WEAVIATE_HOST = kwargs.get("WEAVIATE_HOST") or os.environ.get("WEAVIATE_HOST")
         WEAVIATE_PORT = kwargs.get("WEAVIATE_PORT") or os.environ.get("WEAVIATE_PORT")
+        WEAVIATE_GRPC_PORT = kwargs.get("WEAVIATE_GRPC_PORT") or os.environ.get("WEAVIATE_GRPC_PORT")
         return WeaviateDocStore(
-            collection_name=collection_name,
-            url=f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}",
+            collection_name=collection_name, url=f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}", grpc_port=WEAVIATE_GRPC_PORT
         )
 
 
