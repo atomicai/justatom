@@ -54,11 +54,11 @@ class IIGNIRunner:
                 self._ix_runner = IndexerApi.named(index_by, store=store)
             else:
                 model_name_or_path = (
-                    str(Path(Config.api.model_name_or_path).expanduser())
+                    str(Path(Config.api["model_name_or_path"]).expanduser())
                     if model_name_or_path is None
                     else str(Path(model_name_or_path).expanduser())
                 )
-                prefix_to_use = str(Config.api.model_prefix_content_default) if prefix_to_use is None else str(prefix_to_use)
+                prefix_to_use = str(Config.api["model_prefix_content_default"]) if prefix_to_use is None else str(prefix_to_use)
                 logger.info(
                     f"Creating new `IX` Runner instance. Might take a while. Loading model on {device} device and using prefix=[{prefix_to_use}]"  # noqa
                 )
@@ -69,6 +69,7 @@ class IIGNIRunner:
                 runner = M1LMRunner(model=lm_model, prediction_heads=[], device=device, processor=processor)
 
                 self._ix_runner = IndexerApi.named(index_by, store=store, runner=runner, processor=processor, device=device)
+        self._ix_runner.store = store
         return self._ix_runner
 
     async def RETRIEVER(
@@ -82,12 +83,12 @@ class IIGNIRunner:
                 self._ir_runner = RetrieverApi.named(search_by, store=store)
             else:
                 model_name_or_path = (
-                    str(Path(Config.api.model_name_or_path).expanduser())
+                    str(Path(Config.api["model_name_or_path"]).expanduser())
                     if model_name_or_path is None
                     else str(Path(model_name_or_path).expanduser())
                 )
 
-                prefix_to_use = str(Config.api.model_prefix_content_default) if prefix_to_use is None else str(prefix_to_use)
+                prefix_to_use = str(Config.api["model_prefix_content_default"]) if prefix_to_use is None else str(prefix_to_use)
                 logger.info(
                     f"Creating new `IR` Runner instance. Might take a while. Loading model on {device} device and using prefix=[{prefix_to_use}]"  # noqa
                 )
@@ -100,6 +101,7 @@ class IIGNIRunner:
                 runner = M1LMRunner(model=lm_model, prediction_heads=[], device=device, processor=processor)
 
                 self._ir_runner = RetrieverApi.named(search_by, store=store, runner=runner, processor=processor, device=device)
+        self._ir_runner.store = store
         return self._ir_runner
 
     async def SERVER(self, **props):
