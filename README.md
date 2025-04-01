@@ -28,7 +28,7 @@ Let's start from observing the built-in dataset - `polaroids.ai`. It consists of
 
 |  queries (list[str])  |     content: str     |   chunk_id: str   |
 |:---------------------:|:--------------------:|:-----------------:|
-| 1. ...thinking about 'The Hunger Games' mechanics, if you were in the same shoes as Gale, entering your name forty-two times to feed your fam, how would you strategize your game in the actual Arena? Would you team up or go solo based on these high stakes? <br><br>2.In the universe of 'The Hunger Games', what are tesserae and what do they offer to the participants in the Harvest?    | And here's where the real interest begins. Suppose you're poor and starving. Then you can ask to be included in the Harvest more times than you're entitled to, and in return you'd get tesserae. They give you grain and oil for a whole year for one tessera per person. You won't be full, but it's better than nothing. You can take tesserae for the whole family. When I was twelve, my name was entered four times. Once by law, and once more for tesserae for Prim, my mother, and myself. The next years had to do the same. And since the price of a tessera increases by one entry each year, now that I've turned sixteen, my name will be on twenty cards. Gale is eighteen, and he's been feeding a family of five for seven years. His name will be entered forty two times! It's clear that people like Madge, who has never had to risk because of tesserae, annoy Gale. Next to us, the inhabitants of the slag heap, she simply has no chance of getting into the games. Well, almost no chance. Of course, the rules are set by the Capitol, not the districts, let alone Madge's relatives, and it's still hard to sympathize with those who, like you, don't have to trade their own skin for a piece of bread.  | 80504cd8-9b21-514c-b001-4761d8c71044         |
+| 1. ...thinking about 'The Hunger Games' mechanics, if you were in the same shoes as Gale, entering your name forty-two times to feed your fam, how would you strategize your game in the actual Arena? Would you team up or go solo based on these high stakes? <br><br>2. In the universe of 'The Hunger Games', what are tesserae and what do they offer to the participants in the Harvest?    | And here's where the real interest begins. Suppose you're poor and starving. Then you can ask to be included in the Harvest more times than you're entitled to, and in return you'd get tesserae. They give you grain and oil for a whole year for one tessera per person. You won't be full, but it's better than nothing. You can take tesserae for the whole family. When I was twelve, my name was entered four times. Once by law, and once more for tesserae for Prim, my mother, and myself. The next years had to do the same. And since the price of a tessera increases by one entry each year, now that I've turned sixteen, my name will be on twenty cards. Gale is eighteen, and he's been feeding a family of five for seven years. His name will be entered forty two times! It's clear that people like Madge, who has never had to risk because of tesserae, annoy Gale. Next to us, the inhabitants of the slag heap, she simply has no chance of getting into the games. Well, almost no chance. Of course, the rules are set by the Capitol, not the districts, let alone Madge's relatives, and it's still hard to sympathize with those who, like you, don't have to trade their own skin for a piece of bread.  | 80504cd8-9b21-514c-b001-4761d8c71044         |
 |-----------------------|----------------------|-------------------|
 | 1. In 'Harry Potter and the Philosopher's Stone', what misconception had Harry and Hermione initially had about Snape's intentions before learning the truth? <br><br>2. Hey peeps, why is Harry all jittery and pacing around the room even after telling Hermione about the whole Snape and Voldemort situation?        | Ron was asleep in the common room - apparently, he had been waiting for their return and had dozed off unnoticed. When Harry roughly shook him, Ron began to yell something about breaking the rules of a game, as if he were dreaming about a Quidditch match. However, after a few seconds, Ron completely woke up and, with his eyes wide open, listened to the story of Hermione and Harry. Harry was so excited that he could not sit still and paced back and forth across the room, trying to stay as close to the fireplace as possible. He was still shaking with cold. 'Snape wants to steal the stone for Voldemort. And Voldemort is waiting in the forest... And all this time we thought Snape wanted to steal the stone to become rich... And Voldemort...'  | 5ad25a92-28d9-5971-a81b-4f795898eeab         |
 |-----------------------|----------------------|-------------------|
@@ -157,6 +157,8 @@ docker-compose up -d
 </p>
 </details>
 
+---
+
 > 🔖 You can initialize the connection with a single line of code. First, pick your collection_name—think of it as a table in a standard database structure. From then on, all operations will be performed directly on that table.
 
 
@@ -185,16 +187,19 @@ from justatom.storing.weaviate import Finder as WeaviateApi
 collection_name = "justatom"
 weaviate_host, weaviate_port = "localhost", 2211
 
-store = WeaviateApi.find(collection_name, WEAVIATE_HOST=weaviate_host, WEAVIATE_PORT=weaviate_port)
+store = await WeaviateApi.find(collection_name, WEAVIATE_HOST=weaviate_host, WEAVIATE_PORT=weaviate_port)
 ```
 
 </p>
 </details>
 
+---
+
 > ✔️ Let's double check that everything worked out fine.
 
 ```python
-print(store.count_documents())
+n_docs = await store.count_documents()
+print(n_docs)
 ```
 
 >❓Are you still here? Congratulations, most of the work is almost done. Now, simply wrap the IndexerApi pipeline and start indexing!
@@ -228,10 +233,13 @@ from justatom.running.indexer import API as IndexerAPI
 
 ix_runner = IndexerAPI.named("embedding", runner=runner, store=store, processor=processor, device=device)
 
-async for js_batch_docs in ix_runner.index(js_docs, n=32):
+async for js_batch_docs in ix_runner.index(js_docs, batch_size=64, batch_size_per_request=32):
     print(f"Done {len(js_batch_docs)} / {len(js_docs)}")
 
 ```
+
+- `batch_size` indicates how many embeddings are processed on your device at once.
+- `batch_size_per_request` specifies how many POST requests are sent simultaneously to the <a href="https://weaviate.io/developers/weaviate/client-libraries/python/async">Weaviate</a> ANN document store.
 </p>
 </details>
 
@@ -292,12 +300,12 @@ R_e = RetrieverApi.named("embedding", store=store, runner=runner, processor=proc
 R_h = RetrieverApi.named("hybrid", store=store, runner=runner, processor=processor) # Retriever via `hybrid` search
 
 for i, query in enumerate(queries):
-    R_k_topk = R_k.retrieve_topk(query, top_k=1)[0]
+    R_k_topk = (await R_k.retrieve_topk(query, top_k=1))[0]
     print(f"KEYWORDS | {R_k_topk}")
-    R_e_topk = R_e.retrieve_topk(query, top_k=1)[0]
+    R_e_topk = (await R_e.retrieve_topk(query, top_k=1))[0]
     print(f"EMBEDDING | {R_e_topk}")
     alpha = 0.78
-    R_h_topk = R_e.retrieve_topk(query, top_k=1, alpha=alpha)[0] # Let's try alpha=0.78
+    R_h_topk = (await R_h.retrieve_topk(query, top_k=1, alpha=alpha))[0] # Let's try alpha=0.78
     print(f"HYBRID | alpha={alpha} | {R_h_topk}")
     print("\n")
 ```
