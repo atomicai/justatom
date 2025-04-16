@@ -14,15 +14,18 @@ def initialize_device_settings(use_gpus, local_rank=-1, use_amp=None):
         else:
             device, n_gpu = "cpu", 0
     else:
-        if not torch.cuda.is_available():
+        if torch.backends.mps.is_available():
+            device, n_gpu = "mps", 1
+        elif not torch.cuda.is_available():
             msg = f"You specified [local_rank={local_rank}] but CUDA is not available."
             logger.error(msg)
             raise ValueError(msg)
-        device = torch.device("cuda", local_rank)
-        torch.cuda.set_device(device)
-        n_gpu = 1
-        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.distributed.init_process_group(backend="nccl")
+        else:
+            device = torch.device("cuda", local_rank)
+            torch.cuda.set_device(device)
+            n_gpu = 1
+            # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+            torch.distributed.init_process_group(backend="nccl")
     logger.info(f"Using device: {str(device).upper()} ")
     logger.info(f"Number of GPUs: {n_gpu}")
     logger.info(f"Distributed Training: {bool(local_rank != -1)}")
