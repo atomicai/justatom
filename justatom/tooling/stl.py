@@ -10,6 +10,13 @@ import numpy as np
 import torch
 
 
+class AsyncConstructor(object):
+    async def __new__(cls, *a, **kw):
+        instance = super().__new__(cls)
+        await instance.__init__(*a, **kw)
+        return instance
+
+
 class NIterator:
     __slots__ = ("_is_next", "_the_next", "it")
 

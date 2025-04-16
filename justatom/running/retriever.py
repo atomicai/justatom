@@ -1,3 +1,4 @@
+import asyncio as asio
 import copy
 import math
 import string
@@ -73,12 +74,11 @@ class ATOMICRetriever(IRetrieverRunner):
         super().__init__()
         self.store = store
         self.processor = processor
-        self.runner = runner.eval()
         self.device = device
         if runner.device != device:
             logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
-
-        self.runner.to(device)
+            runner.to(device)
+        self.runner = runner.eval()
         if ranker not in self.RANKER:
             msg = f"Ranker=[{str(ranker)}] is NOT supported. Use one of the following options: {','.join(self.RANKER.keys())}"
             logger.error(msg)
@@ -109,8 +109,7 @@ class ATOMICRetriever(IRetrieverRunner):
 
         return combined_score
 
-    @torch.no_grad()
-    def retrieve_topk(
+    async def retrieve_topk(
         self,
         queries: str | list[str],
         top_k: int = 5,
@@ -161,10 +160,11 @@ class ATOMICRetriever(IRetrieverRunner):
 
         for _queries, _batches in zip(chunked(queries, n=batch_size), loader, strict=False):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
-            vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
+            with torch.no_grad():
+                vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
             for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
                 res_topk = []
-                res_topp = self.store.search(query=query, query_embedding=vector, alpha=alpha, filters=filters, top_k=top_p)
+                res_topp = await self.store.search(query=query, query_embedding=vector, alpha=alpha, filters=filters, top_k=top_p)
                 fus_topk = []
                 for i, doc in enumerate(res_topp):
                     keywords_or_phrases = doc.meta.get("keywords_or_phrases", [])
@@ -207,17 +207,15 @@ class HybridRetriever(IRetrieverRunner):
         super().__init__()
         self.store = store
         self.processor = processor
-        self.runner = runner.eval()
         self.device = device
         if runner.device != device:
             logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
-
-        self.runner.to(device)
+            runner.to(device)
+        self.runner = runner.eval()
         self.alpha = alpha
         self.prefix = prefix
 
-    @torch.no_grad()
-    def retrieve_topk(
+    async def retrieve_topk(
         self,
         queries: str | list[str],
         top_k: int = 5,
@@ -239,9 +237,10 @@ class HybridRetriever(IRetrieverRunner):
 
         for _queries, _batches in zip(chunked(queries, n=batch_size), loader, strict=False):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
-            vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
+            with torch.no_grad():
+                vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
             for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
-                res_topk = self.store.search(query=query, query_embedding=vector, alpha=alpha, top_k=top_k)
+                res_topk = await self.store.search(query=query, query_embedding=vector, alpha=alpha, top_k=top_k)
                 answer.append(res_topk)
         return answer
 
@@ -259,16 +258,15 @@ class EmbeddingRetriever(IRetrieverRunner):
         super().__init__()
         self.store = store
         self.processor = processor
-        self.runner = runner.eval()
         self.device = device
         if runner.device != device:
             logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
-
-        self.runner.to(device)
+            runner.to(device)
+        self.runner = runner.eval()
         self.prefix = prefix
 
     @torch.no_grad()
-    def retrieve_topk(
+    async def retrieve_topk(
         self,
         queries: str | list[str],
         top_k: int = 5,
@@ -286,12 +284,14 @@ class EmbeddingRetriever(IRetrieverRunner):
         dataset, tensor_names = igniset(js_queries, processor=self.processor, batch_size=batch_size)
         loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=batch_size)
         answer = []
-
         for _queries, _batches in zip(chunked(queries, n=batch_size), loader, strict=False):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
-            vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
+            with torch.no_grad():
+                vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
             for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
-                res_topk = self.store.search_by_embedding(query_embedding=vector, top_k=top_k, filters=filters, keywords=keywords)
+                res_topk = await self.store.search_by_embedding(
+                    query_embedding=vector, top_k=top_k, filters=filters, keywords=keywords
+                )
                 answer.append(res_topk)
         return answer
 
@@ -301,7 +301,7 @@ class KWARGRetriever(IRetrieverRunner):
         super().__init__()
         self.store = store
 
-    def retrieve_topk(
+    async def retrieve_topk(
         self,
         queries: str | list[str],
         top_k: int = 5,
@@ -312,13 +312,18 @@ class KWARGRetriever(IRetrieverRunner):
     ):
         queries = [queries] if isinstance(queries, str) else queries
         answer = []
-        for query in queries:
-            response = self.store.search_by_keywords(query=query, top_k=top_k, filters=filters, keywords=keywords)
-            answer.append(response)
+        asio_workers = [
+            self.store.search_by_keywords(query=query, top_k=top_k, filters=filters, keywords=keywords) for query in queries
+        ]
+        responses = await asio.gather(*asio_workers, return_exceptions=True)
+        for response in responses:
+            if isinstance(response, Exception):
+                raise response
+            else:
+                answer += [response]
         return answer
 
 
-@singleton
 class ByName:
     def named(self, name: str, **kwargs):
         OPS = ["keywords", "emebedding", "hybrid", "atomicai"]

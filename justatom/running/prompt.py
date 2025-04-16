@@ -255,10 +255,10 @@ class RESPONSEWithConfirmPromptRunner(IPromptRunner):
         \n{query}\n
         \n{content}\n
         Your output must be in JSON format and include the following structure:
-        - "answer": [{{
+        - {{"answer": [{{
             "response": \"...\", // Your generated answer (or comment, if info is missing) in {source_language}
             "is_context_present": \"...\" // Boolean indicating if the necessary info is in the paragraph
-        }}, ...]\n
+        }}, ...]}}\n
         Where:
         - \"question\" is the exact question from the input.
         - \"response\" is your answer in {source_language} language stated naturally without referencing \"the paragraph\".
@@ -333,3 +333,83 @@ class RESPONSEWithConfirmAndSourcesPromptRunner(IPromptRunner):
         if as_json_string:
             return json_repair.loads(raw_response)
         return raw_response
+
+
+class RESPONSEWithStreamingPromptRunner(IPromptRunner):
+    _system_prompt = f"""
+    You are a highly capable language assistant with remarkable skillset on the following:
+    - History and mechanics of computer games.
+    - Well-versed in many films.
+    - Skilled at providing user support and guidance for complex systems (e.g. user portals, 
+      databases, or other technical domains).
+    - Scientific facts and general historical facts
+    """  # noqa
+
+    def __init__(self, system_prompt: str = None, source_language: str = "RUSSIAN", title: str = "Documentation", **props):
+        super().__init__(system_prompt=system_prompt.strip() if system_prompt is not None else self._system_prompt.strip())
+        self.source_language = source_language
+        self.title = title
+
+    def _prepare(self, query: str, content: str, source_language: str = None, title: str = None, **props):
+        source_language = source_language or self.source_language
+        title = title or self.title
+        prompt = f"""
+        You have been provided with a user query and a paragraph of relevant information. When generating your response, follow these guidelines:
+        
+        1. **Never explicitly reference the paragraph** (e.g., do not say “According to the paragraph” or “Based on the text”).
+        2. Write your answer **as if you have always known these facts**.
+        3. Use a natural communication style in {source_language}.
+        4. If the paragraph does **not** contain enough details to answer the query, respond with a short comment stating the lack of information.
+
+Generate your answer in {source_language}, drawing only on the information provided. The user query belongs to the universe (theme) "{title}". The paragraph is your sole source of factual data.
+
+> **Important**: If the paragraph does not contain the necessary information:
+> - Do not invent or “hallucinate” facts.
+> - Pose a brief follow-up question indicating what further detail or clarification is needed.
+> - Replace the main answer with a short note explaining why the information is missing.
+
+Refer to the universe (theme) "{title}" only when it’s relevant—especially if the query might be misunderstood otherwise. If the query specifically involves a certain book, game, movie, or unique section, be explicit. Otherwise, avoid bringing it up.
+
+Your response must be strictly in {source_language}.
+
+Below are the user’s query and the relevant content for "{title}":
+
+[QUERY]
+{query}
+
+[PARAGRAPH]
+{content}
+
+Do not include any meta-explanations or references to this prompt or the paragraph in your final answer.
+        """  # noqa
+
+        return prompt
+
+
+class RESPONSEWithSearchOrNotPromptRunner(IPromptRunner):
+    _system_prompt = f"""
+    You are a classification search system. 
+    """  # noqa
+
+    def __init__(self, system_prompt: str = None, **props):
+        super().__init__(system_prompt=system_prompt.strip() if system_prompt is not None else self._system_prompt.strip())
+
+    def _prepare(self, query: str, **props):
+        prompt = f"""Classify the following user query into exactly one of these three classes:
+- GREETINGS
+- SEARCH
+- GREETINGSANDSEARCH
+
+Definitions:
+• GREETINGS: The query is limited to greetings, farewells, polite expressions, or other unnecessary content that does not request specific information.
+• SEARCH: The query strictly requests information without including greetings or politeness.
+• GREETINGSANDSEARCH: The query combines both a greeting (or farewell/politeness) and a specific information request.
+
+Return your output strictly in JSON format, with the key "answer" containing the chosen class. For example:
+{{\"answer\": \"GREETINGS\"}}
+
+Now, analyze this query and produce your output:
+
+{query}"""  # noqa
+
+        return prompt
