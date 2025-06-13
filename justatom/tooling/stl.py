@@ -10,6 +10,12 @@ import numpy as np
 import torch
 
 
+class alist(list):
+    async def __aiter__(self):
+        for _ in self:
+            yield _
+
+
 class AsyncConstructor(object):
     async def __new__(cls, *a, **kw):
         instance = super().__new__(cls)
