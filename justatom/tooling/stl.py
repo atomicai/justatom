@@ -16,7 +16,7 @@ class alist(list):
             yield _
 
 
-class AsyncConstructor(object):
+class AsyncConstructor(object):  # noqa
     async def __new__(cls, *a, **kw):
         instance = super().__new__(cls)
         await instance.__init__(*a, **kw)
