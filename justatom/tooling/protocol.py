@@ -19,7 +19,7 @@ def construct_llm_protocol(
     else:
         assert model_name is not None, logger.error(
             """
-        Using openai model parameter is mandatory. Please set VAR `model_name` to one of the available models. See 
+        Using openai model parameter is mandatory. Please set VAR `model_name` to one of the available models
         """
         )
         base_url = None
