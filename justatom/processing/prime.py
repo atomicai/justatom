@@ -27,6 +27,11 @@ class INFERProcessor(IProcessor):
         self.content_field = content_field
         self.prefix = prefix
 
+    @classmethod
+    def load(cls, where, config: dict, **kwargs):
+        tokenizer = ITokenizer.from_pretrained(where)
+        return cls(tokenizer=tokenizer, **config)
+
     def dataset_from_dicts(self, dicts, indices=None, return_baskets=False):
         if indices is None:
             indices = []
