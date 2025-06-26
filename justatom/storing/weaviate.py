@@ -156,6 +156,7 @@ class WeaviateDocStore(AsyncConstructor):
         self._embedded_options = embedded_options
         self._additional_config = additional_config
         self.__collection = self._client.collections.get(collection_schema_name)
+        self.collection_name = self.__collection.name
 
     def to_dict(self) -> dict[str, Any]:
         """
