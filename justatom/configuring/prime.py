@@ -2,8 +2,7 @@ import os
 from pathlib import Path
 
 import dotenv
-import yaml
-from dotmap import DotMap
+from envyaml import EnvYAML
 from loguru import logger
 
 from justatom.etc.pattern import singleton
@@ -20,17 +19,12 @@ class IConfig:
     DEFAULT_KMEANS = dict()
 
     def __init__(self):
-        try:
-            with open(str(Path(os.getcwd()) / "config.yaml")) as fp:
-                config = DotMap(yaml.safe_load(fp))
-        except:  # noqa: E722
-            config = DotMap()
-            logger.info("Config file is not loaded, be aware that no options are propagates from `config.yaml`")
-        else:
-            for k, v in config.items():
-                if k.startswith("_"):
-                    continue
-                setattr(self, k, v)
+        config = dict(EnvYAML(Path(os.getcwd()) / "config.yaml"))
+        logger.info(f"/CONFIGURING | From config.yaml loaded K=[{config.keys()}] value(s)")
+        for k, v in config.items():
+            if k.startswith("_"):
+                continue
+            setattr(self, k, v)
         dotenv.load_dotenv()
 
 
