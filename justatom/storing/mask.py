@@ -87,7 +87,7 @@ class INNDocStore(abc.ABC):
     ids_iterator = None
 
     @abc.abstractclassmethod
-    def write_documents(self, docs, **kwargs):
+    async def write_documents(self, docs, **kwargs):
         pass
 
     @abc.abstractclassmethod
@@ -95,18 +95,18 @@ class INNDocStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def delete_all_documents(self) -> bool:
+    async def delete_all_documents(self) -> bool:
         pass
 
     @abc.abstractmethod
-    def count_documents(self) -> int:
+    async def count_documents(self) -> int:
         pass
 
-    def describe_documents(self):
+    async def describe_documents(self):
         """
         Statistics of the documents
         """
-        docs = self.get_all_documents()
+        docs = await self.get_all_documents()
         lens = [len(d.content) for d in docs]
         response = dict(
             count=len(docs),
@@ -186,15 +186,15 @@ class INNDocStore(abc.ABC):
         return documents
 
     @abc.abstractmethod
-    def search_by_embedding(self, **props):
+    async def search_by_embedding(self, **props):
         pass
 
     @abc.abstractmethod
-    def search_by_keywords(self, **props):
+    async def search_by_keywords(self, **props):
         pass
 
     @abc.abstractmethod
-    def search(self, **props):
+    async def search(self, **props):
         pass
 
 
