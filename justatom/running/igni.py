@@ -34,7 +34,8 @@ class IIGNIRunner:
 
     async def PATCHER(self, collection_name: str, new_collection_name: str) -> IPatcherRunner:
         """
-        Asynchronous function to ignite `PATCHER` runner. `PATCHER` is responsible to re-write docs from one collection to the other.
+        Asynchronous function to ignite `PATCHER` runner.
+        `PATCHER` is responsible to re-write docs from one collection to the other.
         """
 
         patcher = PatcherRunner(collection_name=collection_name, new_collection_name=new_collection_name)
