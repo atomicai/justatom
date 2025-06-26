@@ -1,13 +1,9 @@
-import asyncio as asio
-import copy
-
 import torch
 from loguru import logger
 from more_itertools import chunked
 from tqdm.autonotebook import tqdm
 
 from justatom.etc.errors import DocumentStoreError
-from justatom.etc.pattern import singleton
 from justatom.etc.schema import Document
 from justatom.processing import igniset
 from justatom.processing.loader import NamedDataLoader
