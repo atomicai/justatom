@@ -7,18 +7,12 @@ from justatom.etc.pattern import singleton
 from justatom.modeling.prime import LMFinder
 from justatom.processing.prime import INFERProcessor, ITokenizer
 from justatom.running.indexer import API as IndexerApi
-from justatom.running.indexer import IIndexerRunner
+from justatom.running.indexer import IIndexerRunner, KWARGIndexer, NNIndexer
 from justatom.running.m1 import M1LMRunner
 from justatom.running.mask import IPatcherRunner
 from justatom.running.patcher import PatcherRunner
-from justatom.running.prompt import (
-    KEYPromptRunner,
-    QUERIESPromptRunner,
-    REPHRASEPromptRunner,
-    TRLSPromptRunner,
-)
 from justatom.running.retriever import API as RetrieverApi
-from justatom.running.retriever import IRetrieverRunner
+from justatom.running.retriever import ATOMICRetriever, EmbeddingRetriever, HybridRetriever, IRetrieverRunner, KWARGRetriever
 
 
 @singleton
@@ -26,6 +20,9 @@ class IIGNIRunner:
     """
     This class is meant to be used in production while igniting different apis.
     """
+
+    RETRIEVERS = {}  # TODO:  Integrate this to allow multiple retrievers. Might increase memory consumption
+    INDEXERS = {}  # TODO: Allow different kind of models to be used in parallel without initializing delay
 
     def __init__(self, name: str = None):
         if name is None:
@@ -49,7 +46,14 @@ class IIGNIRunner:
         """
         Asynchronous function to ignite INDEXER runner by caching the underlying model if one uses it.
         """
-        if self._ix_runner is None:
+        MAPPING = dict(keywords=KWARGIndexer, embedding=NNIndexer)
+        assert index_by in MAPPING, logger.error(
+            f"""
+            {self.__class__.__name__} |
+            VAR search_by={index_by} is not supported. Please use one of the following: {', '.join(MAPPING.keys())}"
+            """
+        )
+        if type(self._ix_runner) is not type(MAPPING.get(index_by)):
             if index_by == "keywords":
                 self._ix_runner = IndexerApi.named(index_by, store=store)
             else:
@@ -58,7 +62,7 @@ class IIGNIRunner:
                     if model_name_or_path is None
                     else str(Path(model_name_or_path).expanduser())
                 )
-                prefix_to_use = str(Config.api["model_prefix_content_default"]) if prefix_to_use is None else str(prefix_to_use)
+                prefix_to_use = "passage: " if prefix_to_use is None else prefix_to_use
                 logger.info(
                     f"Creating new `IX` Runner instance. Might take a while. Loading model on {device} device and using prefix=[{prefix_to_use}]"  # noqa
                 )
@@ -78,7 +82,14 @@ class IIGNIRunner:
         """
         Asynchronous function to ignite IR (aka Information Retrieval) runner by caching the underlying model if one uses it.
         """
-        if self._ir_runner is None:
+        MAPPING = dict(keywords=KWARGRetriever, embedding=EmbeddingRetriever, hybrid=HybridRetriever, fusion=ATOMICRetriever)
+        assert search_by in MAPPING, logger.error(
+            f"""
+            {self.__class__.__name__} |
+            VAR search_by={search_by} is not supported. Please use one of the following: {', '.join(MAPPING.keys())}"
+            """
+        )
+        if type(self._ir_runner) is not MAPPING[search_by]:
             if search_by == "keywords":
                 self._ir_runner = RetrieverApi.named(search_by, store=store)
             else:
@@ -88,7 +99,7 @@ class IIGNIRunner:
                     else str(Path(model_name_or_path).expanduser())
                 )
 
-                prefix_to_use = str(Config.api["model_prefix_content_default"]) if prefix_to_use is None else str(prefix_to_use)
+                prefix_to_use = "query: " if prefix_to_use is None else prefix_to_use
                 logger.info(
                     f"Creating new `IR` Runner instance. Might take a while. Loading model on {device} device and using prefix=[{prefix_to_use}]"  # noqa
                 )
@@ -110,22 +121,6 @@ class IIGNIRunner:
             logger.info(metadata)
 
         return callback
-
-    async def KEYWORDER(self, system_prompt: str, **props):
-        pr_key_runner = KEYPromptRunner(system_prompt=system_prompt, **props)
-        return pr_key_runner
-
-    async def TRANLSATOR(self, system_prompt: str, **props):
-        pr_trls_runner = TRLSPromptRunner(system_prompt=system_prompt, **props)
-        return pr_trls_runner
-
-    async def REPHRASER(self, system_prompt, **props):
-        pr_rphr_runner = REPHRASEPromptRunner(system_prompt=system_prompt, **props)
-        return pr_rphr_runner
-
-    async def QUERIES(self, system_prompt, **props):
-        pr_queries_runner = QUERIESPromptRunner(system_prompt=system_prompt, **props)
-        return pr_queries_runner
 
 
 IGNIRunner = IIGNIRunner()
