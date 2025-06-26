@@ -11,7 +11,7 @@ from loguru import logger
 from torch.utils.data import ConcatDataset
 from tqdm.auto import tqdm
 
-from justatom.configuring import Config
+from justatom.etc.errors import DocumentStoreError
 
 # Model IO and Prediction Head Flow
 from justatom.modeling.mask import ILanguageModel
@@ -105,19 +105,20 @@ def source_from_dataset(dataset_name_or_path):
     return pl_data
 
 
-def check_store_and_message(store: WeaviateDocStore, delete_if_not_empty: bool):
-    if store.count_documents() <= 0:
-        return store
+async def check_store_and_message(store: WeaviateDocStore, delete_if_not_empty: bool):
+    n_docs_count: int = await store.count_documents()
+    collection_name = store.collection_name
     if delete_if_not_empty:
-        store.delete_all_documents()
+        status_message: bool = await store.delete_all_documents()
+        if not status_message:
+            raise DocumentStoreError(f"Documents per collection {collection_name} are not deleted. See logs for more details")
     else:
-        count_docs = store.count_documents()
-        collection_name = store._collection_settings.get("class")
-        logger.warning(
-            f"You're not deleting any documents. \
-            Performing evaluation on old {count_docs} documents per [{collection_name}] collection name."
-        )
-    return store
+        if n_docs_count > 0:
+            logger.warning(
+                f"You're not deleting any documents. \
+                You may lose up to {n_docs_count} documents per collection {collection_name}"
+            )
+    return store, n_docs_count
 
 
 def wrapper_for_docs(
@@ -196,10 +197,9 @@ async def do_index_and_prepare_for_search(
     weaviate_port: int = None,
     **props,
 ) -> tuple[IRetrieverRunner, list[str]]:
-    flush_collection = flush_collection or Config.eval.flush_collection
     # Here we don't need any model to load. Only `DocumentStore`
-    store: WeaviateDocStore = WeaviateApi.find(collection_name, WEAVIATE_HOST=weaviate_host, WEAVIATE_PORT=weaviate_port)
-    store = check_store_and_message(store, delete_if_not_empty=flush_collection)
+    store: WeaviateDocStore = await WeaviateApi.find(collection_name, WEAVIATE_HOST=weaviate_host, WEAVIATE_PORT=weaviate_port)
+    store, n_total_docs = await check_store_and_message(store, delete_if_not_empty=flush_collection)
 
     device = maybe_cuda_or_mps(devices=devices)
 
@@ -215,7 +215,7 @@ async def do_index_and_prepare_for_search(
     assert search_or_id_field in pl_data.columns, f"Search field [{search_or_id_field}] is not present within dataset."
     assert content_field in pl_data.columns, f"Content field [{content_field}] is not present within dataset."
 
-    if not flush_collection:
+    if not flush_collection and n_total_docs > 0:
         return ir_runner
     js_docs = list(
         wrapper_for_docs(
@@ -225,9 +225,9 @@ async def do_index_and_prepare_for_search(
             keywords_or_phrases_field=keywords_or_phrases_field,
         )
     )
-    print()
+    logger.info("\n")
     await ix_runner.index(documents=js_docs, batch_size=batch_size, device=device)
-    print()
+    logger.info("\n")
     return ir_runner
 
 
@@ -281,14 +281,14 @@ async def main(
         weaviate_port=weaviate_port,
         **props,
     )
-
-    logger.info(f"INDEXING stage is completed. Using evaluation per {ir_runner.store.count_documents()}")
+    n_total_docs = await ir_runner.store.count_documents()
+    logger.info(f"INDEXING stage is completed. Using evaluation per {n_total_docs}")
 
     el: IEvaluatorRunner = EvaluatorRunner(ir=ir_runner)
 
     queries = pl_data.select(search_field).explode(search_field).to_series().to_list()
 
-    eval_metrics = el.evaluate_topk(
+    eval_metrics = await el.evaluate_topk(
         queries=queries,
         top_k=top_k,
         metrics=metrics,
@@ -344,7 +344,7 @@ if __name__ == "__main__":
                             search_batch_size=64,
                             eval_top_k=[2, 5, 10, 15, 20],
                             weaviate_host="localhost",
-                            weaviate_port=2211,
+                            weaviate_port=2212,
                             alpha=alpha,
                             top_p=top_p,
                             gamma1=gamma1,
