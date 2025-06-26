@@ -6,9 +6,9 @@ import json_repair
 from justatom.running.mask import IPromptRunner
 
 
-class KEYPromptRunner(IPromptRunner):
+class KPHExtractorPromptRunner(IPromptRunner):
     _system_prompt = f"""
-    You are a highly capable language assistant with remarkable skillset on the following:
+    You are a highly capable AI language assistant with remarkable skillset on the following:
     - History and mechanics of computer games.
     - Well-versed in many films.
     - Skilled at providing user support and guidance for complex systems (e.g. user portals, 
@@ -23,12 +23,23 @@ class KEYPromptRunner(IPromptRunner):
     def _prepare(self, content: str, title: str, source_language: str | None = None, **props):
         source_language = source_language or self.source_language
         prompt = f"""
-        Обрати внимание, что ключевые слова или фразы должны быть подстрокой параграфа и состоять из НЕ более двух, максимум трех слов.\n
-        Каждая фраза или ключевое слово должны иметь краткое, но емкое объяснение на {source_language} языке в зависимости от контекста, в котором они употреблены. \n
-        Параграф из вселенной \"{title}\":\n{content}\n\n
-        Выдай ответ в виде  json в формате: {{"keywords_or_phrases": [{{"keyword_or_phrase": <Выделенная тобою фраза>, "explanation": <Объяснение на {source_language} языке для ребенка в соответствии с контекстом, в котором употреблена ключевая фраза или слово>}}]}}.\n
-        Выдай только json.
-        """.strip()  # noqa
+        Extract key words or short phrases **that are exact substrings of the paragraph** (each no longer than three words).
+
+        For every extracted item, write a **brief yet clear explanation** in {source_language}, phrased so simply that a child could understand it, and tailored to the context in which the phrase appears.
+
+        Paragraph from the “{title}” universe:
+        {content}
+
+        Return **only** valid JSON in this form:
+        {{
+        "keywords_or_phrases": [
+            {{
+            "keyword_or_phrase": "<your extracted phrase>",
+            "explanation": "<your {source_language} explanation>"
+            }}
+        ]
+        }}
+        """  # noqa
         return prompt
 
     def finalize(self, content: str, raw_response: str, as_json_string: bool = False, **props):
@@ -54,9 +65,9 @@ class KEYPromptRunner(IPromptRunner):
         return final_response
 
 
-class TRLSPromptRunner(IPromptRunner):
+class QUESTIONGeneratorPromptRunner(IPromptRunner):
     _system_prompt = f"""
-    You are a highly capable language assistant with remarkable skillset on the following:
+    You are a highly capable AI language assistant with remarkable skillset on the following:
     - History and mechanics of computer games.
     - Well-versed in many films.
     - Skilled at providing user support and guidance for complex systems (e.g. user portals, 
@@ -64,64 +75,14 @@ class TRLSPromptRunner(IPromptRunner):
     - Scientific facts and general historical facts
     """  # noqa
 
-    def __init__(self, system_prompt: str, source_language: str | None = None, **props):
-        super().__init__(system_prompt=system_prompt.strip())
-        self.source_language = source_language
-
-    def _prepare(self, content: str, title: str, source_language: str | None = None, **props):
-        source_language = source_language or self.source_language
-        prompt = f"""
-        Параграф из вселенной \"{title}\":\n{content}\n\n
-        Выдай ответ в виде  json в формате: {{"translation": "<Твой перевод на {source_language} языке, учитывающий контекст параграфа из вселенной {title}>}}"
-        Выдай только json.
-        """.strip()  # noqa
-        return prompt
-
-    def finalize(self, content: str, raw_response: str, as_json_string: bool = False, **props):
-        if as_json_string:
-            return json_repair.loads(raw_response)
-        return raw_response
-
-
-class REPHRASEPromptRunner(IPromptRunner):
-    _system_prompt = f"""
-    You are a highly capable language assistant with remarkable skillset on the following:
-    - History and mechanics of computer games.
-    - Well-versed in many films.
-    - Skilled at providing user support and guidance for complex systems (e.g. user portals, 
-      databases, or other technical domains).
-    - Scientific facts and general historical facts
-    """  # noqa
-
-    def __init__(self, system_prompt: str, styles: list[str] | None = None, **props):
-        super().__init__(system_prompt=system_prompt.strip())
-        self.styles = styles
-
-    def _prepare(self, content, title: str, **props):
-        styles: str = self.styles if self.styles is not None else ["AI ассистент"]
-        prompt = f"""
-        Сделай несколько (две или более) парафраз из исходного параграфа или вопроса.\n
-        Представь, что ты один из следующих профессоналов: \"{[' | '.join(styles)]}\". Создавай перефраз в соответствии с речевыми оборотами твоей професии (роли). Можешь использовать сленговые слова и добавлять приветствия, неформальную, ненормативную лексику и другие речевые обороты.\n
-        Параграф (вопрос) из вселенной\"{title}\":\n{content}\n\n
-        Выдай ответ в виде json в формате: {{"rephrase_phrases": "[{{"phrase": <Твой пересказ, учитывающий контекст параграфа или вопроса из вселенной {title}>}}, ...]"}}
-        """.strip()  # noqa
-        return prompt
-
-    def finalize(self, content: str, raw_response: str, as_json_string: bool = False, **props):
-        if as_json_string:
-            return json_repair.loads(raw_response)
-        return raw_response
-
-
-class QUERIESPromptRunner(IPromptRunner):
-    _system_prompt = f"""
-    You are a highly capable language assistant with remarkable skillset on the following:
-    - History and mechanics of computer games.
-    - Well-versed in many films.
-    - Skilled at providing user support and guidance for complex systems (e.g. user portals, 
-      databases, or other technical domains).
-    - Scientific facts and general historical facts
-    """  # noqa
+    _styles = [
+        "Russian gopnik thug (street slang, brash tone, casual profanity)",
+        "Rap artist (rhymed bars, urban slang, strong beat cadence)",
+        "Screenwriter (cinematic narration, stage directions, dramatic flair)",
+        "IT geek (tech jargon, acronyms, dry humor, code references)",
+        "High-level banker (formal business jargon, polished courtesy)",
+        "Drug-addict stoner (slurred, laid-back speech, spaced-out remarks)",
+    ]  # noqa
 
     def __init__(self, source_language: str, title: str, system_prompt: str = None, **props):
         super().__init__(system_prompt=system_prompt.strip() if system_prompt is not None else self._system_prompt.strip())
@@ -129,9 +90,9 @@ class QUERIESPromptRunner(IPromptRunner):
         self.source_language = source_language
         self.title = title
 
-    def _prepare(self, content, title: str | None = None, source_language: str | None = None, **props):
+    def _prepare(self, content, title: str | None = None, source_language: str | None = None, styles: list[str] = None, **props):
         source_language = source_language or self.source_language
-        styles: str = self.styles if self.styles is not None else ["AI assistant"]
+        self.styles = styles if styles is not None else self._styles
         title = title or self.title
         prompt = f"""
         Generate multiple (two or more) queries in {source_language} using the paragraphs (context) provided below.\n
@@ -159,7 +120,7 @@ class QUERIESPromptRunner(IPromptRunner):
         return raw_response
 
 
-class QUERIESWithSourcesPromptRunner(IPromptRunner):
+class QUESTIONGeneratorSourcerPromptRunner(IPromptRunner):
     _system_prompt = f"""
     You are a highly capable language assistant with remarkable skillset on the following:
     - History and mechanics of computer games.
@@ -168,6 +129,15 @@ class QUERIESWithSourcesPromptRunner(IPromptRunner):
       databases, or other technical domains).
     - Scientific facts and general historical facts
     """  # noqa
+
+    _styles = [
+        "Russian gopnik thug (street slang, brash tone, casual profanity)",
+        "Rap artist (rhymed bars, urban slang, strong beat cadence)",
+        "Screenwriter (cinematic narration, stage directions, dramatic flair)",
+        "IT geek (tech jargon, acronyms, dry humor, code references)",
+        "High-level banker (formal business jargon, polished courtesy)",
+        "Drug-addict stoner (slurred, laid-back speech, spaced-out remarks)",
+    ]  # noqa
 
     def __init__(
         self,
@@ -178,7 +148,7 @@ class QUERIESWithSourcesPromptRunner(IPromptRunner):
         **props,
     ):
         super().__init__(system_prompt=system_prompt.strip() if system_prompt is not None else self._system_prompt.strip())
-        self.styles = styles
+        self.styles = styles if styles is not None else self._styles
         self.source_language = source_language
         self.title = title
 
@@ -211,6 +181,88 @@ class QUERIESWithSourcesPromptRunner(IPromptRunner):
         \n
         Please respond only with the JSON.
         """.strip()  # noqa
+        return prompt
+
+    def finalize(self, content: str, raw_response: str, as_json_string: bool = False, **props):
+        if as_json_string:
+            return json_repair.loads(raw_response)
+        return raw_response
+
+
+class RANKERWithScorePromptRunner(IPromptRunner):
+    _system_prompt = f"""
+    You are a highly capable language assistant with remarkable skillset on the following:
+    - History and mechanics of computer games.
+    - Well-versed in many films.
+    - Skilled at providing user support and guidance for complex systems (e.g. user portals, 
+      databases, or other technical domains).
+    - Scientific facts and general historical facts
+    """  # noqa
+
+    def __init__(self, source_language: str | None = None, title: str | None = None, system_prompt: str = None, **props):
+        super().__init__(system_prompt=system_prompt.strip() if system_prompt is not None else self._system_prompt.strip())
+        self.title = title
+        self.source_language = source_language
+
+    def _prepare(
+        self,
+        query: str,
+        content: str,
+        golden_answer: str,
+        responses: list[str],
+        source_language: str | None = None,
+        title: str | None = None,
+        **props,
+    ):
+        # Format the candidate responses as a numbered list.
+        responses_list = "\n".join([f"response_{i+1}: {resp}" for i, resp in enumerate(responses)])
+
+        # Construct the prompt with explicit instructions.
+        prompt = f"""
+    Your task is to evaluate the quality of each candidate answer
+    provided by different language models in response to a given question.
+    Use the input data below, and compare each candidate answer with the golden answer
+    in terms of accuracy, completeness, style, and length.
+
+    Input Data:
+    1. Question:
+    {query}
+
+    2. Paragraph (Content):
+    {content}
+
+    3. Golden Answer:
+    {golden_answer}
+
+    4. Candidate Answers:
+    {responses_list}
+
+    Instructions:
+    For each candidate answer, provide a score from 1 to 10 based on the following aspects:
+    - Accuracy: How well does the candidate answer correctly address the question?
+    - Completeness: Does the candidate answer cover all essential aspects compared to the golden answer?
+    - Style and Length: Evaluate if the candidate answer maintains
+    a suitable tone, clarity, and appropriate length relative to the golden answer.
+
+    Scoring Guidelines:
+    - A score of 1 indicates that the candidate answer is entirely inadequate.
+    - A score of 10 indicates that the candidate answer is exceptional, fully addressing the question and
+    matching the quality, style, and depth of the golden answer.
+
+    Output Format:
+    Return your evaluation in a valid JSON object following this exact structure:
+    {{
+    "answer": {{
+        "response_1": <score>,
+        "response_2": <score>,
+        ...
+    }}
+    }}
+
+    Note:
+    - Ensure that the number of key-value pairs exactly matches the number of candidate responses.
+    - Do not include any additional commentary or text outside the specified JSON structure.
+    """
         return prompt
 
     def finalize(self, content: str, raw_response: str, as_json_string: bool = False, **props):
@@ -275,7 +327,7 @@ class RESPONSEWithConfirmPromptRunner(IPromptRunner):
         return raw_response
 
 
-class RESPONSEWithConfirmAndSourcesPromptRunner(IPromptRunner):
+class RESPONSEWithConfirmSourcerPromptRunner(IPromptRunner):
     _system_prompt = f"""
     You are a highly capable language assistant with remarkable skillset on the following:
     - History and mechanics of computer games.
@@ -354,62 +406,249 @@ class RESPONSEWithStreamingPromptRunner(IPromptRunner):
         source_language = source_language or self.source_language
         title = title or self.title
         prompt = f"""
-        You have been provided with a user query and a paragraph of relevant information. When generating your response, follow these guidelines:
-        
-        1. **Never explicitly reference the paragraph** (e.g., do not say “According to the paragraph” or “Based on the text”).
-        2. Write your answer **as if you have always known these facts**.
-        3. Use a natural communication style in {source_language}.
-        4. If the paragraph does **not** contain enough details to answer the query, respond with a short comment stating the lack of information.
+        **Task**: Answer the user's query below, following these rules:  
+1. **Primary Source**: The provided paragraph is your *main reference*, but you can **supplement it with your own knowledge** if needed.  
+2. **Theme Context**: The query relates to "{title}". Use this to guide your response, but avoid over-referencing it unless necessary.  
+3. **Language**: Respond in {source_language}.  
+4. **Accuracy**:  
+   - If the paragraph contains enough information, prioritize it.  
+   - If the paragraph is insufficient, fill gaps with your expertise **without hallucinating**.  
+   - If the topic is outside your knowledge, say: "I don't have enough data about [specific detail]. Could you clarify?"  
+   
+**Avoid**:  
+- Phrases like "According to the paragraph..." or "The text says...".  
+- Unnecessary meta-commentary about sources.  
 
-Generate your answer in {source_language}, drawing only on the information provided. The user query belongs to the universe (theme) "{title}". The paragraph is your sole source of factual data.
 
-> **Important**: If the paragraph does not contain the necessary information:
-> - Do not invent or “hallucinate” facts.
-> - Pose a brief follow-up question indicating what further detail or clarification is needed.
-> - Replace the main answer with a short note explaining why the information is missing.
+**Query**:
+{query}  
 
-Refer to the universe (theme) "{title}" only when it’s relevant—especially if the query might be misunderstood otherwise. If the query specifically involves a certain book, game, movie, or unique section, be explicit. Otherwise, avoid bringing it up.
+**Relevant Paragraph (for context)**:  
+{content}  
 
-Your response must be strictly in {source_language}.
-
-Below are the user’s query and the relevant content for "{title}":
-
-[QUERY]
-{query}
-
-[PARAGRAPH]
-{content}
-
-Do not include any meta-explanations or references to this prompt or the paragraph in your final answer.
+Answer concisely, blending the paragraph with your expertise when appropriate.  
         """  # noqa
 
         return prompt
 
 
-class RESPONSEWithSearchOrNotPromptRunner(IPromptRunner):
+class RESPONSEWithStreamingJsonPromptRunner(RESPONSEWithStreamingPromptRunner):
     _system_prompt = f"""
-    You are a classification search system. 
+    You are a highly capable language assistant with remarkable skillset on the following:
+    - History and mechanics of computer games.
+    - Well-versed in many films.
+    - Skilled at providing user support and guidance for complex systems (e.g. user portals, 
+      databases, or other technical domains).
+    - Scientific facts and general historical facts
     """  # noqa
 
-    def __init__(self, system_prompt: str = None, **props):
-        super().__init__(system_prompt=system_prompt.strip() if system_prompt is not None else self._system_prompt.strip())
+    def __init__(self, system_prompt: str = None, source_language: str = "RUSSIAN", title: str = "Documentation", **props):
+        super().__init__(
+            system_prompt=system_prompt.strip() if system_prompt is not None else self._system_prompt.strip(),
+            source_language=source_language,
+            title=title,
+        )
 
-    def _prepare(self, query: str, **props):
-        prompt = f"""Classify the following user query into exactly one of these three classes:
-- GREETINGS
-- SEARCH
-- GREETINGSANDSEARCH
+    def _prepare(self, query: str, content: str, source_language: str = None, title: str = None, **props):
+        source_language = source_language or self.source_language
+        title = title or self.title
+        prompt = f"""
+        **Task**: Answer the user's query in JSON format, following these rules:  
+1. **Response Format**:  
+   ```json
+   {{
+     "answer": "<YOUR_RESPONSE>",
+     "sources": ["paragraph", "internal_knowledge"]  // Укажи источники ([\"paragraph\"] OR [\"internal_knowledge\"] OR [\"paragarph\", \"internal_knowledge\"]
+   }}
+   ```
+2. **Content use**:
+    - The provided paragraph is your primary source, but you can add your own knowledge if relevant.
+    - If the paragraph is insufficient, fill gaps logically without hallucinations.
+3. **Theme Context**: The query relates to "{title}". Use this to guide your response, but avoid over-referencing it unless necessary.  
+4. **Language**: Respond in {source_language}.  
 
-Definitions:
-• GREETINGS: The query is limited to greetings, farewells, polite expressions, or other unnecessary content that does not request specific information.
-• SEARCH: The query strictly requests information without including greetings or politeness.
-• GREETINGSANDSEARCH: The query combines both a greeting (or farewell/politeness) and a specific information request.
+**Avoid**:  
+- Phrases like "According to the paragraph..." or "The text says...".  
+- Unnecessary meta-commentary about sources and format.
 
-Return your output strictly in JSON format, with the key "answer" containing the chosen class. For example:
-{{\"answer\": \"GREETINGS\"}}
 
-Now, analyze this query and produce your output:
+**Query**:  
+{query}  
 
-{query}"""  # noqa
+**Relevant Paragraph (for context)**:  
+{content}  
+
+Answer concisely, blending the paragraph with your expertise when appropriate.  
+
+**Example Output**
+```json
+{{
+  \"response\":  \"В Skyrim крафт доступен у кузнечного горна, алхимического стола и стола зачарователя. Например, для оружия нужны железные слитки и кожа.\",
+  \"sources\": [\"paragraph\", \"internal_knowledge\"]
+}}
+```
+        """  # noqa
+
+        return prompt
+
+
+class POLAROIDSPromptRunner(IPromptRunner):
+    _system_prompt = f"""
+    You are a highly capable language assistant with remarkable skillset on the following:
+    - History and mechanics of computer games.
+    - Well-versed in many films.
+    - Skilled at providing user support and guidance for complex systems (e.g. user portals, 
+      databases, or other technical domains).
+    - Scientific facts and general historical facts
+    """  # noqa
+
+    def __init__(self, system_prompt: str = None, source_language: str = "English"):
+        super().__init__(
+            system_prompt=system_prompt.strip() if system_prompt is not None else self._system_prompt.strip(),
+        )
+        self.source_language = source_language
+
+    def _prepare(
+        self,
+        title: str,
+        source_language: str = None,
+        content: str = None,
+        **props,
+    ):
+        if content is None:
+            prompt = f"""
+            Your task is to:
+            1. Generate an **ICONIC dialogue** from the specified universe (`title`)
+            in the requested `source_language` (e.g., English, Russian).
+            2. Format the output strictly as JSON with:
+                - Dialogue lines with explicit speaker tags
+                - List of speakers
+                - Author/creator
+                - Scene summary (in the same `source_language`)
+                - The language used (`source_language`)
+
+            **Rules**
+            - **Language**: Generate dialogue and summary **strictly in the requested `source_language`**.
+            - **Canon Compliance**: Use only **official/canon dialogues** (no fan fiction or adaptations).
+            - **Speaker Format**: Tag speakers like `[Character Name]: Text`.
+            - **Length**: 3-12 exchanges maximum.
+            - **Precision**: The `content` field must allow exact scene identification (location, context).
+
+            **JSON Template**
+            ```json
+            {{
+            "response": "[Character 1]: Dialogue line\n[Character 2]: Response line",
+            "speakers": ["Character 1", "Character 2"],
+            "author": "Author/Creator",
+            "content": "Scene description (location, purpose)",
+            "source_language": "Language used (e.g., Russian)"
+            }}
+
+            **Examples**
+            For title="Голодные игры", source_language="Russian":
+            ```json
+            {{
+            "response": "[Китнисс]: Прим! Прим! (ведущим)
+            Я доброволец! Я доброволец! Я хочу участвовать в Играх!\n[Эффи Тринкет]: Кажется, у нас есть доброволец! ...
+            Первый в истории Дистрикта 12 доброволец, прошу на сцену! ... Как тебя зовут?\n
+            [Китнисс]: Китнисс Эвердин.\n
+            [Эффи Тринкет]: Готова поспорить, это твоя сестренка. Я угадала?\n
+            [Китнисс]: Да.",
+            "speakers": ["Китнисс", "Эффи Тринкет"],
+            "author": "Сьюзен Коллинз",
+            "content": "Сцена жеребьёвки, где Китнисс заменяет Прим (Площадь Дистрикта 12)",
+            "source_language": "Russian"
+            }}
+
+            For title="The Lord of the Rings", source_language="English":
+            ```json
+            {{
+            "response": "[Gandalf]: You shall not pass!\n[Balrog]: [roars in flames]",
+            "speakers": ["Gandalf", "Balrog"],
+            "author": "J.R.R. Tolkien",
+            "content": "Bridge of Khazad-dûm confrontation during the Fellowship's escape",
+            "source_language": "English"
+            }}
+
+            Now, generate a dialogue for:
+
+            Universe (title): {title}
+
+            Language: {source_language}
+
+            Valid JSON only. No external commentary. Preserve character names' original language
+            (e.g., "Гэндальф" for Russian, "Gandalf" for English).
+            Match the source_language for dialogue and summary.
+            """
+        else:
+            prompt = f"""
+            You are given:
+            - `title`: the universe or work (e.g., "Harry Potter", "Голодные игры").
+            - `source_language`: the language in which to generate the output (e.g., English, Russian).
+            - `context`: a **specific paragraph or excerpt** from the canon text, describing a scene or its fragment. Use this context to guide you in identifying and generating the relevant dialogue.
+            
+            **Task**
+Generate an **ICONIC, strictly canonical dialogue** from the given `title` and the **precise scene** specified in the provided `context`, using only the official, original dialogue (no fanfiction or adaptation).
+
+**Output requirements**
+- Output must be **valid JSON** matching the structure below (no commentary).
+- All dialogue lines must have explicit speaker tags in the format `[Character Name]:`.
+- Use the **original character names in the requested language** (e.g., "Гэндальф" in Russian, "Gandalf" in English).
+- The summary (`content`) must describe the scene, location, and purpose in the same `source_language`.
+- **All fields must be filled.**
+
+            **JSON Format**
+```json
+{{
+  "response": "[Speaker 1]: Dialogue line\\n[Speaker 2]: Response line",
+  "speakers": ["Speaker 1", "Speaker 2", "..."],
+  "author": "Author/Creator",
+  "content": "Scene description (location, purpose)",
+  "source_language": "Language used (e.g., Russian)"
+}}
+            **Rules**
+
+Language: All output (dialogue and summary) must be in the specified source_language.
+
+Canon only: Use only official/canon dialogues.
+
+Length: 3 to 12 exchanges (lines).
+
+Context use: The context is a specific excerpt. Only use the material from this part of the canon.
+
+No extra text: Output JSON only, no explanations.
+
+**Examples**
+            For title="Голодные игры", source_language="Russian", and context="Китнисс добровольно вызывает себя вместо Прим на сцене во время жеребьевки":
+            
+            ```json
+            {{
+            "response": "[Китнисс]: Прим! Прим! (ведущим) Я доброволец! Я доброволец! Я хочу участвовать в Играх!\n[Эффи Тринкет]: Кажется, у нас есть доброволец! ... Первый в истории Дистрикта 12 доброволец, прошу на сцену! ... Как тебя зовут?\n[Китнисс]: Китнисс Эвердин.\n[Эффи Тринкет]: Готова поспорить, это твоя сестренка. Я угадала?\n[Китнисс]: Да.",
+            "speakers": ["Китнисс", "Эффи Тринкет"],
+            "author": "Сьюзен Коллинз",
+            "content": "Сцена жеребьёвки, где Китнисс заменяет Прим (Площадь Дистрикта 12)",
+            "source_language": "Russian"
+            }}
+
+            For title="The Lord of the Rings", source_language="English", and context="Bridge of Khazad-dûm confrontation during the Fellowship's escape":
+            
+            ```json
+            {{
+            "response": "[Gandalf]: You shall not pass!\n[Balrog]: [roars in flames]",
+            "speakers": ["Gandalf", "Balrog"],
+            "author": "J.R.R. Tolkien",
+            "content": "Bridge of Khazad-dûm confrontation during the Fellowship's escape",
+            "source_language": "English"
+            }}
+            
+            Now, generate a JSON output for:
+            
+            Universe (title): {title}
+            Language (source_language): {source_language}
+            Scene context (context): {content}
+
+Only valid JSON output.
+
+            """  # noqa
 
         return prompt
