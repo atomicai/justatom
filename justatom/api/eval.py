@@ -312,48 +312,35 @@ async def main(
 
 
 if __name__ == "__main__":
-    # 1) `collection_name`
-    # 2) `save_results_to_dir`
-    # 3)`model_name_or_path`
-    # 4) `dataset_name_or_path`
     # --- EVAL pipeline ---
-    # embedding | hybrid | keywords | atomicai
-    # gamma1, gamma2 = 0.7858, 0.9168
+    # search_pipeline: str = embedding | hybrid | keywords | atomicai
     gamma1, gamma2 = 0.6225, 0.8176
-    for alpha in [0.78, 0.8]:
-        for ranker in ["IDFRecall"]:
-            for j, top_p in enumerate([22, 24, 28, 30, 32, 64]):
-                # j, top_p = 0, None
-                asio.run(
-                    *[
-                        main(
-                            collection_name="EvalVanillaLarge",  # EvalDefault | EvalDefaultSmall | EvalDefaultLarge | EvalVanilla | EvalVanillaSmall | EvalVanillaLarge
-                            save_results_to_dir=Path(os.getcwd()) / "evals" / "EvalVanilla" / "large",
-                            flush_collection=False,
-                            search_field="queries",
-                            content_field="content",
-                            keywords_or_phrases_field="keywords_or_phrases",
-                            filters={"fields": ["queries", "content"]},
-                            search_pipeline="atomicai",
-                            model_name_or_path="intfloat/multilingual-e5-large",  # intfloat/multilingual-e5-small | intfloat/multilingual-e5-base | intfloat/multilingual-e5-large #noqa
-                            dataset_name_or_path=str(Path(os.getcwd()) / ".data" / "sber.polaroids.ai.data.json"),
-                            query_prefix="query:",
-                            content_prefix="passage:",
-                            metrics_top_k=["HitRate"],
-                            index_batch_size=32,
-                            search_batch_size=64,
-                            eval_top_k=[2, 5, 10, 15, 20],
-                            weaviate_host="localhost",
-                            weaviate_port=2212,
-                            alpha=alpha,
-                            top_p=top_p,
-                            gamma1=gamma1,
-                            gamma2=gamma2,
-                            include_keywords=False,
-                            include_explanation=False,
-                            include_content=True,
-                            ranker=ranker,
-                        )
-                    ]
+    for alpha in [0.78, 0.8, 0.82]:
+        asio.run(
+            *[
+                main(
+                    collection_name="EvalVanillaLarge",
+                    save_results_to_dir=Path(os.getcwd()) / "evals" / "EvalVanilla" / "large",
+                    flush_collection=True,
+                    search_field="queries",
+                    content_field="content",
+                    keywords_or_phrases_field="keywords_or_phrases",
+                    filters={"fields": ["queries", "content"]},
+                    search_pipeline="hybrid",
+                    model_name_or_path="intfloat/multilingual-e5-large",  # intfloat/multilingual-e5-small | intfloat/multilingual-e5-base | intfloat/multilingual-e5-large #noqa
+                    dataset_name_or_path=str(Path(os.getcwd()) / ".data" / "polaroids.ai.data.json"),
+                    query_prefix="query:",
+                    content_prefix="passage:",
+                    metrics_top_k=["HitRate"],
+                    index_batch_size=32,
+                    search_batch_size=64,
+                    eval_top_k=[2, 5, 10, 15, 20],
+                    weaviate_host="localhost",
+                    weaviate_port=2212,
+                    alpha=alpha,
+                    include_keywords=False,
+                    include_explanation=False,
+                    include_content=True,
                 )
-                logger.info(f"Done step=[{str(j + 1)}] top_p=[{str(top_p)}] alpha=[{str(alpha)}]")
+            ]
+        )
