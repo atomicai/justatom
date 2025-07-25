@@ -1,0 +1,92 @@
+name: Continuous integration
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  format-check:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        architecture: 'x64'
+    - name: Install black
+      run: pip install black
+    - name: Run black
+      run: black --check --diff .
+  lint:
+    name: Lint (black+pylint+mypy)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        architecture: 'x64'
+    - name: Install requirements
+      run: pip install .[torch,lint,test]
+    - name: Lint
+      run: ./lint.sh
+  pytest-ubuntu:
+    strategy:
+      matrix:
+        python-version: [ '3.7', '3.8', '3.9', '3.10', '3.11' ]
+    name: Tests (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        architecture: 'x64'
+    - name: Install requirements
+      run: pip install .[torch,test]
+    - name: Run tests
+      run: RUN_SLOW_TESTS=1 pytest
+  pytest-windows:
+    name: Tests (Windows)
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v1
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        architecture: 'x64'
+    - name: Install requirements
+      run: pip install .[torch,test]
+    - name: Run tests
+      run: pytest
+  pytest-macos:
+    name: Tests (MacOS)
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v1
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        architecture: 'x64'
+    - name: Install requirements
+      run: pip install .[torch,test]
+    - name: Run tests
+      run: RUN_SLOW_TESTS=1 pytest
+  build-docs:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        architecture: 'x64'
+    - name: Install requirements
+      run: |
+        sudo apt-get install pandoc
+        pip install .[torch,docs]
+    - name: Build the docs
+      run: docs/build_docs.sh
