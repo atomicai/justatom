@@ -61,3 +61,5 @@ aio-pika==9.4.3
 langchain==0.3.9
 langchain-core==0.3.51
 langchain-openai==0.2.10
+# Fire api
+fire==0.7.1
