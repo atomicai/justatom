@@ -160,7 +160,7 @@ class IEvaluatorRunner(abc.ABC):
 
 class IPatcherRunner(abc.ABC):
     @abc.abstractmethod
-    def patch(self, collection_name: str, new_collection_name: str, **kwargs):
+    async def patch(self, collection_name: str, new_collection_name: str, **kwargs):
         pass
 
 
