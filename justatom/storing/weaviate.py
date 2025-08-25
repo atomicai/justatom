@@ -333,7 +333,7 @@ class WeaviateDocStore(AsyncConstructor):
         response = docs
         if keywords:
             response = [
-                doc for doc in response if any([kw in doc.keywords for kw in keywords])
+                doc for doc in response if any([kw in doc.keywords for kw in keywords])  # type: ignore
             ]
         return response
 
@@ -402,7 +402,7 @@ class WeaviateDocStore(AsyncConstructor):
             result = await self._query_with_filters(filters)
         else:
             result = await self._query()
-        return [self._to_document(doc) for doc in result]
+        return [self._to_document(doc) for doc in result]  # type: ignore
 
     async def _batch_write(
         self, documents: list[Document], policy: DuplicatePolicy, batch_size: int = 64
@@ -497,7 +497,7 @@ class WeaviateDocStore(AsyncConstructor):
             )
             return total_written_docs
 
-    async def get_all_documents(self, include_vector: bool = False) -> Generator:
+    async def get_all_documents(self, include_vector: bool = False) -> Generator:  # type: ignore
         async with self._client:
             props = dict(include_vector=include_vector)
             async for obj in self.__collection.iterator(**props):  # type: ignore # noqa: UP028
