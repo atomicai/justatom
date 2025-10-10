@@ -7,10 +7,10 @@ from tqdm.auto import tqdm
 
 from justatom.modeling.prime import E5Model
 from justatom.processing.loader import NamedDataLoader
-from justatom.processing.prime import INFERProcessor
+from justatom.processing.prime import RuntimeProcessor
 from justatom.processing.tokenizer import ITokenizer
-from justatom.running.m1 import M1LMRunner
-from justatom.running.mask import IMODELRunner
+from justatom.running.encoders import EncoderRunner
+from justatom.running.mask import IModelRunner
 
 
 class M1LMRunnerTest(unittest.TestCase):
@@ -170,10 +170,10 @@ Forgiving what I've done
 
     def setUp(self):
         tokenizer = ITokenizer.from_pretrained("intfloat/multilingual-e5-base")
-        processor = INFERProcessor(tokenizer)
+        processor = RuntimeProcessor(tokenizer)
         model = E5Model()
 
-        self.runner = M1LMRunner(
+        self.runner = EncoderRunner(
             model=model,
             prediction_heads=[],
             processor=processor,
@@ -183,26 +183,35 @@ Forgiving what I've done
     def test_io(self):
         with tempfile.TemporaryDirectory() as tmpdirname:
             self.runner.save(tmpdirname)
-            runner2 = IMODELRunner.load(tmpdirname)
+            runner2 = IModelRunner.load(tmpdirname)
 
         self.assertEqual(type(self.runner), type(runner2))
         for idx in range(len(self.runner.prediction_heads)):
-            self.assertEqual(type(self.runner.prediction_heads[idx]), type(runner2.prediction_heads[idx]))
+            self.assertEqual(
+                type(self.runner.prediction_heads[idx]),
+                type(runner2.prediction_heads[idx]),
+            )
 
     def test_inference(self):
-        dataset, tensornames, problematic_ids = self.runner.processor.dataset_from_dicts(
-            [{"content": content} for content in self.TEXTS]
+        dataset, tensornames, problematic_ids = (
+            self.runner.processor.dataset_from_dicts(  # pyright: ignore[reportOptionalMemberAccess]
+                [{"content": content} for content in self.TEXTS]
+            )
         )
-        loader = NamedDataLoader(dataset=dataset, tensor_names=tensornames, batch_size=2)
+        loader = NamedDataLoader(
+            dataset=dataset, tensor_names=tensornames, batch_size=2
+        )
         vectors = []
-        for batch in tqdm(loader):  # Each batch comes with bs=2 samples.abs
+        for batch in tqdm(loader):  # Each batch comes with bs=2 samples
             with torch.no_grad():
                 vecs = self.runner(batch)[0]
                 vectors.extend(vecs)
         for i in range(1, len(vectors), 2):
             dot_product_positive = vectors[i] @ vectors[i - 1]
             dot_product_negative = vectors[i] @ vectors[(i + 1) % len(vectors)]
-            logger.info(f"i={i} | dot_product_positive={dot_product_positive} | dot_product_negative={dot_product_negative}")
+            logger.info(
+                f"i={i} | dot_product_positive={dot_product_positive} | dot_product_negative={dot_product_negative}"
+            )
             self.assertGreater(dot_product_positive, dot_product_negative)
 
 
