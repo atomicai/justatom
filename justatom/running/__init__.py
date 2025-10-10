@@ -1,3 +1,3 @@
-from justatom.running.mask import IMODELRunner
+from justatom.running.mask import IModelRunner
 
-__all__ = ["IMODELRunner"]
+__all__ = ["IModelRunner"]

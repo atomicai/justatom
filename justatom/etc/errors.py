@@ -5,7 +5,7 @@ class IError(Exception):
     """
     This error wraps its source transparently in such a way that its attributes
     can be accessed directly: for example, if the original error has a `message` attribute,
-    `HaystackError.message` will exist and have the expected content.
+    `jaiai.message` will exist and have the expected content.
     If send_message_in_event is set to True (default), the message will be sent as part of a telemetry event reporting the error.
     The messages of errors that might contain user-specific information will not be sent, e.g., DocumentStoreError.
     """

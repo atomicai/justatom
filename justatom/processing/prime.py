@@ -6,7 +6,7 @@ from justatom.processing.sample import Sample, SampleBasket
 from justatom.processing.tokenizer import ITokenizer
 
 
-class INFERProcessor(IProcessor):
+class RuntimeProcessor(IProcessor):
     """
     (1) This type of processor is responsible for fast inference using `tokenizers` custom implementation.
     (2) It performs only necessary transformation and avoids typical pre-processing bottleneck such as `regex` use.
@@ -20,7 +20,7 @@ class INFERProcessor(IProcessor):
         content_field: str = "content",
         prefix: str = "",
     ):
-        super(INFERProcessor, self).__init__()  # noqa: UP008
+        super(RuntimeProcessor, self).__init__()  # noqa: UP008
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         self.do_lower_case = do_lower_case
@@ -36,19 +36,29 @@ class INFERProcessor(IProcessor):
         if indices is None:
             indices = []
         baskets = []
-        docs = [self.do_prefix(x=x.get(self.content_field), pref=self.prefix) for x in dicts]
+        docs = [
+            self.do_prefix(x=x.get(self.content_field), pref=self.prefix) for x in dicts
+        ]
 
-        tokenized_batch = self.tokenizer(docs, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_batch = self.tokenizer(
+            docs, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
 
         input_ids_batch = tokenized_batch["input_ids"]
         atten_ids_batch = tokenized_batch["attention_mask"]
 
-        for sample, input_ids, att_ids in zip(docs, input_ids_batch, atten_ids_batch, strict=False):
+        for sample, input_ids, att_ids in zip(
+            docs, input_ids_batch, atten_ids_batch, strict=False
+        ):
             tokenized = {}
             features = dict(input_ids=input_ids, attention_mask=att_ids)
 
-            cur_sample = Sample(id="", clear_text=sample, tokenized=tokenized, features=[features])
-            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            cur_sample = Sample(
+                id="", clear_text=sample, tokenized=tokenized, features=[features]
+            )
+            cur_basket = SampleBasket(
+                id_internal=None, raw=sample, id_external=None, samples=[cur_sample]
+            )
 
             baskets.append(cur_basket)
 
@@ -61,7 +71,7 @@ class INFERProcessor(IProcessor):
             return dataset, tensornames, problematic_ids
 
 
-class M1Processor(IProcessor):
+class EncoderProcessor(IProcessor):
     def __init__(
         self,
         tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
@@ -71,7 +81,7 @@ class M1Processor(IProcessor):
         prefix_field: str = "prefix",
         prefix: str = "",
     ):
-        super(M1Processor, self).__init__()  # noqa: UP008
+        super(EncoderProcessor, self).__init__()  # noqa: UP008
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         self.do_lower_case = do_lower_case
@@ -90,17 +100,25 @@ class M1Processor(IProcessor):
             for x in dicts
         ]
 
-        tokenized_batch = self.tokenizer(docs, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_batch = self.tokenizer(
+            docs, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
 
         input_ids_batch = tokenized_batch["input_ids"]
         atten_ids_batch = tokenized_batch["attention_mask"]
 
-        for sample, input_ids, att_ids in zip(docs, input_ids_batch, atten_ids_batch, strict=False):
+        for sample, input_ids, att_ids in zip(
+            docs, input_ids_batch, atten_ids_batch, strict=False
+        ):
             tokenized = {}
             features = dict(input_ids=input_ids, attention_mask=att_ids)
 
-            cur_sample = Sample(id="", clear_text=sample, tokenized=tokenized, features=[features])
-            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            cur_sample = Sample(
+                id="", clear_text=sample, tokenized=tokenized, features=[features]
+            )
+            cur_basket = SampleBasket(
+                id_internal=None, raw=sample, id_external=None, samples=[cur_sample]
+            )
 
             baskets.append(cur_basket)
 
@@ -113,11 +131,10 @@ class M1Processor(IProcessor):
             return dataset, tensornames, problematic_ids
 
 
-class TripletProcessor(IProcessor):
+class TrainWithTripletProcessor(IProcessor):
     """
-    TRIplet Language Model separation for different encoder(s) LM processor that performs grouping for similarity fine-tuning.
-    Preprocess samples for `justatom.training.loss.TripletLoss` loss function
-    for separating samples at least by `margin` distance using both `negative`, `positive` samples.
+    `justatom.processing.prime.TrainWithTripletProcessor` is designed to be used in conjuction with `justatom.training.loss.TripletLoss` loss function.
+    Read more about it here: https://arxiv.org/abs/1412.6622
     """
 
     def __init__(
@@ -137,19 +154,30 @@ class TripletProcessor(IProcessor):
         tokenizer = ITokenizer.from_pretrained(where)
         return cls(tokenizer=tokenizer, **config)
 
-    def dataset_from_dicts(self, dicts, indices=None, return_baskets=False, debug=False):
+    def dataset_from_dicts(
+        self, dicts, indices=None, return_baskets=False, debug=False
+    ):
         if indices is None:
             indices = []
         baskets = []
-        docs = [self.do_prefix(x["content"], pref=x.get("meta", {}).get("prefix", self.prefix)) for x in dicts]
+        docs = [
+            self.do_prefix(
+                x["content"], pref=x.get("meta", {}).get("prefix", self.prefix)
+            )
+            for x in dicts
+        ]
         groups = [hash(x.get("meta", {}).get("group", 0)) for x in dicts]
         # ---
-        tokenized_batch = self.tokenizer(docs, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_batch = self.tokenizer(
+            docs, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
         # ---
         input_ids_batch = tokenized_batch["input_ids"]
         atten_ids_batch = tokenized_batch["attention_mask"]
         # ---
-        for sample, input_ids, att_ids, group_ids in zip(docs, input_ids_batch, atten_ids_batch, groups, strict=False):
+        for sample, input_ids, att_ids, group_ids in zip(
+            docs, input_ids_batch, atten_ids_batch, groups, strict=False
+        ):
             tokenized = {}
             # TODO: Convert `group_id` to compatable format
             features = dict(
@@ -158,8 +186,12 @@ class TripletProcessor(IProcessor):
                 group_ids=torch.tensor(group_ids),
             )
 
-            cur_sample = Sample(id="", clear_text=sample, tokenized=tokenized, features=[features])
-            cur_basket = SampleBasket(id_internal=None, raw=sample, id_external=None, samples=[cur_sample])
+            cur_sample = Sample(
+                id="", clear_text=sample, tokenized=tokenized, features=[features]
+            )
+            cur_basket = SampleBasket(
+                id_internal=None, raw=sample, id_external=None, samples=[cur_sample]
+            )
             baskets.append(cur_basket)
 
         problematic_ids = set()
@@ -171,10 +203,10 @@ class TripletProcessor(IProcessor):
             return dataset, tensornames, problematic_ids
 
 
-class ContrastiveProcessor(IProcessor):
+class TrainWithContrastiveProcessor(IProcessor):
     """
-    ContrastiveProcessor separation for different encoder(s) LM processor that performs grouping for similarity fine-tuning.
-    Preprocess samples for `justatom.training.loss.ContrastiveLoss` loss function
+    `justatom.processing.prime.TrainWithContrastiveProcessor` is designed to be used in conjuction with `justatom.training.loss.ContrastiveLoss` loss function.
+    Read more about it here: https://arxiv.org/abs/2004.11362
     """
 
     def __init__(
@@ -200,7 +232,9 @@ class ContrastiveProcessor(IProcessor):
         tokenizer = ITokenizer.from_pretrained(where)
         return cls(tokenizer=tokenizer, **config)
 
-    def dataset_from_dicts(self, dicts, indices=None, return_baskets=False, debug=False):
+    def dataset_from_dicts(
+        self, dicts, indices=None, return_baskets=False, debug=False
+    ):
         if indices is None:
             indices = []
         baskets = []
@@ -219,7 +253,9 @@ class ContrastiveProcessor(IProcessor):
             for x in dicts
         ]
         # ---
-        tokenized_queries_batch = self.tokenizer(queries, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_queries_batch = self.tokenizer(
+            queries, truncation=True, max_length=self.max_seq_len, padding="max_length"
+        )
         tokenized_pos_queries_batch = self.tokenizer(
             pos_queries,
             truncation=True,
@@ -261,7 +297,9 @@ class ContrastiveProcessor(IProcessor):
                 tokenized={},
                 features=[features],
             )
-            cur_basket = SampleBasket(id_internal=None, raw=None, id_external=None, samples=[cur_sample])
+            cur_basket = SampleBasket(
+                id_internal=None, raw=None, id_external=None, samples=[cur_sample]
+            )
             baskets.append(cur_basket)
 
         problematic_ids = set()
@@ -273,7 +311,7 @@ class ContrastiveProcessor(IProcessor):
             return dataset, tensornames, problematic_ids
 
 
-class M2Processor(IProcessor):
+class BiEncoderProcessor(IProcessor):
     """
     (1) This processor uses two different tokenizers. First one transforms `queries` while the second one - `passages`.
     (2) It DOES NOT expect queries to have labels.
@@ -331,10 +369,11 @@ class M2Processor(IProcessor):
         pass
 
 
-class ATOMICProcessor(IProcessor):
+class GammaHybridProcessor(IProcessor):
     """
     (1) This processor uses two different tokenizers. First one transforms `queries` while the second one - `passages`.
     (2) It DOES expect each `query` to have its own `label`.
+    (3) It is designed to work with `justatom.modeling.prime.GammaHybridLoss` loss function.
     """
 
     def __init__(
@@ -358,10 +397,16 @@ class ATOMICProcessor(IProcessor):
         label_list: list[str] | None = None,
         label_queries_list: list[str] | None = None,
     ):
-        super(ATOMICProcessor, self).__init__()  # noqa: UP008
+        super(GammaHybridProcessor, self).__init__()  # noqa: UP008
 
     def dataset_from_dicts(self, dicts):
         pass
 
 
-__all__ = ["TripletProcessor", "ContrastiveProcessor", "IProcessor"]
+__all__ = [
+    "EncoderProcessor",
+    "RuntimeProcessor",
+    "TrainWithTripletProcessor",
+    "TrainWithContrastiveProcessor",
+    "RuntimeProcessor",
+]

@@ -14,15 +14,13 @@ from justatom.etc.pattern import singleton
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.mask import IProcessor
 from justatom.processing.silo import igniset
-from justatom.running.atomic import ATOMICLMRunner
-from justatom.running.m1 import M1LMRunner
-from justatom.running.m2 import M2LMRunner
+from justatom.running.encoders import EncoderRunner, BiEncoderRunner
 from justatom.running.mask import IRetrieverRunner
 from justatom.storing.mask import INNDocStore
 from justatom.tooling.nlp import keywords_metrics
 
 
-class ATOMICRetriever(IRetrieverRunner):
+class GammaHybridRetriever(IRetrieverRunner):
 
     RANKER: dict = {
         "JaroWinkler": jarowinkler_similarity,
@@ -33,7 +31,7 @@ class ATOMICRetriever(IRetrieverRunner):
     def __init__(
         self,
         store: INNDocStore,
-        runner: M1LMRunner | M2LMRunner,
+        runner: EncoderRunner | BiEncoderRunner,
         processor: IProcessor,
         ranker: str | None = "IDFRecall",
         device: str = "cpu",
@@ -358,13 +356,13 @@ class EmbeddingRetriever(IRetrieverRunner):
                     top_k=top_k,
                     filters=filters,
                     keywords=keywords,
-                    include_embedding=include_embedding,
+                    include_vector=include_embedding,
                 )
                 answer.append(res_topk)
         return answer
 
 
-class KWARGRetriever(IRetrieverRunner):
+class KeywordsRetriever(IRetrieverRunner):
     def __init__(self, store: INNDocStore, **props):
         super().__init__()
         self.store = store
@@ -396,17 +394,18 @@ class KWARGRetriever(IRetrieverRunner):
 
 
 class ByName:
+    OPS = ["keywords", "emebedding", "hybrid", "gamma-hybrid"]
+
     def named(self, name: str, **kwargs):
-        OPS = ["keywords", "emebedding", "hybrid", "atomicai"]
 
         if name == "keywords":
-            klass = KWARGRetriever
+            klass = KeywordsRetriever
         elif name == "embedding":
             klass = EmbeddingRetriever
         elif name == "hybrid":
             klass = HybridRetriever
-        elif name == "atomicai":
-            klass = ATOMICRetriever
+        elif name == "gamma-hybrid":
+            klass = GammaHybridRetriever
         else:
             msg = f"Unknown name=[{name}] to init IRetrieverRunner instance. Use one of {','.join(OPS)}"
             logger.error(msg)
@@ -419,9 +418,9 @@ API = ByName()
 
 
 __all__ = [
-    "KWARGRetriever",
+    "KeywordsRetriever",
     "HybridRetriever",
     "EmbeddingRetriever",
-    "ATOMICRetriever",
+    "GammaHybridRetriever",
     "API",
 ]

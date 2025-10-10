@@ -12,7 +12,7 @@ from justatom.etc.schema import Document
 from justatom.modeling.prime import IDocEmbedder
 
 
-class IMODELRunner:
+class IModelRunner:
     """
     Base Class for implementing M1/M2/M3 etc... models with frameworks like PyTorch and co.
     """
@@ -117,7 +117,15 @@ class ICLUSTERINGWrapperBackend(BaseEmbedder):
         pass
 
 
-class ICLUSTERINGRunner(abc.ABC):
+class IDimReducer(abc.ABC):  # noqa: B024
+    def fit_transform(self, embeddings: np.ndarray) -> np.ndarray:  # noqa: B027
+        pass
+
+    def transform(self, embeddings: np.ndarray) -> np.ndarray:  # noqa: B027
+        pass
+
+
+class IClusteringRunner(abc.ABC):
     """
     Pipeline for clustering using any custom embedding module.
     """
@@ -164,7 +172,7 @@ class IPatcherRunner(abc.ABC):
         pass
 
 
-class IReqsRunner(abc.ABC):
+class IRemoteRequestRunner(abc.ABC):
     @abc.abstractmethod
     async def INDEX(self, **props):
         pass

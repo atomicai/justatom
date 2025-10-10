@@ -6,7 +6,34 @@ api:
   use_gpu: True
   gpu_props:
     local_rank: 0
-  model_name_or_path: intfloat/multilingual-e5-base
+  embedder:
+    model_name_or_path: '${EMBEDDING_MODEL_NAME_OR_PATH}'
+    prefix_for_queries: '${EMBEDDING_MODEL_QUERY_PREFIX}'
+    prefix_for_passages: '${EMBEDDING_MODEL_PASSAGE_PREFIX}'
+    max_seq_len: 512
+
+cluster:
+  embedder:
+    model_name_or_path: intfloat/multilingual-e5-base
+    pooling_mode: mean
+    prefix: "query: "
+    max_seq_len: 512
+
+  transformers_backend:
+    batch_size: 10
+
+  bertopic:
+    top_n_words: 10
+    n_gram_range: [1, 1]
+    min_topic_size: 5
+    calculate_probabilities: false
+
+  umap:
+    n_components: 2
+    n_neighbors: 3
+    min_dist: 0.1
+    metric: cosine
+
 
 index:
   index_name: Default
@@ -44,53 +71,6 @@ train:
   save_model_path: weights
   val_check_interval: 30
 
-
-
-clustering:
-  embedder:
-    model_name_or_path: intfloat/multilingual-e5-base
-    pooling_mode: mean
-    prefix: "query: "
-
-  transformers_backend:
-    batch_size: 10
-
-  bertopic:
-    top_n_words: 10
-    n_gram_range: [1, 1]
-    min_topic_size: 5
-    calculate_probabilities: false
-
-  umap:
-    n_components: 2
-    n_neighbors: 3
-    min_dist: 0.1
-    metric: cosine
-
-
-tune:
-  batch_size: 16
-  loss: triplet
-  max_epochs: 10
-  loss_props:
-    margin: 0.22
-  log_metrics: wandb
-  log_metrics_props:
-    log_loss_every: 1
-    val_check_interval: 10
-    do_eval_every: 100
-  early_stopping: 
-
-
-model:
-  ic:
-    num_conv_blocks: 10
-    kernel_size: 3
-    hid_dim: 512
-  query_encoder: null
-  passage_encoder: null
-
-
-log:
-  log_batch_metrics: true
-  log_epoch_metrics: true
+  log:
+    log_batch_metrics: true
+    log_epoch_metrics: true
