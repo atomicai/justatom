@@ -361,7 +361,7 @@ class BiEncoderProcessor(IProcessor):
         :param label_list: list of labels to predict. Usually ["hard_negative", "positive"]
         :param kwargs: placeholder for passing generic parameters
         """  # noqa: E501
-        super(M2Processor, self).__init__()  # noqa: UP008
+        super(BiEncoderProcessor, self).__init__()  # noqa: UP008
         if metric:
             pass
 

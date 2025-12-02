@@ -13,19 +13,20 @@ from justatom.etc.schema import Document
 
 class IModelRunner:
     """
-    Base Class for implementing M1/M2/M3 etc... models with frameworks like PyTorch and co.
+    Base Class for implementing N=1 model pipeline. It acts as a wrapper that takes care of processing, loading and saving and computing predictions on strictly one model.
     """
 
     subclasses = {}  # type: dict
 
     config: dict = {}
 
-    model: ILanguageModel | None = None
+    def __init__(self) -> None:
+        super().__init__()
 
     def __init_subclass__(cls, **kwargs):
         """
         This automatically keeps track of all available subclasses.
-        Enables generic load() for all specific Mi implementation.
+        Enables generic load() for all specific implementations.
         """
         super().__init_subclass__(**kwargs)
         cls.subclasses[cls.__name__] = cls
@@ -76,8 +77,8 @@ class IModelRunner:
         with open(output_config_file, "w") as file:
             json.dump(config, file)
         # Save the model itself
-        if self.model is not None:
-            self.model.save(save_dir)
+        if getattr(self, "model", None) is not None:
+            self.model.save(save_dir)  # type: ignore
 
     def connect_heads_with_processor(self, tasks: dict, require_labels: bool = True):
         """

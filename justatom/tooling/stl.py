@@ -19,7 +19,7 @@ class alist(list):
 class AsyncConstructor(object):  # noqa
     async def __new__(cls, *a, **kw):
         instance = super().__new__(cls)
-        await instance.__init__(*a, **kw)
+        await instance.__init__(*a, **kw)  # type: ignore
         return instance
 
 

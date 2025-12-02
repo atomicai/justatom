@@ -33,6 +33,8 @@ class EncoderRunner(IModelRunner, torch.nn.Module):
 
     def to(self, device):
         logger.info(f"Moving to device {str(device)}")
+        if self.model is None:
+            raise RuntimeError("EncoderRunner model has not been initialised")
         self.model.to(device)
         for i, mod in enumerate(self.prediction_heads):
             if mod.device != device:
@@ -149,6 +151,8 @@ class EncoderRunner(IModelRunner, torch.nn.Module):
 
     def forward(self, batch, norm: bool = True, **props):
         # Run forward pass of (multiple) prediction heads using the output from above
+        if self.model is None:
+            raise RuntimeError("EncoderRunner model has not been initialised")
         Q = self.model(**batch, **props)
         all_logits = []
         for Qi in Q:
@@ -165,14 +169,15 @@ class EncoderRunner(IModelRunner, torch.nn.Module):
 
 class BiEncoderRunner(IModelRunner, nn.Module):
     """
-    Base Class for implementing M=2 `LanguageModel` models with frameworks like PyTorch and co.
+    Base Class for implementing M=2 `LanguageModel`. One model encodes queries, the other passages.
+    There can be prediction heads on top that minimize similarity loss between positive query-passage pairs and maximise between negative pairs.
     """
 
     def __init__(
         self,
         query_model: ILanguageModel,
-        passage_model: ILanguageModel | None = None,
-        prediction_heads=None,
+        passage_model: ILanguageModel,
+        prediction_heads: list[IHead] | None = None,
         embeds_dropout_prob: float = 0.1,
         device: str = "cpu",
     ):
@@ -183,7 +188,11 @@ class BiEncoderRunner(IModelRunner, nn.Module):
         self.passage_model = passage_model.to(device)
         self.passage_model_out_dims = passage_model.output_dims
         self.passage_dropout = nn.Dropout(embeds_dropout_prob)
-        self.prediction_heads = [ph.to(device) for ph in prediction_heads]
+        self.prediction_heads = (
+            [ph.to(device) for ph in prediction_heads]
+            if prediction_heads is not None
+            else []
+        )
 
         self.loss_aggregation_fn = loss_per_head_sum
 
