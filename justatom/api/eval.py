@@ -188,13 +188,13 @@ def igni_runners(
             logger.error(msg)
             raise ValueError(msg)
         lm_model = ILanguageModel.load(model_name_or_path)
-        ix_processor = INFERProcessor(
+        ix_processor = RuntimeProcessor(
             ITokenizer.from_pretrained(model_name_or_path), prefix=content_prefix
         )
-        ir_processor = INFERProcessor(
+        ir_processor = RuntimeProcessor(
             ITokenizer.from_pretrained(model_name_or_path), prefix=query_prefix
         )
-        runner = M1LMRunner(model=lm_model, prediction_heads=[], device=device)
+        runner = EncoderRunner(model=lm_model, prediction_heads=[], device=device)
         ix_runner = IndexerAPI.named(
             search_pipeline,
             store=store,
@@ -228,8 +228,8 @@ async def do_index_and_prepare_for_search(
     batch_size: int = 4,
     flush_collection: bool = False,
     devices: list[str] = None,
-    weaviate_host: str = None,
-    weaviate_port: int = None,
+    weaviate_host: str = "localhost",
+    weaviate_port: int = 2211,
     **props,
 ) -> tuple[IRetrieverRunner, list[str]]:
     # Here we don't need any model to load. Only `DocumentStore`
@@ -268,9 +268,11 @@ async def do_index_and_prepare_for_search(
             keywords_or_phrases_field=keywords_or_phrases_field,
         )
     )
-    logger.info("\n")
-    await ix_runner.index(documents=js_docs, batch_size=batch_size, device=device)
-    logger.info("\n")
+    logger.info("Indexing in progress\n")
+    n_total_docs = await ix_runner.index(
+        documents=js_docs, batch_size=batch_size, device=device
+    )
+    logger.info(f"Total docs in index {n_total_docs}\n")
     return ir_runner
 
 
@@ -399,7 +401,7 @@ if __name__ == "__main__":
                     search_batch_size=64,
                     eval_top_k=[2, 5, 10, 15, 20],
                     weaviate_host="localhost",
-                    weaviate_port=2212,
+                    weaviate_port=2211,
                     alpha=alpha,
                     include_keywords=False,
                     include_explanation=False,
