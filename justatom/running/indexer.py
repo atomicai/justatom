@@ -17,7 +17,7 @@ class NNIndexer(IIndexerRunner):
     def __init__(
         self,
         store: INNDocStore,
-        runner: M1LMRunner | M2LMRunner,
+        runner: EncoderRunner | BiEncoderRunner,
         processor: IProcessor,
         device: str = "cpu",
     ):

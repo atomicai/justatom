@@ -192,10 +192,16 @@ class WeaviateDocStore(AsyncConstructor):
 
     @classmethod
     async def connect(cls, collection_schema_name: str, **kwargs):
-        WEAVIATE_HOST = kwargs.get("WEAVIATE_HOST") or os.environ.get("WEAVIATE_HOST")
+        WEAVIATE_HOST = (
+            kwargs.get("WEAVIATE_HOST")
+            or os.environ.get("WEAVIATE_HOST")
+            or "localhost"
+        )
         WEAVIATE_PORT = kwargs.get("WEAVIATE_PORT") or os.environ.get("WEAVIATE_PORT")
-        WEAVIATE_GRPC_PORT = kwargs.get("WEAVIATE_GRPC_PORT") or os.environ.get(
-            "WEAVIATE_GRPC_PORT"
+        WEAVIATE_GRPC_PORT = (
+            kwargs.get("WEAVIATE_GRPC_PORT")
+            or os.environ.get("WEAVIATE_GRPC_PORT")
+            or 50051
         )
         logger.info(f"FINDER | collection_schema_name=[{collection_schema_name}]")
         store = await cls(

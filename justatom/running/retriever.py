@@ -291,7 +291,7 @@ class EmbeddingRetriever(IRetrieverRunner):
     def __init__(
         self,
         store: INNDocStore,
-        runner: M1LMRunner | M2LMRunner | ATOMICLMRunner,
+        runner: EncoderRunner | BiEncoderRunner,
         processor: IProcessor,
         device: str = "cpu",
         prefix: str | None = None,
