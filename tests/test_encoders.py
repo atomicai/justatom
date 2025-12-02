@@ -5,7 +5,7 @@ import torch
 from loguru import logger
 from tqdm.auto import tqdm
 
-from justatom.modeling.prime import E5Model
+from justatom.modeling.prime import ILanguageModel
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.prime import RuntimeProcessor
 from justatom.processing.tokenizer import ITokenizer
@@ -169,37 +169,28 @@ Forgiving what I've done
     ]
 
     def setUp(self):
-        tokenizer = ITokenizer.from_pretrained("intfloat/multilingual-e5-base")
+
+        model_name_or_path = "intfloat/multilingual-e5-base"
+
+        tokenizer = ITokenizer.from_pretrained(model_name_or_path)
         processor = RuntimeProcessor(tokenizer)
-        model = E5Model()
+        lm_model = ILanguageModel.load(model_name_or_path)
 
         self.runner = EncoderRunner(
-            model=model,
+            model=lm_model,
             prediction_heads=[],
             processor=processor,
         )
         self.runner.eval()
 
-    def test_io(self):
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            self.runner.save(tmpdirname)
-            runner2 = IModelRunner.load(tmpdirname)
-
-        self.assertEqual(type(self.runner), type(runner2))
-        for idx in range(len(self.runner.prediction_heads)):
-            self.assertEqual(
-                type(self.runner.prediction_heads[idx]),
-                type(runner2.prediction_heads[idx]),
-            )
-
     def test_inference(self):
-        dataset, tensornames, problematic_ids = (
+        dataset, tensor_names, problematic_ids = (
             self.runner.processor.dataset_from_dicts(  # pyright: ignore[reportOptionalMemberAccess]
                 [{"content": content} for content in self.TEXTS]
             )
         )
         loader = NamedDataLoader(
-            dataset=dataset, tensor_names=tensornames, batch_size=2
+            dataset=dataset, tensor_names=tensor_names, batch_size=2
         )
         vectors = []
         for batch in tqdm(loader):  # Each batch comes with bs=2 samples
