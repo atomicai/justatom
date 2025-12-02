@@ -1,7 +1,5 @@
 import asyncio as asio
 import copy
-import math
-import string
 from collections import Counter
 from functools import cmp_to_key
 
@@ -10,12 +8,11 @@ from jarowinkler import jarowinkler_similarity
 from loguru import logger
 from more_itertools import chunked
 
-from justatom.etc.pattern import singleton
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.mask import IProcessor
 from justatom.processing.silo import igniset
 from justatom.running.encoders import EncoderRunner, BiEncoderRunner
-from justatom.running.mask import IRetrieverRunner
+from justatom.running.mask import IRetrieverRunner, IModelRunner
 from justatom.storing.mask import INNDocStore
 from justatom.tooling.nlp import keywords_metrics
 
@@ -31,7 +28,7 @@ class GammaHybridRetriever(IRetrieverRunner):
     def __init__(
         self,
         store: INNDocStore,
-        runner: EncoderRunner | BiEncoderRunner,
+        runner: IModelRunner,
         processor: IProcessor,
         ranker: str | None = "IDFRecall",
         device: str = "cpu",
@@ -53,8 +50,8 @@ class GammaHybridRetriever(IRetrieverRunner):
             logger.info(
                 f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}"
             )
-            runner.to(device)
-        self.runner = runner.eval()
+            runner.to(device)  # type: ignore
+        self.runner = runner.eval()  # type: ignore
         if ranker not in self.RANKER:
             msg = f"Ranker=[{str(ranker)}] is NOT supported. Use one of the following options: {','.join(self.RANKER.keys())}"
             logger.error(msg)
@@ -125,7 +122,7 @@ class GammaHybridRetriever(IRetrieverRunner):
             If you don't need any additional ranking, please you one of the following: 
             {','.join(
                 [
-                    KWARGRetriever.__class__.__name__,
+                    KeywordsRetriever.__class__.__name__,
                     EmbeddingRetriever.__class__.__name__,
                     HybridRetriever.__class__.__name__
                 ])
@@ -219,7 +216,7 @@ class HybridRetriever(IRetrieverRunner):
     def __init__(
         self,
         store: INNDocStore,
-        runner: M1LMRunner | M2LMRunner,
+        runner: EncoderRunner | BiEncoderRunner,
         processor: IProcessor,
         device="cpu",
         alpha: float = 0.5,

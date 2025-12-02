@@ -7,9 +7,8 @@ import numpy as np
 import simplejson as json
 from bertopic.backend import BaseEmbedder
 from loguru import logger
-
+from justatom.modeling.mask import ILanguageModel
 from justatom.etc.schema import Document
-from justatom.modeling.prime import IDocEmbedder
 
 
 class IModelRunner:
@@ -18,6 +17,10 @@ class IModelRunner:
     """
 
     subclasses = {}  # type: dict
+
+    config: dict = {}
+
+    model: ILanguageModel | None = None
 
     def __init_subclass__(cls, **kwargs):
         """
@@ -73,7 +76,8 @@ class IModelRunner:
         with open(output_config_file, "w") as file:
             json.dump(config, file)
         # Save the model itself
-        self.model.save(save_dir)
+        if self.model is not None:
+            self.model.save(save_dir)
 
     def connect_heads_with_processor(self, tasks: dict, require_labels: bool = True):
         """
@@ -86,7 +90,7 @@ class IModelRunner:
                                not supplied with labels.
         :return: None
         """
-        for head in self.prediction_heads:
+        for head in self.prediction_heads:  # type: ignore
             head.label_tensor_name = tasks[head.task_name]["label_tensor_name"]
             label_list = tasks[head.task_name]["label_list"]
             if not label_list and require_labels:
@@ -98,10 +102,18 @@ class IModelRunner:
             head.metric = tasks[head.task_name]["metric"]
 
 
+class IDocEmbedder(abc.ABC):
+    @abc.abstractmethod
+    def encode(self, documents: list[str], verbose: bool = False, *args, **kwargs) -> np.ndarray:  # type: ignore
+        """Backend implementation for embedding documents with n-dimensional vectors."""
+        pass
+
+
 class ICLUSTERINGWrapperBackend(BaseEmbedder):
     def __init__(self, model: IDocEmbedder):
         self.model = model
 
+    @abc.abstractmethod
     def embed(self, documents: list[str], verbose: bool = False) -> np.ndarray:  # type: ignore
         """Embed a list of n documents/words into an n-dimensional
         matrix of embeddings

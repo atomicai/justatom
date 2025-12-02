@@ -1,4 +1,3 @@
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -6,17 +5,13 @@ import numpy as np
 import simplejson as json
 import torch
 import torch.nn as nn
-from torch.functional import F
-from tqdm.autonotebook import tqdm
+from torch.functional import F  # pyright: ignore[reportPrivateImportUsage]
 from transformers import AutoModel
 
 from justatom.etc.pattern import cached_call, singleton
 import threading
 from justatom.modeling.div import IAttention, IEmbedding, MLAttention
-from justatom.modeling.mask import IDocEmbedder, ILanguageModel, IModel
-from justatom.processing import IProcessor
-from justatom.processing.loader import NamedDataLoader
-from justatom.processing.silo import igniset
+from justatom.modeling.mask import ILanguageModel, IModel
 
 
 class E5GeneralWrapper(ILanguageModel):
@@ -350,7 +345,7 @@ class PosFreeEncoderModel(IModel):
         if isinstance(self.blocks, IAttention):  # noqa: SIM108
             num_blocks = -1
         else:
-            num_blocks = self.blocks.config["num_blocks"]
+            num_blocks = self.blocks.config["num_blocks"]  # type: ignore
         self.config = {"num_blocks": num_blocks}
         return self
 
@@ -378,9 +373,9 @@ class PosFreeEncoderModel(IModel):
         """  # noqa: E501
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         # (1). Save the encoder with attention module and config(s)
-        self.blocks.save(save_dir)
+        self.blocks.save(save_dir)  # pyright: ignore[reportCallIssue]
         # (2). Save the embedding module.
-        self.embedding.save(save_dir)
+        self.embedding.save(save_dir)  # pyright: ignore[reportCallIssue]
         # (3). Generate and save the config
         self.generate_config().save_config(save_dir)
 
@@ -396,8 +391,8 @@ class PosFreeEncoderModel(IModel):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: torch.Tensor = None,
-        group_ids: torch.Tensor = None,
+        attention_mask: torch.Tensor | None = None,
+        group_ids: torch.Tensor | None = None,
         norm: bool = True,
         average: bool = False,
     ):
@@ -405,7 +400,10 @@ class PosFreeEncoderModel(IModel):
         # attention_mask.shape == (batch_size, max_seq_len)
         out = self.blocks(input_tensor=emb, attention_mask=attention_mask)
         if average:
-            out = self.average_pool(out, attention_mask=attention_mask)
+            out = self.average_pool(
+                out,
+                attention_mask=attention_mask,  # pyright: ignore[reportArgumentType]
+            )
         if norm:
             response = F.normalize(out, p=2, dim=len(out.shape) - 1)
         return response
@@ -430,6 +428,7 @@ HF_CLASS_MAPPING = {
     "intfloat/multilingual-e5-large": E5LModel,
     "google-bert/bert-base-multilingual-cased": MBERTModel,
     "deepvk/USER-bge-m3": BGEModel,
+    "justatom/pfbert": PosFreeEncoderModel,
 }
 
 COMMON_CLASS_MAPPING = {"justatom/pfbert": PosFreeEncoderModel}

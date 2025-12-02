@@ -61,7 +61,7 @@ DEFAULT_QUERY_LIMIT = 9999
 
 class WeaviateDocStore(AsyncConstructor):
     """
-    WeaviateDocumentStore is a Document Store for Weaviate.
+    `WeaviateDocumentStore` is a Document Store for Weaviate.
     It can be used with Weaviate Cloud Services or self-hosted instances.
     """
 
