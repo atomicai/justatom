@@ -1,6 +1,4 @@
-import asyncio as asio
 import copy
-from collections import Counter
 from functools import cmp_to_key
 
 import torch
@@ -105,6 +103,7 @@ class GammaHybridRetriever(IRetrieverRunner):
         cutoff_score: float | None = None,
         gamma1: float | None = None,
         gamma2: float | None = None,
+        max_parallel_requests: int = 128,
         **props,
     ):
         alpha = alpha or self.alpha
@@ -155,16 +154,24 @@ class GammaHybridRetriever(IRetrieverRunner):
                 vectors = (
                     self.runner(batch=batches)[0].cpu().numpy().tolist()
                 )  # batch_size x vector_dim
-            for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
+            answer_per_batch_topp = await self.store.search(
+                queries=_queries,
+                queries_embeddings=vectors,
+                alpha=alpha,
+                top_k=top_p,
+                filters=filters,
+                include_vector=include_embedding,
+            )
+            # answer_per_batch_topp: batch_size x top_p
+            # Post-process each response to filter by fusion score.
+            answer_per_batch_topk = []
+            for query, res_topp in zip(_queries, answer_per_batch_topp, strict=False):
+                if isinstance(res_topp, Exception):
+                    raise res_topp
+                
                 res_topk = []
-                res_topp = await self.store.search(
-                    query=query,
-                    query_embedding=vector,
-                    alpha=alpha,
-                    filters=filters,
-                    top_k=top_p,
-                )
                 fus_topk = []
+                # Iterate over top-p results to compute fusion score.
                 for i, doc in enumerate(res_topp):  # type: ignore
                     keywords_or_phrases = doc.meta.get("keywords_or_phrases", [])
                     keywords_content: str = [doc.content] if include_content else []  # type: ignore
@@ -199,7 +206,7 @@ class GammaHybridRetriever(IRetrieverRunner):
                             "fusion_score": fusion_score,
                         }
                     )
-
+                # Sort by fusion score and get top-k
                 fus_topk = sorted(
                     fus_topk,
                     key=cmp_to_key(
@@ -208,7 +215,8 @@ class GammaHybridRetriever(IRetrieverRunner):
                     reverse=True,
                 )[:top_k]
                 res_topk = [res_topp[pos["rank"]] for pos in fus_topk]  # type: ignore
-                answer.append(copy.deepcopy(res_topk))
+                answer_per_batch_topk.append(copy.deepcopy(res_topk))
+            answer.extend(answer_per_batch_topk)
         return answer
 
 
@@ -275,15 +283,15 @@ class HybridRetriever(IRetrieverRunner):
                 vectors = (
                     self.runner(batch=batches)[0].cpu().numpy().tolist()
                 )  # batch_size x vector_dim
-            for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
-                res_topk = await self.store.search(
-                    query=query,
-                    query_embedding=vector,
-                    alpha=alpha,
-                    top_k=top_k,
-                    include_embedding=include_embedding,
-                )
-                answer.append(res_topk)
+            answer_per_batch = await self.store.search(
+                queries=_queries,
+                queries_embeddings=vectors,
+                alpha=alpha,
+                top_k=top_k,
+                filters=filters,
+                include_vector=include_embedding,
+            )
+            answer.extend(answer_per_batch)
         return answer
 
 
@@ -291,7 +299,7 @@ class EmbeddingRetriever(IRetrieverRunner):
     def __init__(
         self,
         store: INNDocStore,
-        runner: M1LMRunner | M2LMRunner | ATOMICLMRunner,
+        runner: EncoderRunner | BiEncoderRunner,
         processor: IProcessor,
         device: str = "cpu",
         prefix: str | None = None,
@@ -347,15 +355,14 @@ class EmbeddingRetriever(IRetrieverRunner):
                 vectors = (
                     self.runner(batch=batches)[0].cpu().numpy().tolist()
                 )  # batch_size x vector_dim
-            for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
-                res_topk = await self.store.search_by_embedding(
-                    query_embedding=vector,
-                    top_k=top_k,
-                    filters=filters,
-                    keywords=keywords,
-                    include_vector=include_embedding,
-                )
-                answer.append(res_topk)
+            answer_per_batch = await self.store.search_by_embedding(
+                queries_embeddings=vectors,
+                top_k=top_k,
+                filters=filters,
+                keywords=keywords,
+                include_vector=include_embedding,
+            )
+            answer.extend(answer_per_batch)
         return answer
 
 
@@ -374,19 +381,9 @@ class KeywordsRetriever(IRetrieverRunner):
         **props,
     ):
         queries = [queries] if isinstance(queries, str) else queries
-        answer = []
-        asio_workers = [
-            self.store.search_by_keywords(
-                query=query, top_k=top_k, filters=filters, keywords=keywords
-            )
-            for query in queries
-        ]
-        responses = await asio.gather(*asio_workers, return_exceptions=True)
-        for response in responses:
-            if isinstance(response, Exception):
-                raise response
-            else:
-                answer += [response]
+        answer = await self.store.search_by_keywords(
+            queries=queries, top_k=top_k, filters=filters, keywords=keywords
+        )
         return answer
 
 

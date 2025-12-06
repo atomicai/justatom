@@ -196,7 +196,7 @@ class WeaviateDocStore(AsyncConstructor):
         WEAVIATE_PORT = kwargs.get("WEAVIATE_PORT") or os.environ.get("WEAVIATE_PORT")
         WEAVIATE_GRPC_PORT = kwargs.get("WEAVIATE_GRPC_PORT") or os.environ.get(
             "WEAVIATE_GRPC_PORT"
-        )
+        ) or "50051"
         logger.info(f"FINDER | collection_schema_name=[{collection_schema_name}]")
         store = await cls(
             collection_schema_name=collection_schema_name,
@@ -553,7 +553,7 @@ class WeaviateDocStore(AsyncConstructor):
 
     async def search_by_keywords(
         self,
-        query: str,
+        queries: str | list[str],
         policy: SearchPolicy | None = SearchPolicy.BM25,
         filters: dict[str, Any] | None = None,
         keywords: list | None = None,
@@ -564,31 +564,49 @@ class WeaviateDocStore(AsyncConstructor):
         logger.info(
             f"SEARCH | algo=[BM25] | collection_name=[{self.__collection.name}]"
         )
+        queries = [queries] if isinstance(queries, str) else queries
         async with self._client:
             if policy == SearchPolicy.BM25:
-                result = await self.__collection.query.bm25(
-                    query=query,
-                    filters=convert_filters(filters) if filters else None,
-                    limit=top_k,
-                    include_vector=include_vector,  # type: ignore
-                    query_properties=["content"],
-                    return_properties=None,
-                    return_metadata=MetadataQuery(
-                        distance=True, score=True, explain_score=True, certainty=True
-                    ),
-                )  # type: ignore
+                if len(queries) <= 1:
+                    result = await self.__collection.query.bm25(
+                        query=queries[0],
+                        filters=convert_filters(filters) if filters else None,
+                        limit=top_k,
+                        include_vector=include_vector,  # type: ignore
+                        query_properties=["content"],
+                        return_properties=None,
+                        return_metadata=MetadataQuery(
+                            distance=True, score=True, explain_score=True, certainty=True
+                        ),
+                    )  # type: ignore
+                    result = [result]
+                else:
+                    parallel_workers = [
+                        self.__collection.query.bm25(  # type: ignore
+                            query=query,
+                            filters=convert_filters(filters) if filters else None,
+                            limit=top_k,
+                            include_vector=include_vector,  # type: ignore
+                            query_properties=["content"],
+                            return_properties=None,
+                            return_metadata=MetadataQuery(
+                                distance=True, score=True, explain_score=True, certainty=True
+                            ),
+                        )
+                        for query in queries
+                    ]
+                    result = await asio.gather(*parallel_workers)
             else:
                 msg = f"You specified {str(policy)} that is not compatable with [search_by_keywords]. Only [BM25] is avalaible"
                 logger.error(msg)
                 raise ValueError(msg)
-            response = [self._to_document(doc) for doc in result.objects]
-            response = self._check_keywords(response, keywords=keywords)
-            return response
+            response = [self._to_document(doc) for res in result for doc in res.objects]
+        return response
 
     async def search(
         self,
-        query: str,
-        query_embedding: list[float],
+        queries: str | list[str],
+        queries_embeddings: list[float] | list[list[float]],
         rank_policy: str | None = None,
         alpha: float | None = 0.22,
         filters: dict[str, Any] | None = None,
@@ -605,51 +623,96 @@ class WeaviateDocStore(AsyncConstructor):
             if return_metadata is None
             else return_metadata
         )  # type: ignore
+        queries = [queries] if isinstance(queries, str) else queries
+        queries_embeddings = (
+            [queries_embeddings]
+            if isinstance(queries_embeddings[0], float)
+            else queries_embeddings
+        )
+        assert len(queries) == len(queries_embeddings), (
+            f"Mismatch in number of queries and embeddings provided. "
+            f"queries=[{len(queries)}] | embeddings=[{len(queries_embeddings)}]"
+        )
         async with self._client:
-            result = await self.__collection.query.hybrid(
-                query=query,
-                vector=query_embedding,
-                alpha=alpha,  # type: ignore
-                limit=top_k,
-                filters=convert_filters(filters) if filters else None,
-                return_metadata=return_metadata,  # type: ignore
-                include_vector=include_vector,  # type: ignore
-                query_properties=["content"],
-            )  # type: ignore
 
-        response = [self._to_document(doc) for doc in result.objects]
-        response = self._check_keywords(response, keywords)
+            if len(queries) <= 1:
+                result = await self.__collection.query.hybrid(
+                    query=queries[0],
+                    vector=queries_embeddings[0],
+                    alpha=alpha,  # type: ignore
+                    limit=top_k,
+                    filters=convert_filters(filters) if filters else None,
+                    return_metadata=return_metadata,  # type: ignore
+                    include_vector=include_vector,  # type: ignore
+                    query_properties=["content"],
+                )  # type: ignore
+                result = [result]
+            else:
+                parallel_workers = [
+                    self.__collection.query.hybrid(  # type: ignore
+                        query=query,
+                        vector=query_embedding,
+                        alpha=alpha,  # type: ignore
+                        limit=top_k,
+                        filters=convert_filters(filters) if filters else None,
+                        return_metadata=return_metadata,  # type: ignore
+                        include_vector=include_vector,  # type: ignore
+                        query_properties=["content"],
+                    )
+                    for query, query_embedding in zip(
+                        queries, queries_embeddings, strict=False
+                    )
+                ]
+                result = await asio.gather(*parallel_workers)
+            response = [self._to_document(doc) for res in result for doc in res.objects]
         return response
 
     async def search_by_embedding(
         self,
-        query_embedding: list[float],
+        queries_embeddings: list[float] | list[list[float]],
         filters: dict[str, Any] | None = None,
         keywords: list[str] | None = None,
         top_k: int | None = None,
         distance: float | None = None,
         certainty: float | None = None,
         return_metadata: list[str] | None = None,
+        include_vector: bool | None = False,
     ) -> list[Document]:
         if distance is not None and certainty is not None:
             msg = "Can't use 'distance' and 'certainty' parameters together"
             raise ValueError(msg)
+        queries_embeddings = [queries_embeddings] if isinstance(queries_embeddings[0], float) else queries_embeddings
         return_metadata = ["certainty"] if return_metadata is None else return_metadata
         # properties = [p.name for p in self._collection.config.get().properties]
         async with self._client:
-            result = await self.__collection.query.near_vector(
-                near_vector=query_embedding,
-                distance=distance,
-                certainty=certainty,
-                include_vector=True,
-                filters=convert_filters(filters) if filters else None,
-                limit=top_k,
-                return_properties=None,
-                return_metadata=return_metadata,  # type: ignore
-            )  # type: ignore
-
-        response = [self._to_document(doc) for doc in result.objects]
-        response = self._check_keywords(response, keywords=keywords)
+            if len(queries_embeddings) <= 1:
+                result = await self.__collection.query.near_vector(
+                    near_vector=queries_embeddings[0],
+                    distance=distance,
+                    certainty=certainty,
+                    include_vector=include_vector,
+                    filters=convert_filters(filters) if filters else None,
+                    limit=top_k,
+                    return_properties=None,
+                    return_metadata=return_metadata,  # type: ignore
+                )  # type: ignore
+                result = [result]
+            else:
+                parallel_workers = [
+                    self.__collection.query.near_vector(  # type: ignore
+                        near_vector=query_embedding,
+                        distance=distance,
+                        certainty=certainty,
+                        include_vector=include_vector,
+                        filters=convert_filters(filters) if filters else None,
+                        limit=top_k,
+                        return_properties=None,
+                        return_metadata=return_metadata,  # type: ignore
+                    )
+                    for query_embedding in queries_embeddings
+                ]
+                result = await asio.gather(*parallel_workers)
+            response = [self._to_document(doc) for res in result for doc in res.objects]
         return response
 
 

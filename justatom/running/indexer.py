@@ -1,7 +1,7 @@
 import torch
 from loguru import logger
 from more_itertools import chunked
-from tqdm.autonotebook import tqdm
+from tqdm.asyncio import tqdm_asyncio
 
 from justatom.etc.errors import DocumentStoreError
 from justatom.etc.schema import Document
@@ -17,7 +17,7 @@ class NNIndexer(IIndexerRunner):
     def __init__(
         self,
         store: INNDocStore,
-        runner: M1LMRunner | M2LMRunner,
+        runner: EncoderRunner | BiEncoderRunner,
         processor: IProcessor,
         device: str = "cpu",
     ):
@@ -56,7 +56,7 @@ class NNIndexer(IIndexerRunner):
             dataset=dataset, tensor_names=tensor_names, batch_size=batch_size
         )
 
-        for i, (docs, batch) in tqdm(
+        for i, (docs, batch) in (
             enumerate(
                 zip(chunked(documents_as_dicts, n=batch_size), loader, strict=False)
             )
@@ -87,7 +87,7 @@ class NNIndexer(IIndexerRunner):
             documents, batch_size, device, flush_memory_every
         )
         n_total_written_docs: int = 0
-        for batch_idx, docs_with_embeddings_batch in enumerate(docs_with_embeddings):
+        for batch_idx, docs_with_embeddings_batch in tqdm_asyncio(enumerate(docs_with_embeddings)):
             try:
                 cur_written_docs = await self.store.write_documents(
                     [Document.from_dict(doc) for doc in docs_with_embeddings_batch],
