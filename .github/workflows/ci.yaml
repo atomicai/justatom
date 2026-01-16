@@ -16,10 +16,12 @@ jobs:
       with:
         python-version: '3.11'
         architecture: 'x64'
-    - name: Install black
-      run: pip install black
+    - name: Install black and isort
+      run: pip install black isort
     - name: Run black
       run: black --check --diff .
+    - name: Run isort
+      run: isort --check --diff .
   lint:
     name: Lint (black+pylint+mypy)
     runs-on: ubuntu-latest

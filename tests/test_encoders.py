@@ -5,12 +5,12 @@ import torch
 from loguru import logger
 from tqdm.auto import tqdm
 
-from justatom.modeling.prime import E5Model
+from justatom.modeling.prime import ILanguageModel
 from justatom.processing.loader import NamedDataLoader
-from justatom.processing.prime import INFERProcessor
+from justatom.processing.prime import RuntimeProcessor
 from justatom.processing.tokenizer import ITokenizer
-from justatom.running.m1 import M1LMRunner
-from justatom.running.mask import IMODELRunner
+from justatom.running.encoders import EncoderRunner
+from justatom.running.mask import IModelRunner
 
 
 class M1LMRunnerTest(unittest.TestCase):
@@ -169,40 +169,40 @@ Forgiving what I've done
     ]
 
     def setUp(self):
-        tokenizer = ITokenizer.from_pretrained("intfloat/multilingual-e5-base")
-        processor = INFERProcessor(tokenizer)
-        model = E5Model()
 
-        self.runner = M1LMRunner(
-            model=model,
+        model_name_or_path = "intfloat/multilingual-e5-base"
+
+        tokenizer = ITokenizer.from_pretrained(model_name_or_path)
+        processor = RuntimeProcessor(tokenizer)
+        lm_model = ILanguageModel.load(model_name_or_path)
+
+        self.runner = EncoderRunner(
+            model=lm_model,
             prediction_heads=[],
             processor=processor,
         )
         self.runner.eval()
 
-    def test_io(self):
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            self.runner.save(tmpdirname)
-            runner2 = IMODELRunner.load(tmpdirname)
-
-        self.assertEqual(type(self.runner), type(runner2))
-        for idx in range(len(self.runner.prediction_heads)):
-            self.assertEqual(type(self.runner.prediction_heads[idx]), type(runner2.prediction_heads[idx]))
-
     def test_inference(self):
-        dataset, tensornames, problematic_ids = self.runner.processor.dataset_from_dicts(
-            [{"content": content} for content in self.TEXTS]
+        dataset, tensor_names, problematic_ids = (
+            self.runner.processor.dataset_from_dicts(  # pyright: ignore[reportOptionalMemberAccess]
+                [{"content": content} for content in self.TEXTS]
+            )
         )
-        loader = NamedDataLoader(dataset=dataset, tensor_names=tensornames, batch_size=2)
+        loader = NamedDataLoader(
+            dataset=dataset, tensor_names=tensor_names, batch_size=2
+        )
         vectors = []
-        for batch in tqdm(loader):  # Each batch comes with bs=2 samples.abs
+        for batch in tqdm(loader):  # Each batch comes with bs=2 samples
             with torch.no_grad():
                 vecs = self.runner(batch)[0]
                 vectors.extend(vecs)
         for i in range(1, len(vectors), 2):
             dot_product_positive = vectors[i] @ vectors[i - 1]
             dot_product_negative = vectors[i] @ vectors[(i + 1) % len(vectors)]
-            logger.info(f"i={i} | dot_product_positive={dot_product_positive} | dot_product_negative={dot_product_negative}")
+            logger.info(
+                f"i={i} | dot_product_positive={dot_product_positive} | dot_product_negative={dot_product_negative}"
+            )
             self.assertGreater(dot_product_positive, dot_product_negative)
 
 

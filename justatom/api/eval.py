@@ -15,10 +15,10 @@ from justatom.etc.errors import DocumentStoreError
 
 # Model IO and Prediction Head Flow
 from justatom.modeling.mask import ILanguageModel
-from justatom.processing import INFERProcessor, ITokenizer
+from justatom.processing import RuntimeProcessor, ITokenizer
 from justatom.running.evaluator import EvaluatorRunner
 from justatom.running.indexer import API as IndexerAPI
-from justatom.running.m1 import M1LMRunner
+from justatom.running.encoders import EncoderRunner, BiEncoderRunner
 from justatom.running.mask import IEvaluatorRunner, IRetrieverRunner
 from justatom.running.retriever import API as RetrieverApi
 from justatom.storing.dataset import API as DatasetApi
@@ -29,7 +29,9 @@ from justatom.tooling import stl
 dotenv.load_dotenv()
 
 
-logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', -1)}")
+logger.info(
+    f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', -1)}"
+)
 
 
 def to_numpy(container):
@@ -39,11 +41,11 @@ def to_numpy(container):
         return container
 
 
-def maybe_cuda_or_mps(devices: list[str] = None):
-    devices = {"cuda", "mps", "cpu"} if devices is None else set(devices)
+def maybe_cuda_or_mps(devices: list[str] = None):  # type: ignore
+    devices = {"cuda", "mps", "cpu"} if devices is None else set(devices)  # type: ignore
     if torch.cuda.is_available() and "cuda" in devices:
         return "cuda:0"
-    elif torch.has_mps and "mps" in devices:
+    elif torch.mps.is_available() and "mps" in devices:
         return "mps"
     else:
         return "cpu"
@@ -58,7 +60,9 @@ def random_split(ds: ConcatDataset, lengths: list[int]):
     :param lengths: Lengths of splits to be produced.
     """
     if sum(lengths) != len(ds):
-        raise ValueError("Sum of input lengths does not equal the length of the input dataset!")
+        raise ValueError(
+            "Sum of input lengths does not equal the length of the input dataset!"
+        )
 
     try:
         idx_dataset = np.where(np.array(ds.cumulative_sizes) > lengths[0])[0][0]
@@ -70,7 +74,10 @@ def random_split(ds: ConcatDataset, lengths: list[int]):
             f"train/dev split: {lengths}"
         )
 
-    assert idx_dataset >= 1, "Dev_split ratio is too large, there is no data in train set. Please lower split =" f" {str(lengths)}"
+    assert idx_dataset >= 1, (
+        "Dev_split ratio is too large, there is no data in train set. Please lower split ="
+        f" {str(lengths)}"
+    )
 
     train = ConcatDataset(ds.datasets[:idx_dataset])  # type: Dataset
     test = ConcatDataset(ds.datasets[idx_dataset:])  # type: Dataset
@@ -111,7 +118,9 @@ async def check_store_and_message(store: WeaviateDocStore, delete_if_not_empty: 
     if delete_if_not_empty:
         status_message: bool = await store.delete_all_documents()
         if not status_message:
-            raise DocumentStoreError(f"Documents per collection {collection_name} are not deleted. See logs for more details")
+            raise DocumentStoreError(
+                f"Documents per collection {collection_name} are not deleted. See logs for more details"
+            )
     else:
         if n_docs_count > 0:
             logger.warning(
@@ -130,7 +139,11 @@ def wrapper_for_docs(
     filters: dict | None = None,
 ) -> Generator[dict]:
     if keywords_or_phrases_field is None:
-        pl_data = pl_data.group_by(content_field).agg(pl.col(search_or_id_field)).explode(pl.col(search_or_id_field))
+        pl_data = (
+            pl_data.group_by(content_field)
+            .agg(pl.col(search_or_id_field))
+            .explode(pl.col(search_or_id_field))
+        )
     else:
         pl_data = (
             pl_data.group_by(content_field)
@@ -146,9 +159,14 @@ def wrapper_for_docs(
             js_keywords_or_phrases = [
                 kwp
                 for kwp in js_chunk[keywords_or_phrases_field]
-                if kwp["keyword_or_phrase"] is not None and kwp["explanation"] is not None
+                if kwp["keyword_or_phrase"] is not None
+                and kwp["explanation"] is not None
             ]
-            yield dict(content=js_chunk[content_field], meta=dict(labels=js_queries), keywords_or_phrases=js_keywords_or_phrases)
+            yield dict(
+                content=js_chunk[content_field],
+                meta=dict(labels=js_queries),
+                keywords_or_phrases=js_keywords_or_phrases,
+            )
 
 
 def igni_runners(
@@ -170,11 +188,28 @@ def igni_runners(
             logger.error(msg)
             raise ValueError(msg)
         lm_model = ILanguageModel.load(model_name_or_path)
-        ix_processor = INFERProcessor(ITokenizer.from_pretrained(model_name_or_path), prefix=content_prefix)
-        ir_processor = INFERProcessor(ITokenizer.from_pretrained(model_name_or_path), prefix=query_prefix)
-        runner = M1LMRunner(model=lm_model, prediction_heads=[], device=device)
-        ix_runner = IndexerAPI.named(search_pipeline, store=store, runner=runner, processor=ix_processor, device=device)
-        ir_runner = RetrieverApi.named(search_pipeline, store=store, runner=runner, processor=ir_processor, device=device, **props)
+        ix_processor = RuntimeProcessor(
+            ITokenizer.from_pretrained(model_name_or_path), prefix=content_prefix
+        )
+        ir_processor = RuntimeProcessor(
+            ITokenizer.from_pretrained(model_name_or_path), prefix=query_prefix
+        )
+        runner = EncoderRunner(model=lm_model, prediction_heads=[], device=device)
+        ix_runner = IndexerAPI.named(
+            search_pipeline,
+            store=store,
+            runner=runner,
+            processor=ix_processor,
+            device=device,
+        )
+        ir_runner = RetrieverApi.named(
+            search_pipeline,
+            store=store,
+            runner=runner,
+            processor=ir_processor,
+            device=device,
+            **props,
+        )
 
     return ix_runner, ir_runner
 
@@ -193,13 +228,17 @@ async def do_index_and_prepare_for_search(
     batch_size: int = 4,
     flush_collection: bool = False,
     devices: list[str] = None,
-    weaviate_host: str = None,
-    weaviate_port: int = None,
+    weaviate_host: str = "localhost",
+    weaviate_port: int = 2211,
     **props,
 ) -> tuple[IRetrieverRunner, list[str]]:
     # Here we don't need any model to load. Only `DocumentStore`
-    store: WeaviateDocStore = await WeaviateApi.find(collection_name, WEAVIATE_HOST=weaviate_host, WEAVIATE_PORT=weaviate_port)
-    store, n_total_docs = await check_store_and_message(store, delete_if_not_empty=flush_collection)
+    store: WeaviateDocStore = await WeaviateApi.find(
+        collection_name, WEAVIATE_HOST=weaviate_host, WEAVIATE_PORT=weaviate_port
+    )
+    store, n_total_docs = await check_store_and_message(
+        store, delete_if_not_empty=flush_collection
+    )
 
     device = maybe_cuda_or_mps(devices=devices)
 
@@ -212,8 +251,12 @@ async def do_index_and_prepare_for_search(
         content_prefix=content_prefix,
         **props,
     )
-    assert search_or_id_field in pl_data.columns, f"Search field [{search_or_id_field}] is not present within dataset."
-    assert content_field in pl_data.columns, f"Content field [{content_field}] is not present within dataset."
+    assert (
+        search_or_id_field in pl_data.columns
+    ), f"Search field [{search_or_id_field}] is not present within dataset."
+    assert (
+        content_field in pl_data.columns
+    ), f"Content field [{content_field}] is not present within dataset."
 
     if not flush_collection and n_total_docs > 0:
         return ir_runner
@@ -225,9 +268,11 @@ async def do_index_and_prepare_for_search(
             keywords_or_phrases_field=keywords_or_phrases_field,
         )
     )
-    logger.info("\n")
-    await ix_runner.index(documents=js_docs, batch_size=batch_size, device=device)
-    logger.info("\n")
+    logger.info("Indexing in progress\n")
+    n_total_docs = await ix_runner.index(
+        documents=js_docs, batch_size=batch_size, device=device
+    )
+    logger.info(f"Total docs in index {n_total_docs}\n")
     return ir_runner
 
 
@@ -255,8 +300,14 @@ async def main(
     **props,
 ):
     collection_name = "Document" if collection_name is None else collection_name
-    dataset_name_or_path = Path(dataset_name_or_path)
-    save_results_to_dir = Path(os.getcwd()) / "evals" if save_results_to_dir is None else Path(save_results_to_dir)
+    dataset_name_or_path = Path(
+        dataset_name_or_path
+    )  # pyright: ignore[reportAssignmentType]
+    save_results_to_dir = (
+        Path(os.getcwd()) / "evals"
+        if save_results_to_dir is None
+        else Path(save_results_to_dir)
+    )  # pyright: ignore[reportAssignmentType]
     pl_data = source_from_dataset(str(dataset_name_or_path))
     if filters is not None:
         fields = filters.get("fields", [])
@@ -299,15 +350,24 @@ async def main(
     logger.info("EVALUATION stage is completed.")
     comp_eval_metrics = {k: list(v.compute()) for k, v in eval_metrics.items()}
     comp_eval_metrics = [
-        {"name": k, "mean": v[0], "std": v[1], "dataset": str(dataset_name_or_path)} for k, v in comp_eval_metrics.items()
+        {"name": k, "mean": v[0], "std": v[1], "dataset": str(dataset_name_or_path)}
+        for k, v in comp_eval_metrics.items()
     ]
     pl_metrics = pl.from_dicts(comp_eval_metrics)
     snap_eval_metrics = [] if eval_metrics is None else eval_metrics
-    snap_name = stl.snapshot({"Evaluation": " ".join(snap_eval_metrics), "Model": Path(model_name_or_path).stem}, sep="|")
+    snap_name = stl.snapshot(
+        {
+            "Evaluation": " ".join(snap_eval_metrics),
+            "Model": Path(model_name_or_path).stem,
+        },
+        sep="|",
+    )
     snap_props = stl.snapshot(props, sep="|")
     snap_props = "|" if snap_props == "" else "|" + snap_props + "|"
     save_results_to_dir.mkdir(exist_ok=True, parents=False)
-    save_final_path = save_results_to_dir / f"{search_pipeline}{snap_props}{snap_name}.csv"
+    save_final_path = (
+        save_results_to_dir / f"{search_pipeline}{snap_props}{snap_name}.csv"
+    )
     pl_metrics.write_csv(str(save_final_path))
 
 
@@ -320,7 +380,10 @@ if __name__ == "__main__":
             *[
                 main(
                     collection_name="EvalVanillaLarge",
-                    save_results_to_dir=Path(os.getcwd()) / "evals" / "EvalVanilla" / "large",
+                    save_results_to_dir=Path(os.getcwd())
+                    / "evals"
+                    / "EvalVanilla"
+                    / "large",  # pyright: ignore[reportArgumentType]
                     flush_collection=True,
                     search_field="queries",
                     content_field="content",
@@ -328,7 +391,9 @@ if __name__ == "__main__":
                     filters={"fields": ["queries", "content"]},
                     search_pipeline="hybrid",
                     model_name_or_path="intfloat/multilingual-e5-large",  # intfloat/multilingual-e5-small | intfloat/multilingual-e5-base | intfloat/multilingual-e5-large #noqa
-                    dataset_name_or_path=str(Path(os.getcwd()) / ".data" / "polaroids.ai.data.json"),
+                    dataset_name_or_path=str(
+                        Path(os.getcwd()) / ".data" / "polaroids.ai.data.json"
+                    ),
                     query_prefix="query:",
                     content_prefix="passage:",
                     metrics_top_k=["HitRate"],
@@ -336,7 +401,7 @@ if __name__ == "__main__":
                     search_batch_size=64,
                     eval_top_k=[2, 5, 10, 15, 20],
                     weaviate_host="localhost",
-                    weaviate_port=2212,
+                    weaviate_port=2211,
                     alpha=alpha,
                     include_keywords=False,
                     include_explanation=False,

@@ -7,22 +7,26 @@ import numpy as np
 import simplejson as json
 from bertopic.backend import BaseEmbedder
 from loguru import logger
-
+from justatom.modeling.mask import ILanguageModel
 from justatom.etc.schema import Document
-from justatom.modeling.prime import IDocEmbedder
 
 
-class IMODELRunner:
+class IModelRunner:
     """
-    Base Class for implementing M1/M2/M3 etc... models with frameworks like PyTorch and co.
+    Base Class for implementing N=1 model pipeline. It acts as a wrapper that takes care of processing, loading and saving and computing predictions on strictly one model.
     """
 
-    subclasses = {}  # type: Dict
+    subclasses = {}  # type: dict
+
+    config: dict = {}
+
+    def __init__(self) -> None:
+        super().__init__()
 
     def __init_subclass__(cls, **kwargs):
         """
         This automatically keeps track of all available subclasses.
-        Enables generic load() for all specific Mi implementation.
+        Enables generic load() for all specific implementations.
         """
         super().__init_subclass__(**kwargs)
         cls.subclasses[cls.__name__] = cls
@@ -41,7 +45,9 @@ class IMODELRunner:
         :return: An instance of the specified processor.
         """
         config_file = Path(data_dir) / "runner_config.json"
-        assert config_file.exists(), "The config is not found, couldn't load the processor"
+        assert (
+            config_file.exists()
+        ), "The config is not found, couldn't load the processor"
         logger.info(f"Runner config found locally at {data_dir}")
         with open(config_file) as f:
             config = json.load(f)
@@ -55,7 +61,7 @@ class IMODELRunner:
         with open(str(save_filename), "w") as f:
             f.write(json.dumps(config))
 
-    def save(self, save_dir: str):
+    def save(self, save_dir: str | Path):
         """
         Dumps the config to the .json file
 
@@ -71,7 +77,8 @@ class IMODELRunner:
         with open(output_config_file, "w") as file:
             json.dump(config, file)
         # Save the model itself
-        self.model.save(save_dir)
+        if getattr(self, "model", None) is not None:
+            self.model.save(save_dir)  # type: ignore
 
     def connect_heads_with_processor(self, tasks: dict, require_labels: bool = True):
         """
@@ -84,21 +91,31 @@ class IMODELRunner:
                                not supplied with labels.
         :return: None
         """
-        for head in self.prediction_heads:
+        for head in self.prediction_heads:  # type: ignore
             head.label_tensor_name = tasks[head.task_name]["label_tensor_name"]
             label_list = tasks[head.task_name]["label_list"]
             if not label_list and require_labels:
-                raise Exception(f"The task '{head.task_name}' is missing a valid set of labels")
+                raise Exception(
+                    f"The task '{head.task_name}' is missing a valid set of labels"
+                )
             label_list = tasks[head.task_name]["label_list"]
             head.label_list = label_list
             head.metric = tasks[head.task_name]["metric"]
+
+
+class IDocEmbedder(abc.ABC):
+    @abc.abstractmethod
+    def encode(self, documents: list[str], verbose: bool = False, *args, **kwargs) -> np.ndarray:  # type: ignore
+        """Backend implementation for embedding documents with n-dimensional vectors."""
+        pass
 
 
 class ICLUSTERINGWrapperBackend(BaseEmbedder):
     def __init__(self, model: IDocEmbedder):
         self.model = model
 
-    def embed(self, documents: list[str], verbose: bool = False) -> np.ndarray:
+    @abc.abstractmethod
+    def embed(self, documents: list[str], verbose: bool = False) -> np.ndarray:  # type: ignore
         """Embed a list of n documents/words into an n-dimensional
         matrix of embeddings
 
@@ -113,7 +130,15 @@ class ICLUSTERINGWrapperBackend(BaseEmbedder):
         pass
 
 
-class ICLUSTERINGRunner(abc.ABC):
+class IDimReducer(abc.ABC):  # noqa: B024
+    def fit_transform(self, embeddings: np.ndarray) -> np.ndarray:  # noqa: B027
+        pass
+
+    def transform(self, embeddings: np.ndarray) -> np.ndarray:  # noqa: B027
+        pass
+
+
+class IClusteringRunner(abc.ABC):
     """
     Pipeline for clustering using any custom embedding module.
     """
@@ -128,13 +153,13 @@ class ICLUSTERINGRunner(abc.ABC):
 
 class IRetrieverRunner(abc.ABC):
     @abc.abstractmethod
-    def retrieve_topk(self, queries: str | list[str], top_k: int = 5):
+    async def retrieve_topk(self, queries: str | list[str], top_k: int = 5):
         pass
 
 
 class IIndexerRunner(abc.ABC):
     @abc.abstractmethod
-    def index(self, documents: list[Document], **kwargs):
+    async def index(self, documents: list[Document], **kwargs):
         pass
 
 
@@ -148,7 +173,7 @@ class IEvaluatorRunner(abc.ABC):
         queries: str | list[str],
         metrics: list[str | Callable],
         metrics_top_k: list[str | Callable],
-        eval_top_k: list[int] = None,
+        eval_top_k: list[int] | None = None,
         top_k: int = 5,
     ):
         pass
@@ -156,11 +181,11 @@ class IEvaluatorRunner(abc.ABC):
 
 class IPatcherRunner(abc.ABC):
     @abc.abstractmethod
-    def patch(self, collection_name: str, new_collection_name: str, **kwargs):
+    async def patch(self, collection_name: str, new_collection_name: str, **kwargs):
         pass
 
 
-class IReqsRunner(abc.ABC):
+class IRemoteRequestRunner(abc.ABC):
     @abc.abstractmethod
     async def INDEX(self, **props):
         pass
@@ -188,7 +213,10 @@ class IPromptRunner(abc.ABC):
 
     def prompt(self, **props) -> list[dict]:
         obj = self._prepare(**props)
-        return [dict(role="system", content=self.system_prompt), dict(role="user", content=obj)]
+        return [
+            dict(role="system", content=self.system_prompt),
+            dict(role="user", content=obj),
+        ]
 
     def finalize(self, **props) -> str:
         ans = self.finalize(**props)

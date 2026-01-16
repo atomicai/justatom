@@ -31,10 +31,13 @@ class Sample:
 
     def __str__(self):
         if self.clear_text:
-            clear_text_str = "\n \t".join([k + ": " + str(v) for k, v in self.clear_text.items()])
+            clear_text_str = "\n \t".join(
+                [k + ": " + str(v) for k, v in self.clear_text.items()]
+            )
             if len(clear_text_str) > 3000:
                 clear_text_str = (
-                    clear_text_str[:3_000] + f"\nTHE REST IS TOO LONG TO DISPLAY. Remaining chars :{len(clear_text_str)-3_000}"
+                    clear_text_str[:3_000]
+                    + f"\nTHE REST IS TOO LONG TO DISPLAY. Remaining chars :{len(clear_text_str)-3_000}"
                 )
         else:
             clear_text_str = "None"
@@ -49,15 +52,17 @@ class Sample:
             feature_str = "None"
 
         if self.tokenized:
-            tokenized_str = "\n \t".join([k + ": " + str(v) for k, v in self.tokenized.items()])
+            tokenized_str = "\n \t".join(
+                [k + ": " + str(v) for k, v in self.tokenized.items()]
+            )
             if len(tokenized_str) > 3000:
                 tokenized_str = (
-                    tokenized_str[:3_000] + f"\nTHE REST IS TOO LONG TO DISPLAY. Remaining chars: {len(tokenized_str)-3_000}"
+                    tokenized_str[:3_000]
+                    + f"\nTHE REST IS TOO LONG TO DISPLAY. Remaining chars: {len(tokenized_str)-3_000}"
                 )
         else:
             tokenized_str = "None"
         s = (
-            f"\n{SAMPLE}\n"
             f"ID: {self.id}\n"
             f"Clear Text: \n \t{clear_text_str}\n"
             f"Tokenized: \n \t{tokenized_str}\n"

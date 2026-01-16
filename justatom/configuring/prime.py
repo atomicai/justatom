@@ -19,8 +19,7 @@ class IConfig:
     DEFAULT_KMEANS = dict()
 
     def __init__(self):
-        config = dict(EnvYAML(Path(os.getcwd()) / "config.yaml"))
-        logger.info(f"/CONFIGURING | From config.yaml loaded K=[{config.keys()}] value(s)")
+        config = dict(EnvYAML(Path(os.getcwd()) / "config.yaml", strict=False))
         for k, v in config.items():
             if k.startswith("_"):
                 continue

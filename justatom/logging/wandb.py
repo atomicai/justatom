@@ -8,7 +8,7 @@ from justatom.configuring import Config
 from justatom.etc.lazy_imports import LazyImport
 from justatom.logging.mask import ILogger
 
-with LazyImport("Run 'pip install wandb==0.16.1'") as wb_import:
+with LazyImport("Run 'pip install wandb==0.22.1'") as wb_import:
     import wandb
 
 
@@ -64,11 +64,13 @@ class WandbLogger(ILogger):
         project: str,
         name: str | None = None,
         entity: str | None = None,
-        log_batch_metrics: bool = Config.log.log_batch_metrics,
-        log_epoch_metrics: bool = Config.log.log_epoch_metrics,
+        log_batch_metrics: bool = True,
+        log_epoch_metrics: bool = True,
         **kwargs,
     ) -> None:
-        super().__init__(log_batch_metrics=log_batch_metrics, log_epoch_metrics=log_epoch_metrics)
+        super().__init__(
+            log_batch_metrics=log_batch_metrics, log_epoch_metrics=log_epoch_metrics
+        )
         if self.log_batch_metrics:
             logger.warning(
                 "Wandb does NOT support several x-axes for logging."
@@ -91,16 +93,32 @@ class WandbLogger(ILogger):
         """Internal logger/experiment/etc. from the monitoring system."""
         return self.run
 
-    def _log_metrics(self, metrics: dict[str, float], step: int = None, loader_key: str = None, prefix=""):
+    def _log_metrics(
+        self,
+        metrics: dict[str, float],
+        step: int | None = None,
+        loader_key: str | None = None,
+        prefix="",
+    ):
         for key, value in metrics.items():
             if prefix != "":
                 if loader_key is not None:
-                    self.run.log({f"{key.capitalize()}{prefix.capitalize()}{loader_key.capitalize()}": value}, step=step)
+                    self.run.log(
+                        {
+                            f"{key.capitalize()}{prefix.capitalize()}{loader_key.capitalize()}": value
+                        },
+                        step=step,
+                    )
                 else:
-                    self.run.log({f"{key.capitalize()}{prefix.capitalize()}": value}, step=step)
+                    self.run.log(
+                        {f"{key.capitalize()}{prefix.capitalize()}": value}, step=step
+                    )
             else:
                 if loader_key is not None:
-                    self.run.log({f"{key.capitalize()}{loader_key.capitalize()}": value}, step=step)
+                    self.run.log(
+                        {f"{key.capitalize()}{loader_key.capitalize()}": value},
+                        step=step,
+                    )
                 else:
                     self.run.log({f"{key.capitalize()}": value}, step=step)
 
@@ -144,7 +162,9 @@ class WandbLogger(ILogger):
     ) -> None:
         """Logs image to the logger."""
         if scope == "batch" or scope == "loader":
-            log_path = "_".join([tag, f"epoch-{runner.epoch_step:04d}", f"loader-{runner.loader}"])
+            log_path = "_".join(
+                [tag, f"epoch-{runner.epoch_step:04d}", f"loader-{runner.loader}"]
+            )
         elif scope == "epoch":
             log_path = "_".join([tag, f"epoch-{runner.epoch_step:04d}"])
         elif scope == "experiment" or scope is None:
@@ -153,7 +173,9 @@ class WandbLogger(ILogger):
         step = runner.sample_step if self.log_batch_metrics else runner.epoch_step
         self.run.log({f"{log_path}.png": wandb.Image(image)}, step=step)
 
-    def log_hparams(self, hparams: dict, runner: "IRunner" = None) -> None:  # noqa: F821
+    def log_hparams(
+        self, hparams: dict, runner: "IRunner" = None
+    ) -> None:  # noqa: F821
         """Logs hyperparameters to the logger."""
         self.run.config.update(hparams)
 

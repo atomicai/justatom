@@ -14,7 +14,13 @@ class ILogger(abc.ABC):  # noqa: B024
 
     disable_logging = False
 
-    def __init__(self, log_batch_metrics: bool, log_epoch_metrics: bool, tracking_uri: bool | None = False, **kwargs):
+    def __init__(
+        self,
+        log_batch_metrics: bool,
+        log_epoch_metrics: bool,
+        tracking_uri: bool | None = False,
+        **kwargs,
+    ):
         self.tracking_uri = tracking_uri
         self.log_batch_metrics = log_batch_metrics
         self.log_epoch_metrics = log_epoch_metrics
@@ -28,5 +34,5 @@ class ILogger(abc.ABC):  # noqa: B024
         raise NotImplementedError()
 
     @classmethod
-    def log_params(self, params, **kwars):
+    def log_params(cls, params, **kwargs):
         raise NotImplementedError()

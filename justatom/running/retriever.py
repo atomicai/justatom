@@ -1,7 +1,5 @@
 import asyncio as asio
 import copy
-import math
-import string
 from collections import Counter
 from functools import cmp_to_key
 
@@ -10,60 +8,33 @@ from jarowinkler import jarowinkler_similarity
 from loguru import logger
 from more_itertools import chunked
 
-from justatom.etc.pattern import singleton
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.mask import IProcessor
 from justatom.processing.silo import igniset
-from justatom.running.atomic import ATOMICLMRunner
-from justatom.running.m1 import M1LMRunner
-from justatom.running.m2 import M2LMRunner
-from justatom.running.mask import IRetrieverRunner
+from justatom.running.encoders import EncoderRunner, BiEncoderRunner
+from justatom.running.mask import IRetrieverRunner, IModelRunner
 from justatom.storing.mask import INNDocStore
-from justatom.tooling import stl
+from justatom.tooling.nlp import keywords_metrics
 
 
-class ATOMICRetriever(IRetrieverRunner):
-    def _compute_recall(query: str, keywords_or_phrases: list[str], **props):
-        k_words = Counter(stl.flatten_list([kwp.lower().split(" ") for kwp in keywords_or_phrases]))
-        q_words = "".join(w for w in query if w not in string.punctuation).lower().strip().split()
-        recall = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words])
+class GammaHybridRetriever(IRetrieverRunner):
 
-        return recall
-
-    def _compute_inverse_recall(query: str, keywords_or_phrases_or_content: list[str], stopsyms: str | None = None, **props):
-        stopsyms = "«»\":'" if stopsyms is None else stopsyms
-        stopsyms = stopsyms + string.punctuation
-        if isinstance(keywords_or_phrases_or_content, list):
-            k_words = Counter(
-                stl.flatten_list(
-                    [
-                        "".join([w for w in kwp.lower().strip() if w not in stopsyms]).split()
-                        for kwp in keywords_or_phrases_or_content
-                    ]
-                )
-            )
-        else:
-            k_words = Counter(
-                ["".join([ch for ch in w.lower().strip() if ch not in stopsyms]) for w in keywords_or_phrases_or_content.split()]
-            )
-        q_words = "".join(w for w in query if w not in stopsyms).lower().strip().split()
-        idf_recall = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words if w in k_words]) / sum(
-            [1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words]
-        )
-        return idf_recall
-
-    RANKER: dict = {"JaroWinkler": jarowinkler_similarity, "Recall": _compute_recall, "IDFRecall": _compute_inverse_recall}
+    RANKER: dict = {
+        "JaroWinkler": jarowinkler_similarity,
+        "Recall": keywords_metrics._compute_recall,
+        "IDFRecall": keywords_metrics._compute_inverse_recall,
+    }
 
     def __init__(
         self,
         store: INNDocStore,
-        runner: M1LMRunner | M2LMRunner,
+        runner: IModelRunner,
         processor: IProcessor,
         ranker: str | None = "IDFRecall",
         device: str = "cpu",
         alpha: float = 0.78,
         top_p: int = 128,
-        prefix: str = None,
+        prefix: str | None = None,
         cutoff_score: float = 0.8,
         gamma1: float = 1.0,
         gamma2: float = 1.0,
@@ -76,9 +47,11 @@ class ATOMICRetriever(IRetrieverRunner):
         self.processor = processor
         self.device = device
         if runner.device != device:
-            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
-            runner.to(device)
-        self.runner = runner.eval()
+            logger.info(
+                f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}"
+            )
+            runner.to(device)  # type: ignore
+        self.runner = runner.eval()  # type: ignore
         if ranker not in self.RANKER:
             msg = f"Ranker=[{str(ranker)}] is NOT supported. Use one of the following options: {','.join(self.RANKER.keys())}"
             logger.error(msg)
@@ -95,7 +68,13 @@ class ATOMICRetriever(IRetrieverRunner):
         self.include_explanation = include_explanation
         self.include_content = include_content
 
-    def compute_fusion_score(self, distance: float, keyword_score: float, gamma1: float = 1.0, gamma2: float = 1.0) -> float:
+    def compute_fusion_score(
+        self,
+        distance: float,
+        keyword_score: float,
+        gamma1: float = 1.0,
+        gamma2: float = 1.0,
+    ) -> float:
         """
         distance: Semantic score from ANN search (e.g. Weaviate)
         keyword_score: Keyword intersection, Precision, Recall in terms of keywords intersection
@@ -113,20 +92,19 @@ class ATOMICRetriever(IRetrieverRunner):
         self,
         queries: str | list[str],
         top_k: int = 5,
-        top_p: int = None,
-        prefix: str = None,
+        top_p: int | None = None,
+        prefix: str | None = None,
         include_embedding: bool = False,
-        alpha: float = None,
-        include_scores: bool = False,
-        include_keywords: bool = None,
-        include_explanation: bool = None,
-        include_content: bool = None,
+        alpha: float | None = None,
+        include_scores: bool | None = False,
+        include_keywords: bool | None = None,
+        include_explanation: bool | None = None,
+        include_content: bool | None = None,
         batch_size: int = 16,
         filters: dict | None = None,
-        cutoff_score: float = None,
-        gamma1: float = None,
-        gamma2: float = None,
-        return_keywords_or_phrases: bool = False,
+        cutoff_score: float | None = None,
+        gamma1: float | None = None,
+        gamma2: float | None = None,
         **props,
     ):
         alpha = alpha or self.alpha
@@ -144,7 +122,7 @@ class ATOMICRetriever(IRetrieverRunner):
             If you don't need any additional ranking, please you one of the following: 
             {','.join(
                 [
-                    KWARGRetriever.__class__.__name__,
+                    KeywordsRetriever.__class__.__name__,
                     EmbeddingRetriever.__class__.__name__,
                     HybridRetriever.__class__.__name__
                 ])
@@ -153,42 +131,83 @@ class ATOMICRetriever(IRetrieverRunner):
             logger.error(msg)
             raise ValueError(msg)
         queries = [queries] if isinstance(queries, str) else queries
-        js_queries = [({"content": q} if prefix is None else {"content": q, "meta": {"prefix": prefix}}) for q in queries]
-        dataset, tensor_names = igniset(js_queries, processor=self.processor, batch_size=batch_size)
-        loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=batch_size)
+        js_queries = [
+            (
+                {"content": q}
+                if prefix is None
+                else {"content": q, "meta": {"prefix": prefix}}
+            )
+            for q in queries
+        ]
+        dataset, tensor_names = igniset(
+            js_queries, processor=self.processor, batch_size=batch_size
+        )
+        loader = NamedDataLoader(
+            dataset, tensor_names=tensor_names, batch_size=batch_size
+        )
         answer = []
 
-        for _queries, _batches in zip(chunked(queries, n=batch_size), loader, strict=False):
+        for _queries, _batches in zip(
+            chunked(queries, n=batch_size), loader, strict=False
+        ):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
             with torch.no_grad():
-                vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
+                vectors = (
+                    self.runner(batch=batches)[0].cpu().numpy().tolist()
+                )  # batch_size x vector_dim
             for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
                 res_topk = []
-                res_topp = await self.store.search(query=query, query_embedding=vector, alpha=alpha, filters=filters, top_k=top_p)
+                res_topp = await self.store.search(
+                    query=query,
+                    query_embedding=vector,
+                    alpha=alpha,
+                    filters=filters,
+                    top_k=top_p,
+                )
                 fus_topk = []
-                for i, doc in enumerate(res_topp):
+                for i, doc in enumerate(res_topp):  # type: ignore
                     keywords_or_phrases = doc.meta.get("keywords_or_phrases", [])
-                    keywords_content: str = [doc.content] if include_content else []
+                    keywords_content: str = [doc.content] if include_content else []  # type: ignore
                     if include_keywords and include_explanation:
                         keywords_content += [
-                            kwp["keyword_or_phrase"].strip() + " " + kwp["explanation"].strip() for kwp in keywords_or_phrases
-                        ]
+                            kwp["keyword_or_phrase"].strip()
+                            + " "
+                            + kwp["explanation"].strip()
+                            for kwp in keywords_or_phrases
+                        ]  # type: ignore
                     elif include_keywords:
-                        keywords_content += [kwp["keyword_or_phrase"].strip() for kwp in keywords_or_phrases]
+                        keywords_content += [kwp["keyword_or_phrase"].strip() for kwp in keywords_or_phrases]  # type: ignore
                     else:
-                        keywords_content += [kwp["explanation"].strip() for kwp in keywords_or_phrases]
-                        keywords_content += "\n".join([kwp["explanation"].strip() for kwp in keywords_or_phrases])
-                    keyword_score: float = self.ranker(query, keywords_content, score_cutoff=cutoff_score)
+                        keywords_content += [kwp["explanation"].strip() for kwp in keywords_or_phrases]  # type: ignore
+                        keywords_content += "\n".join(
+                            [kwp["explanation"].strip() for kwp in keywords_or_phrases]
+                        )
+                    keyword_score: float = self.ranker(
+                        query, keywords_content, score_cutoff=cutoff_score
+                    )
                     semantic_score: float = doc.score
                     fusion_score: float = self.compute_fusion_score(
-                        distance=semantic_score, keyword_score=keyword_score, gamma1=gamma1, gamma2=gamma2
+                        distance=semantic_score,
+                        keyword_score=keyword_score,
+                        gamma1=gamma1,
+                        gamma2=gamma2,
                     )
-                    fus_topk.append({"rank": i, "keywords_content": keywords_content, "fusion_score": fusion_score})
+                    fus_topk.append(
+                        {
+                            "rank": i,
+                            "keywords_content": keywords_content,
+                            "fusion_score": fusion_score,
+                        }
+                    )
 
                 fus_topk = sorted(
-                    fus_topk, key=cmp_to_key(lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]), reverse=True
+                    fus_topk,
+                    key=cmp_to_key(
+                        lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]
+                    ),
+                    reverse=True,
                 )[:top_k]
-                res_topk = [res_topp[pos["rank"]] for pos in fus_topk]
+                res_topk = [res_topp[pos["rank"]] for pos in fus_topk]  # type: ignore
                 answer.append(copy.deepcopy(res_topk))
         return answer
 
@@ -197,11 +216,11 @@ class HybridRetriever(IRetrieverRunner):
     def __init__(
         self,
         store: INNDocStore,
-        runner: M1LMRunner | M2LMRunner,
+        runner: EncoderRunner | BiEncoderRunner,
         processor: IProcessor,
         device="cpu",
         alpha: float = 0.5,
-        prefix: str = None,
+        prefix: str | None = None,
         **props,
     ):
         super().__init__()
@@ -209,7 +228,9 @@ class HybridRetriever(IRetrieverRunner):
         self.processor = processor
         self.device = device
         if runner.device != device:
-            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
+            logger.info(
+                f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}"
+            )
             runner.to(device)
         self.runner = runner.eval()
         self.alpha = alpha
@@ -219,9 +240,9 @@ class HybridRetriever(IRetrieverRunner):
         self,
         queries: str | list[str],
         top_k: int = 5,
-        prefix: str = None,
+        prefix: str | None = None,
         include_embedding: bool = False,
-        alpha: float = None,
+        alpha: float | None = None,
         include_scores: bool = False,
         batch_size: int = 16,
         filters: dict | None = None,
@@ -230,17 +251,38 @@ class HybridRetriever(IRetrieverRunner):
         alpha = alpha or self.alpha
         prefix = prefix or self.prefix
         queries = [queries] if isinstance(queries, str) else queries
-        js_queries = [({"content": q} if prefix is None else {"content": q, "meta": {"prefix": prefix}}) for q in queries]
-        dataset, tensor_names = igniset(js_queries, processor=self.processor, batch_size=batch_size)
-        loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=batch_size)
+        js_queries = [
+            (
+                {"content": q}
+                if prefix is None
+                else {"content": q, "meta": {"prefix": prefix}}
+            )
+            for q in queries
+        ]
+        dataset, tensor_names = igniset(
+            js_queries, processor=self.processor, batch_size=batch_size
+        )
+        loader = NamedDataLoader(
+            dataset, tensor_names=tensor_names, batch_size=batch_size
+        )
         answer = []
 
-        for _queries, _batches in zip(chunked(queries, n=batch_size), loader, strict=False):
+        for _queries, _batches in zip(
+            chunked(queries, n=batch_size), loader, strict=False
+        ):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
             with torch.no_grad():
-                vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
+                vectors = (
+                    self.runner(batch=batches)[0].cpu().numpy().tolist()
+                )  # batch_size x vector_dim
             for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
-                res_topk = await self.store.search(query=query, query_embedding=vector, alpha=alpha, top_k=top_k)
+                res_topk = await self.store.search(
+                    query=query,
+                    query_embedding=vector,
+                    alpha=alpha,
+                    top_k=top_k,
+                    include_embedding=include_embedding,
+                )
                 answer.append(res_topk)
         return answer
 
@@ -249,10 +291,10 @@ class EmbeddingRetriever(IRetrieverRunner):
     def __init__(
         self,
         store: INNDocStore,
-        runner: M1LMRunner | M2LMRunner | ATOMICLMRunner,
+        runner: EncoderRunner | BiEncoderRunner,
         processor: IProcessor,
         device: str = "cpu",
-        prefix: str = None,
+        prefix: str | None = None,
         **props,
     ):
         super().__init__()
@@ -260,7 +302,9 @@ class EmbeddingRetriever(IRetrieverRunner):
         self.processor = processor
         self.device = device
         if runner.device != device:
-            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
+            logger.info(
+                f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}"
+            )
             runner.to(device)
         self.runner = runner.eval()
         self.prefix = prefix
@@ -270,7 +314,7 @@ class EmbeddingRetriever(IRetrieverRunner):
         self,
         queries: str | list[str],
         top_k: int = 5,
-        prefix: str = None,
+        prefix: str | None = None,
         include_embedding: bool = False,
         include_scores: bool = False,
         batch_size: int = 16,
@@ -280,23 +324,42 @@ class EmbeddingRetriever(IRetrieverRunner):
     ):
         prefix = prefix or self.prefix
         queries = [queries] if isinstance(queries, str) else queries
-        js_queries = [({"content": q} if prefix is None else {"content": q, "meta": {"prefix": prefix}}) for q in queries]
-        dataset, tensor_names = igniset(js_queries, processor=self.processor, batch_size=batch_size)
-        loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=batch_size)
+        js_queries = [
+            (
+                {"content": q}
+                if prefix is None
+                else {"content": q, "meta": {"prefix": prefix}}
+            )
+            for q in queries
+        ]
+        dataset, tensor_names = igniset(
+            js_queries, processor=self.processor, batch_size=batch_size
+        )
+        loader = NamedDataLoader(
+            dataset, tensor_names=tensor_names, batch_size=batch_size
+        )
         answer = []
-        for _queries, _batches in zip(chunked(queries, n=batch_size), loader, strict=False):
+        for _queries, _batches in zip(
+            chunked(queries, n=batch_size), loader, strict=False
+        ):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
             with torch.no_grad():
-                vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
+                vectors = (
+                    self.runner(batch=batches)[0].cpu().numpy().tolist()
+                )  # batch_size x vector_dim
             for vector, query in zip(vectors, _queries, strict=False):  # noqa: B007
                 res_topk = await self.store.search_by_embedding(
-                    query_embedding=vector, top_k=top_k, filters=filters, keywords=keywords
+                    query_embedding=vector,
+                    top_k=top_k,
+                    filters=filters,
+                    keywords=keywords,
+                    include_vector=include_embedding,
                 )
                 answer.append(res_topk)
         return answer
 
 
-class KWARGRetriever(IRetrieverRunner):
+class KeywordsRetriever(IRetrieverRunner):
     def __init__(self, store: INNDocStore, **props):
         super().__init__()
         self.store = store
@@ -313,7 +376,10 @@ class KWARGRetriever(IRetrieverRunner):
         queries = [queries] if isinstance(queries, str) else queries
         answer = []
         asio_workers = [
-            self.store.search_by_keywords(query=query, top_k=top_k, filters=filters, keywords=keywords) for query in queries
+            self.store.search_by_keywords(
+                query=query, top_k=top_k, filters=filters, keywords=keywords
+            )
+            for query in queries
         ]
         responses = await asio.gather(*asio_workers, return_exceptions=True)
         for response in responses:
@@ -325,17 +391,18 @@ class KWARGRetriever(IRetrieverRunner):
 
 
 class ByName:
+    OPS = ["keywords", "emebedding", "hybrid", "gamma-hybrid"]
+
     def named(self, name: str, **kwargs):
-        OPS = ["keywords", "emebedding", "hybrid", "atomicai"]
 
         if name == "keywords":
-            klass = KWARGRetriever
+            klass = KeywordsRetriever
         elif name == "embedding":
             klass = EmbeddingRetriever
         elif name == "hybrid":
             klass = HybridRetriever
-        elif name == "atomicai":
-            klass = ATOMICRetriever
+        elif name == "gamma-hybrid":
+            klass = GammaHybridRetriever
         else:
             msg = f"Unknown name=[{name}] to init IRetrieverRunner instance. Use one of {','.join(OPS)}"
             logger.error(msg)
@@ -347,4 +414,10 @@ class ByName:
 API = ByName()
 
 
-__all__ = ["KWARGRetriever", "HybridRetriever", "EmbeddingRetriever", "ATOMICRetriever", "API"]
+__all__ = [
+    "KeywordsRetriever",
+    "HybridRetriever",
+    "EmbeddingRetriever",
+    "GammaHybridRetriever",
+    "API",
+]

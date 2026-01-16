@@ -19,7 +19,7 @@ class alist(list):
 class AsyncConstructor(object):  # noqa
     async def __new__(cls, *a, **kw):
         instance = super().__new__(cls)
-        await instance.__init__(*a, **kw)
+        await instance.__init__(*a, **kw)  # type: ignore
         return instance
 
 
@@ -198,7 +198,9 @@ def reuuid(text, namespace_uuid="91461c99-f89d-49d2-af96-d8e2e14e9b58"):
     return str(deterministic_uuid)
 
 
-def merge_in_order(a: dict | None = None, dv: dict | None = None, do_copy: bool = False):
+def merge_in_order(
+    a: dict | None = None, dv: dict | None = None, do_copy: bool = False
+):
     """
     This function perfrorm `merge` in a Asymmetric way.
     Standard `a.update(dv)` doesn't change with argument swapping.

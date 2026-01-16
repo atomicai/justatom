@@ -119,13 +119,6 @@ async def index():
         else [
             dict(
                 content=di["content"],
-                dataframe=di.get("dataframe", None),
-                meta=di.get("meta", {}),
-                keywords_or_phrases=di.get("keywords_or_phrases", []),
-            )
-            if "dataframe" in di
-            else dict(
-                content=di["content"],
                 meta=di.get("meta", {}),
                 keywords_or_phrases=di.get("keywords_or_phrases", []),
             )
