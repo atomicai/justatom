@@ -125,7 +125,7 @@ async def check_store_and_message(store: WeaviateDocStore, delete_if_not_empty: 
         if n_docs_count > 0:
             logger.warning(
                 f"You're not deleting any documents. \
-                You may lose up to {n_docs_count} documents per collection {collection_name}"
+                Using pre-built {n_docs_count} documents per collection {collection_name}"
             )
     return store, n_docs_count
 
@@ -384,7 +384,7 @@ if __name__ == "__main__":
                     / "evals"
                     / "EvalVanilla"
                     / "large",  # pyright: ignore[reportArgumentType]
-                    flush_collection=True,
+                    flush_collection=False,
                     search_field="queries",
                     content_field="content",
                     keywords_or_phrases_field="keywords_or_phrases",

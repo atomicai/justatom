@@ -22,8 +22,8 @@ from justatom.modeling.head import ANNHead
 from justatom.modeling.mask import ILanguageModel
 from justatom.processing import IProcessor, ITokenizer, igniset
 from justatom.processing.loader import NamedDataLoader
-from justatom.processing.prime import ContrastiveProcessor, TripletProcessor
-from justatom.running.m1 import M1LMRunner
+from justatom.processing.prime import TrainWithContrastiveProcessor, TrainWithTripletProcessor
+from justatom.running.encoders import EncoderRunner, BiEncoderRunner
 from justatom.tooling import stl
 from justatom.tooling.stl import merge_in_order
 
@@ -130,8 +130,8 @@ def maybe_cuda_or_mps():
         return "cpu"
 
 
-def ignite_processor(loss_name: str, **props):
-    MAPPING = {"contrastive": ContrastiveProcessor, "triplet": TripletProcessor}
+def metric_learning_pipeline(loss_name: str, **props):
+    MAPPING = {"TrainWithContrastive": TrainWithContrastiveProcessor, "TrainWithTriplet": TrainWithTripletProcessor}
     if loss_name.lower() not in MAPPING:
         msg = f"Specified loss {loss_name.upper()} is not available. Use one of the following {','.join(MAPPING.keys())}"
         logger.error(msg)
@@ -207,7 +207,7 @@ def check_structure_and_raise_with_prepare(
     # Make sure that the `processor` has correct type
     if search_field is not None and content_field is not None:
         assert isinstance(
-            processor, ContrastiveProcessor
+            processor, TrainWithContrastiveProcessor
         ), f"You provided both `search_field`={search_field} and `content_field`={content_field} but processor is of wrong type = [{type(processor)}]"  # noqa: E501
         # TODO: Return
         if prefix_field is None and prefix_search_field is None and prefix_content_field is None:
@@ -244,7 +244,7 @@ def check_structure_and_raise_with_prepare(
             ]
     elif content_field is not None and group_field is not None:
         assert isinstance(
-            processor, TripletProcessor
+            processor, TrainWithTripletProcessor
         ), f"You provided both `content_field`={content_field} and `group_field`={group_field} but processor is of wrong type = [{type(processor)}]"  # noqa: E501
         pl_data = (
             pl_data.select([content_field, group_field])
@@ -622,11 +622,11 @@ def main(
     # TODO: Add other props via general `opts: Dict` => `merge_in_order(opts, loss_props)` =>
     # and make snapshot of `opts`
     tokenizer = ITokenizer.from_pretrained(model_name_or_path)
-    processor = ignite_processor(loss, tokenizer=tokenizer, max_seq_len=max_seq_len)
+    pipeline = metric_learning_pipeline(loss, tokenizer=tokenizer, max_seq_len=max_seq_len)
     device = maybe_cuda_or_mps()
-    runner = M1LMRunner(
+    runner = EncoderRunner(
         model=model,
-        processor=processor,
+        processor=pipeline,
         prediction_heads=[ANNHead(loss_fn=loss, device=device, **loss_props)],
         device=device,
     )
@@ -636,7 +636,7 @@ def main(
     )
 
     datamodule = ILDataModule(
-        processor=processor,
+        processor=pipeline,
         train_filepath=Path(os.getcwd()) / dataset_path,
         batch_size=batch_size,
         search_field=search_field,

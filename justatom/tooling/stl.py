@@ -103,6 +103,55 @@ def flatten_dict(dictionary, parent_key="", separator="_"):
     return dict(items)
 
 
+@staticmethod
+def _other_props(d: dict, include_keys: list[str] | None = None, flatten_meta_props: bool = False) -> dict:
+    """
+    Filter a source document to a selected subset of keys and optionally
+    hoist properties from a nested "meta" mapping to the top level.
+
+    Args:
+        d: Source document as a dictionary.
+        include_keys: List of keys to keep from the source. If None, keep all keys.
+        flatten_meta_props: If True and the result contains a "meta" dict,
+            remove "meta" and merge its key/value pairs into the top level
+            (one level only; inner dicts under "meta" are preserved as-is).
+            Useful to normalize docs for ChromaDB, where metadata is expected
+            at the top level.
+
+    Returns:
+        A new dictionary containing only the requested keys and, if enabled,
+        the hoisted metadata properties.
+
+    Example:
+        Input:
+            {
+            "content": "Document content",
+            "meta": {
+                "useful_links": {
+                "images": ["link1", "link2"],
+                "wiki": ["wiki_link1", "wiki_link2"]
+                }
+            }
+            }
+
+        With include_keys=None and flatten_meta_props=True:
+            {
+            "content": "Document content",
+            "useful_links": {
+                "images": ["link1", "link2"],
+                "wiki": ["wiki_link1", "wiki_link2"]
+            }
+            }
+    """
+    must_include_keys = d.keys() if include_keys is None else include_keys
+    js_answer = {key: d[key] for key in must_include_keys if key in d}
+    if flatten_meta_props and "meta" in js_answer:
+        js_meta_props = _other_props(js_answer.pop("meta"))
+    else:
+        js_meta_props = {}
+    return {**js_answer, **js_meta_props}
+
+
 def snapshot(data: dict | list[dict], sep: str = "_"):
     if isinstance(data, dict):
         data = [data]
