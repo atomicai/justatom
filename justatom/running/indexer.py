@@ -1,4 +1,5 @@
 import torch
+from collections.abc import Iterable
 from loguru import logger
 from more_itertools import chunked
 from tqdm.asyncio import tqdm_asyncio
@@ -33,10 +34,10 @@ class NNIndexer(IIndexerRunner):
 
     def _pipeline(
         self,
-        documents: list[dict | Document],
+        documents: Iterable[dict | Document],
         batch_size: int = 512,
         device: str = None,
-        flush_memory_every: int = 10,
+        flush_memory_every: int = 32,
         **props,
     ):
         device = device or self.device
@@ -46,37 +47,43 @@ class NNIndexer(IIndexerRunner):
             )
             self.runner.to(device)
             self.runner = self.runner.eval()
-        documents_as_dicts = [
-            d.to_dict() if isinstance(d, Document) else d for d in documents
-        ]
-        dataset, tensor_names = igniset(
-            dicts=documents_as_dicts, processor=self.processor, batch_size=batch_size
-        )
-        loader = NamedDataLoader(
-            dataset=dataset, tensor_names=tensor_names, batch_size=batch_size
-        )
+        for i, docs_chunk in enumerate(chunked(documents, n=batch_size)):
+            documents_as_dicts = [
+                d.to_dict() if isinstance(d, Document) else d for d in docs_chunk
+            ]
+            if len(documents_as_dicts) == 0:
+                continue
 
-        for i, (docs, batch) in (
-            enumerate(
-                zip(chunked(documents_as_dicts, n=batch_size), loader, strict=False)
+            dataset, tensor_names = igniset(
+                dicts=documents_as_dicts,
+                processor=self.processor,
+                batch_size=batch_size,
             )
-        ):  # noqa: B007
-            batches = {k: v.to(device) for k, v in batch.items()}
-            with torch.no_grad():
-                vectors = self.runner(batch=batches)[0].cpu().numpy()
-            for doc, vec in zip(docs, vectors, strict=False):
-                doc["embedding"] = vec
-            if i % flush_memory_every:
-                if device == "mps" and torch.mps.is_available():
-                    torch.mps.empty_cache()
-                elif device == "cuda" and torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            yield docs
+            loader = NamedDataLoader(
+                dataset=dataset,
+                tensor_names=tensor_names,
+                batch_size=batch_size,
+            )
+
+            for docs, batch in zip(
+                chunked(documents_as_dicts, n=batch_size), loader, strict=False
+            ):
+                batches = {k: v.to(device) for k, v in batch.items()}
+                with torch.no_grad():
+                    vectors = self.runner(batch=batches)[0].cpu().numpy()
+                for doc, vec in zip(docs, vectors, strict=False):
+                    doc["embedding"] = vec
+                if i % flush_memory_every:
+                    if device == "mps" and torch.mps.is_available():
+                        torch.mps.empty_cache()
+                    elif device == "cuda" and torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                yield docs
 
     @torch.no_grad()
     async def index(
         self,
-        documents: list[dict | Document],
+        documents: Iterable[dict | Document],
         batch_size: int = 512,
         batch_size_per_request: int = 64,
         device: str = None,
@@ -87,7 +94,9 @@ class NNIndexer(IIndexerRunner):
             documents, batch_size, device, flush_memory_every
         )
         n_total_written_docs: int = 0
-        for batch_idx, docs_with_embeddings_batch in tqdm_asyncio(enumerate(docs_with_embeddings)):
+        for batch_idx, docs_with_embeddings_batch in tqdm_asyncio(
+            enumerate(docs_with_embeddings)
+        ):
             try:
                 cur_written_docs = await self.store.write_documents(
                     [Document.from_dict(doc) for doc in docs_with_embeddings_batch],
@@ -110,7 +119,7 @@ class KWARGIndexer(IIndexerRunner):
 
     async def index(
         self,
-        documents: list[str | dict],
+        documents: Iterable[str | dict],
         batch_size: int = 512,
         batch_size_per_request: int = 64,
         **props,
@@ -137,7 +146,7 @@ class KWARGIndexer(IIndexerRunner):
                 )
             else:
                 n_total_written_docs += cur_written_docs
-            return n_total_written_docs
+        return n_total_written_docs
 
 
 class ByName:

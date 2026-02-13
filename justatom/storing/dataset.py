@@ -1,6 +1,7 @@
 import os
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 import simplejson as json
@@ -29,17 +30,84 @@ class JSONDataset(IDataset):
     def __init__(self, fp):
         self.fp = fp
 
-    def iterator(self, **kwargs) -> pl.DataFrame:
-        pl_view = pl.read_json(self.fp, **kwargs)
-        return pl_view
+    def iterator(
+        self, lazy: bool = False, **kwargs
+    ) -> pl.DataFrame | Generator[dict[str, Any], None, None]:
+        with open(self.fp, encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not lazy:
+            if isinstance(data, list):
+                return pl.from_dicts(data)
+            if isinstance(data, dict):
+                maybe_rows = data.get("data")
+                if isinstance(maybe_rows, list):
+                    return pl.from_dicts(maybe_rows)
+                return pl.from_dicts([data])
+            return pl.from_dicts([])
+
+        def _iter() -> Generator[dict[str, Any], None, None]:
+            if isinstance(data, list):
+                for row in data:
+                    if row is not None:
+                        yield row
+            elif isinstance(data, dict):
+                maybe_rows = data.get("data")
+                if isinstance(maybe_rows, list):
+                    for row in maybe_rows:
+                        if row is not None:
+                            yield row
+                else:
+                    yield data
+
+        return _iter()
+
+
+class JSONLinesDataset(IDataset):
+    def __init__(self, fp):
+        self.fp = fp
+
+    def iterator(
+        self, lazy: bool = False, **kwargs
+    ) -> pl.DataFrame | Generator[dict[str, Any], None, None]:
+        try:
+            import jsonlines
+        except Exception as ex:
+            msg = "To read .jsonl files please install `jsonlines` package."
+            logger.error(msg)
+            raise ImportError(msg) from ex
+
+        if not lazy:
+            with jsonlines.open(self.fp, mode="r") as reader:
+                rows = [row for row in reader if row is not None]
+            return pl.from_dicts(rows)
+
+        def _iter() -> Generator[dict[str, Any], None, None]:
+            with jsonlines.open(self.fp, mode="r") as reader:
+                for row in reader:
+                    if row is not None:
+                        yield row
+
+        return _iter()
 
 
 class CSVDataset(IDataset):
     def __init__(self, fp):
         self.fp = fp
 
-    def iterator(self, **kwargs) -> pl.DataFrame:
-        pl_view = pl.read_csv(self.fp, **kwargs)
+    def iterator(
+        self, lazy: bool = False, **kwargs
+    ) -> pl.LazyFrame | pl.DataFrame | Generator[dict[str, Any], None, None]:
+        if lazy:
+            pl_view = pl.scan_csv(self.fp, **kwargs)
+
+            def _iter() -> Generator[dict[str, Any], None, None]:
+                for row in pl_view.collect(streaming=True).iter_rows(named=True):
+                    yield row
+
+            return _iter()
+        else:
+            pl_view = pl.read_csv(self.fp, **kwargs)
         return pl_view
 
 
@@ -71,8 +139,10 @@ class ByName:
                 return CSVDataset(fp=name)
             elif fp.suffix in [".xlsx"]:
                 return XLSXDataset(fp=name)
-            elif fp.suffix in [".json", ".jsonl"]:
+            elif fp.suffix in [".json"]:
                 return JSONDataset(fp=name)
+            elif fp.suffix in [".jsonl"]:
+                return JSONLinesDataset(fp=name)
             else:
                 msg = f"File exists however loading from the [{fp.suffix}] file is not supported"
                 logger.error(msg)

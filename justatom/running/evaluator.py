@@ -21,19 +21,25 @@ class EvaluatorRunner(IEvaluatorRunner):
         queries: str | list[str],
         metrics: str | Callable,
         metrics_top_k: list[str | Callable],
-        eval_top_k: list[int] = None,
+        eval_top_k: int | list[int] | None = [1, 2, 5, 10, 12, 15, 20],
         top_k: int = 20,
         batch_size: int = 10,
     ):
-        monitor = dict(HR2=IAdditiveMetric(), HR5=IAdditiveMetric(), MRR=IAdditiveMetric())  # noqa: F841
+        monitor = dict(
+            HR2=IAdditiveMetric(), HR5=IAdditiveMetric(), MRR=IAdditiveMetric()
+        )  # noqa: F841
         hr2 = RetrievalHitRate(top_k=2)  # noqa: F841
         hr5 = RetrievalHitRate(top_k=5)  # noqa: F841
         mrr = RetrievalMRR()  # noqa: F841
         metrics_top_k_names = set(metrics_top_k)
-        metrics_top_k = {f"{m}{tk}": IAdditiveMetric() for m in metrics_top_k for tk in eval_top_k}  # hr2, hr5, mrr
+        metrics_top_k = {
+            f"{m}{tk}": IAdditiveMetric() for m in metrics_top_k for tk in eval_top_k
+        }  # hr2, hr5, mrr
         async for batch_queries in tqdm_asyncio(chunked(queries, n=batch_size)):
             js_batch_queries = [qi for qi in batch_queries if qi is not None]
-            res_topk = await self.ir.retrieve_topk(queries=js_batch_queries, batch_size=batch_size, top_k=top_k)
+            res_topk = await self.ir.retrieve_topk(
+                queries=js_batch_queries, batch_size=batch_size, top_k=top_k
+            )
             # res_topk[i][j]  # prediction for the i-th sample @ j-th position.
             print()
             for question, docs_topk in zip(js_batch_queries, res_topk, strict=False):

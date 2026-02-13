@@ -17,7 +17,7 @@ class RuntimeProcessor(IProcessor):
         tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
         max_seq_len: int = 512,
         do_lower_case: bool = False,
-        content_field: str = "content",
+        content_field: str | None = "content",
         prefix: str = "",
     ):
         super(RuntimeProcessor, self).__init__()  # noqa: UP008
@@ -25,7 +25,7 @@ class RuntimeProcessor(IProcessor):
         self.max_seq_len = max_seq_len
         self.do_lower_case = do_lower_case
         self.content_field = content_field
-        self.prefix = prefix
+        self.prefix = prefix or ""
 
     @classmethod
     def load(cls, where, config: dict, **kwargs):

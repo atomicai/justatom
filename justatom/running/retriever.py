@@ -370,6 +370,13 @@ class KeywordsRetriever(IRetrieverRunner):
     def __init__(self, store: INNDocStore, **props):
         super().__init__()
         self.store = store
+    
+    def retrieve_topk_sync(self, queries: str | list[str], top_k: int = 5, filters: dict | None = None, keywords: list[str] | None = None, **props):
+        queries = [queries] if isinstance(queries, str) else queries
+        answer = self.store.search_by_keywords_sync(
+            queries=queries, top_k=top_k, filters=filters, keywords=keywords
+        )
+        return answer
 
     async def retrieve_topk(
         self,
