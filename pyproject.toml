@@ -5,6 +5,12 @@ requires-python = ">=3.10"
 pythonpath = [
   "."
 ]
+testpaths = [
+  "tests"
+]
+markers = [
+  "integration: tests that require external services (e.g. Weaviate/Docker)",
+]
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.

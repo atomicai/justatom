@@ -50,7 +50,7 @@ jobs:
     - name: Install requirements
       run: pip install .[torch,test]
     - name: Run tests
-      run: RUN_SLOW_TESTS=1 pytest
+      run: RUN_SLOW_TESTS=1 pytest tests -m "not integration"
   pytest-windows:
     name: Tests (Windows)
     runs-on: windows-latest
@@ -63,7 +63,7 @@ jobs:
     - name: Install requirements
       run: pip install .[torch,test]
     - name: Run tests
-      run: pytest
+      run: pytest tests -m "not integration"
   pytest-macos:
     name: Tests (MacOS)
     runs-on: macos-latest
@@ -76,7 +76,23 @@ jobs:
     - name: Install requirements
       run: pip install .[torch,test]
     - name: Run tests
-      run: RUN_SLOW_TESTS=1 pytest
+      run: RUN_SLOW_TESTS=1 pytest tests -m "not integration"
+
+  pytest-integration-weaviate:
+    name: Integration tests (Weaviate, Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        architecture: 'x64'
+    - name: Start Weaviate
+      run: docker compose up -d weaviate
+    - name: Install requirements
+      run: pip install .[torch,test]
+    - name: Run integration tests
+      run: pytest tests -m integration
   build-docs:
     name: Build documentation
     runs-on: ubuntu-latest

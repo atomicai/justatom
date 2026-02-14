@@ -14,3 +14,11 @@ repos:
       args: [ --fix ]
     # Run the formatter.
     - id: ruff-format
+- repo: local
+  hooks:
+    - id: pytest-unit
+      name: pytest (unit / non-integration)
+      entry: pytest tests -m "not integration" -q
+      language: system
+      pass_filenames: false
+      stages: [pre-commit]
