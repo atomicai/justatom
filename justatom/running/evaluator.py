@@ -2,12 +2,45 @@ from collections.abc import Callable
 
 import torch
 from more_itertools import chunked
-from torchmetrics import RetrievalHitRate, RetrievalMRR
+from torchmetrics.retrieval import (
+    RetrievalHitRate,
+    RetrievalMAP,
+    RetrievalMRR,
+    RetrievalNormalizedDCG,
+)
 from tqdm.asyncio import tqdm_asyncio
 
 from justatom.modeling.metrics import IAdditiveMetric
 from justatom.running.mask import IEvaluatorRunner, IRetrieverRunner
-from justatom.tooling import stl
+
+
+def _normalize_metric_name(metric_name: str) -> str:
+    cleaned = metric_name.strip().lower().replace("_", "").replace("-", "")
+    cleaned = cleaned.rstrip("@")
+    aliases = {
+        "hitrate": "HitRate",
+        "hr": "HitRate",
+        "mrr": "mrr",
+        "map": "map",
+        "ndcg": "ndcg",
+    }
+    if cleaned not in aliases:
+        raise ValueError(
+            f"Unsupported retrieval metric '{metric_name}'. Use one of: HitRate, mrr, map, ndcg"
+        )
+    return aliases[cleaned]
+
+
+def _build_metric(metric_name: str, top_k: int):
+    if metric_name == "HitRate":
+        return RetrievalHitRate(top_k=top_k)
+    if metric_name == "mrr":
+        return RetrievalMRR(top_k=top_k)
+    if metric_name == "map":
+        return RetrievalMAP(top_k=top_k)
+    if metric_name == "ndcg":
+        return RetrievalNormalizedDCG(top_k=top_k)
+    raise ValueError(f"Unknown retrieval metric '{metric_name}'")
 
 
 class EvaluatorRunner(IEvaluatorRunner):
@@ -25,32 +58,82 @@ class EvaluatorRunner(IEvaluatorRunner):
         top_k: int = 20,
         batch_size: int = 10,
     ):
-        monitor = dict(
-            HR2=IAdditiveMetric(), HR5=IAdditiveMetric(), MRR=IAdditiveMetric()
-        )  # noqa: F841
-        hr2 = RetrievalHitRate(top_k=2)  # noqa: F841
-        hr5 = RetrievalHitRate(top_k=5)  # noqa: F841
-        mrr = RetrievalMRR()  # noqa: F841
-        metrics_top_k_names = set(metrics_top_k)
-        metrics_top_k = {
-            f"{m}{tk}": IAdditiveMetric() for m in metrics_top_k for tk in eval_top_k
-        }  # hr2, hr5, mrr
+        del metrics
+
+        if eval_top_k is None:
+            eval_top_k = [1, 2, 5, 10, 12, 15, 20]
+        elif isinstance(eval_top_k, int):
+            eval_top_k = [eval_top_k]
+        eval_top_k = sorted(set(int(k) for k in eval_top_k))
+
+        normalized_metric_names: list[str] = []
+        metric_prefix_by_name: dict[str, str] = {}
+        for metric_name in metrics_top_k:
+            if not isinstance(metric_name, str):
+                raise ValueError(
+                    "Only string metric names are supported in metrics_top_k: HitRate, mrr, map, ndcg"
+                )
+            normalized_name = _normalize_metric_name(metric_name)
+            if normalized_name not in normalized_metric_names:
+                normalized_metric_names.append(normalized_name)
+            metric_prefix_by_name[normalized_name] = f"{normalized_name}@"
+
+        aggregated_metrics = {
+            f"{metric_prefix_by_name[name]}{tk}": IAdditiveMetric()
+            for name in normalized_metric_names
+            for tk in eval_top_k
+        }
+
+        metric_objects = {
+            (name, tk): _build_metric(name, top_k=tk)
+            for name in normalized_metric_names
+            for tk in eval_top_k
+        }
+
+        retrieval_top_k = max([top_k, *eval_top_k])
         async for batch_queries in tqdm_asyncio(chunked(queries, n=batch_size)):
             js_batch_queries = [qi for qi in batch_queries if qi is not None]
             res_topk = await self.ir.retrieve_topk(
-                queries=js_batch_queries, batch_size=batch_size, top_k=top_k
+                queries=js_batch_queries, batch_size=batch_size, top_k=retrieval_top_k
             )
-            # res_topk[i][j]  # prediction for the i-th sample @ j-th position.
-            print()
             for question, docs_topk in zip(js_batch_queries, res_topk, strict=False):
-                labels = list(stl.flatten_list([c.meta["labels"] for c in docs_topk]))
-                for ev_top_k in eval_top_k:
-                    for _metric_topk in metrics_top_k_names:
-                        if any([question == c for c in labels[:ev_top_k]]):
-                            metrics_top_k[f"{_metric_topk}{str(ev_top_k)}"].update(1, 1)
-                        else:
-                            metrics_top_k[f"{_metric_topk}{str(ev_top_k)}"].update(0, 1)
-        return metrics_top_k
+                target = []
+                preds = []
+                indexes = []
+                total_docs = len(docs_topk)
+
+                for rank_idx, doc in enumerate(docs_topk):
+                    doc_meta = getattr(doc, "meta", {}) or {}
+                    labels = doc_meta.get("labels", [])
+                    if isinstance(labels, str):
+                        labels = [labels]
+                    labels = [str(lb) for lb in labels if lb is not None]
+
+                    target.append(1 if question in labels else 0)
+
+                    score = getattr(doc, "score", None)
+                    if score is None:
+                        score = float(total_docs - rank_idx)
+                    preds.append(float(score))
+                    indexes.append(0)
+
+                if not target:
+                    continue
+
+                target_t = torch.tensor(target, dtype=torch.long)
+                preds_t = torch.tensor(preds, dtype=torch.float)
+                indexes_t = torch.tensor(indexes, dtype=torch.long)
+
+                for metric_name in normalized_metric_names:
+                    for ev_top_k in eval_top_k:
+                        metric_obj = metric_objects[(metric_name, ev_top_k)]
+                        metric_value = metric_obj(preds_t, target_t, indexes_t)
+                        metric_obj.reset()
+
+                        metric_key = f"{metric_prefix_by_name[metric_name]}{ev_top_k}"
+                        aggregated_metrics[metric_key].update(float(metric_value), 1)
+
+        return aggregated_metrics
 
 
 __all__ = ["EvaluatorRunner"]
