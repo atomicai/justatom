@@ -85,7 +85,7 @@ class PlotlyScatterChart(IChart):
     ) -> Any:
         pl_data = data.rename({"label": label_to_view})
         pl_data = pl_data.with_columns(
-            pl.col(label_to_view).apply(lambda x: ((x[:max_label_length] + "...") if len(x) > max_label_length else x))
+            pl.col(label_to_view).map_elements(lambda x: ((x[:max_label_length] + "...") if len(x) > max_label_length else x))
         )
         pd_data = pl_data.to_pandas()
         fig = px.scatter(

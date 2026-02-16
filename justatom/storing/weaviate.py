@@ -36,7 +36,7 @@ DOCUMENT_COLLECTION_PROPERTIES = [
         "name": "meta",
         "dataType": ["object"],
         "nestedProperties": [
-            {"dataType": ["text[]"], "name": "queries"},
+            {"dataType": ["text[]"], "name": "labels"},
             {"dataType": ["text"], "name": "url"},
             {
                 "dataType": ["object[]"],
@@ -560,20 +560,24 @@ class WeaviateDocStore(AsyncConstructor):
     async def delete_all_documents(self) -> bool:
         await self._ensure_async_connection()
         ids = []
-        async for x in self.get_all_documents():
-            ids += [x.properties["_original_id"]]
-            if len(ids) > 0:
-                try:
-                    await self.delete_documents(document_ids=ids)
-                except:  # noqa: E722
-                    logger.error(
-                        f"Error deleting documents for {self.collection_settings.get('class')}, see logs for more details."
-                    )
-                    return False
-                else:
-                    return True
+        async for obj in self.get_all_documents():
+            maybe_original_id = obj.properties.get("_original_id")
+            if maybe_original_id is not None:
+                ids.append(maybe_original_id)
+
+        if len(ids) == 0:
             logger.info(f"Nothing to delete in {self.__collection.name}")
             return True
+
+        try:
+            await self.delete_documents(document_ids=ids)
+        except Exception:  # noqa: BLE001
+            logger.error(
+                f"Error deleting documents for {self.collection_settings.get('class')}, see logs for more details."
+            )
+            return False
+
+        return True
 
     def _ensure_sync_connection(self) -> None:
         if self._sync_client is None:

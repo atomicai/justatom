@@ -32,35 +32,22 @@ class JSONDataset(IDataset):
 
     def iterator(
         self, lazy: bool = False, **kwargs
-    ) -> pl.DataFrame | Generator[dict[str, Any], None, None]:
+    ) -> pl.LazyFrame | pl.DataFrame:
         with open(self.fp, encoding="utf-8") as f:
             data = json.load(f)
 
-        if not lazy:
-            if isinstance(data, list):
-                return pl.from_dicts(data)
-            if isinstance(data, dict):
-                maybe_rows = data.get("data")
-                if isinstance(maybe_rows, list):
-                    return pl.from_dicts(maybe_rows)
-                return pl.from_dicts([data])
-            return pl.from_dicts([])
+        if isinstance(data, list):
+            frame = pl.from_dicts([row for row in data if row is not None])
+        elif isinstance(data, dict):
+            maybe_rows = data.get("data")
+            if isinstance(maybe_rows, list):
+                frame = pl.from_dicts([row for row in maybe_rows if row is not None])
+            else:
+                frame = pl.from_dicts([data])
+        else:
+            frame = pl.from_dicts([])
 
-        def _iter() -> Generator[dict[str, Any], None, None]:
-            if isinstance(data, list):
-                for row in data:
-                    if row is not None:
-                        yield row
-            elif isinstance(data, dict):
-                maybe_rows = data.get("data")
-                if isinstance(maybe_rows, list):
-                    for row in maybe_rows:
-                        if row is not None:
-                            yield row
-                else:
-                    yield data
-
-        return _iter()
+        return frame.lazy() if lazy else frame
 
 
 class JSONLinesDataset(IDataset):
@@ -69,7 +56,13 @@ class JSONLinesDataset(IDataset):
 
     def iterator(
         self, lazy: bool = False, **kwargs
-    ) -> pl.DataFrame | Generator[dict[str, Any], None, None]:
+    ) -> pl.LazyFrame | pl.DataFrame:
+        if lazy:
+            try:
+                return pl.scan_ndjson(self.fp, **kwargs)
+            except Exception:
+                logger.warning(f"Falling back to eager NDJSON loading for file [{self.fp}].")
+
         try:
             import jsonlines
         except Exception as ex:
@@ -77,19 +70,29 @@ class JSONLinesDataset(IDataset):
             logger.error(msg)
             raise ImportError(msg) from ex
 
-        if not lazy:
-            with jsonlines.open(self.fp, mode="r") as reader:
-                rows = [row for row in reader if row is not None]
-            return pl.from_dicts(rows)
+        with jsonlines.open(self.fp, mode="r") as reader:
+            rows = [row for row in reader if row is not None]
+        frame = pl.from_dicts(rows)
+        return frame.lazy() if lazy else frame
 
-        def _iter() -> Generator[dict[str, Any], None, None]:
-            with jsonlines.open(self.fp, mode="r") as reader:
-                for row in reader:
-                    if row is not None:
-                        yield row
 
-        return _iter()
+class PARQUETDataset(IDataset):
+    def __init__(self, fp):
+        self.fp = fp
 
+    def iterator(
+        self, lazy: bool = False, **kwargs
+    ) -> pl.LazyFrame | pl.DataFrame:
+        if lazy:
+            try:
+                return pl.scan_parquet(self.fp, **kwargs)
+            except Exception:
+                logger.warning(f"Falling back to eager Parquet loading for file [{self.fp}].")
+        try:
+            return pl.scan_parquet(self.fp, **kwargs) if lazy else pl.read_parquet(self.fp, **kwargs)
+        except Exception as ex:
+            logger.error(f"Failed to load Parquet file [{self.fp}]: {ex}")
+            raise ex
 
 class CSVDataset(IDataset):
     def __init__(self, fp):
@@ -97,18 +100,10 @@ class CSVDataset(IDataset):
 
     def iterator(
         self, lazy: bool = False, **kwargs
-    ) -> pl.LazyFrame | pl.DataFrame | Generator[dict[str, Any], None, None]:
+    ) -> pl.LazyFrame | pl.DataFrame:
         if lazy:
-            pl_view = pl.scan_csv(self.fp, **kwargs)
-
-            def _iter() -> Generator[dict[str, Any], None, None]:
-                for row in pl_view.collect(streaming=True).iter_rows(named=True):
-                    yield row
-
-            return _iter()
-        else:
-            pl_view = pl.read_csv(self.fp, **kwargs)
-        return pl_view
+            return pl.scan_csv(self.fp, **kwargs)
+        return pl.read_csv(self.fp, **kwargs)
 
 
 class XLSXDataset(IDataset):
@@ -116,6 +111,8 @@ class XLSXDataset(IDataset):
         self.fp = fp
 
     def iterator(self, **kwargs) -> pl.DataFrame:
+        if "lazy" in kwargs:
+            logger.warning("Lazy loading is not supported for XLSXDataset, ignoring the 'lazy' argument.")
         pl_view = pl.read_excel(self.fp, **kwargs)
         return pl_view
 
@@ -143,6 +140,8 @@ class ByName:
                 return JSONDataset(fp=name)
             elif fp.suffix in [".jsonl"]:
                 return JSONLinesDataset(fp=name)
+            elif fp.suffix in [".parquet"]:
+                return PARQUETDataset(fp=name)
             else:
                 msg = f"File exists however loading from the [{fp.suffix}] file is not supported"
                 logger.error(msg)
