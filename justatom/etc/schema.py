@@ -4,7 +4,7 @@ from typing import Any
 
 import mmh3
 import numpy as np
-import pandas as pd
+import polars as pl
 import simplejson
 
 from justatom.etc.format import maybe_cast_to_str
@@ -12,7 +12,7 @@ from justatom.etc.format import maybe_cast_to_str
 
 class Document:
     id: str
-    content: str | pd.DataFrame
+    content: str | pl.DataFrame
     content_type: str = ("text",)
     dataframe: str | None = None
     keywords: list[str] | None = None
@@ -27,7 +27,7 @@ class Document:
     # don't need to passed by the user in init and are rather initialized automatically in the init
     def __init__(
         self,
-        content: str | pd.DataFrame,
+        content: str | pl.DataFrame,
         content_type: str = "text",
         dataframe: str | None = None,
         keywords: list[str] | None = None,
@@ -86,7 +86,6 @@ class Document:
                 raise ValueError(
                     f"You passed custom strings {id_hash_keys} to id_hash_keys which is deprecated. Supply instead a list"
                     f" of Document's attribute names that the id should be based on (e.g. {allowed_hash_key_attributes})."
-                    " See https://github.com/deepset-ai/haystack/pull/1910 for details)"
                 )
 
         # if embedding is not None:
@@ -138,8 +137,8 @@ class Document:
             if k.startswith("__"):
                 continue
             if k == "content":  # noqa: SIM102
-                # Convert pd.DataFrame to list of rows for serialization
-                if self.content_type == "table" and isinstance(self.content, pd.DataFrame):
+                # Convert pl.DataFrame to list of rows for serialization
+                if self.content_type == "table" and isinstance(self.content, pl.DataFrame):
                     v = [self.content.columns.tolist()] + self.content.values.tolist()
             k = k if k not in inv_field_map else inv_field_map[k]  # noqa: SIM401
             _doc[k] = v
@@ -153,6 +152,7 @@ class Document:
         dict: dict[str, Any],
         field_map: dict[str, Any] = {},  # noqa: B006
         id_hash_keys: list[str] | None = None,
+        store_extra_fields_in_meta: bool = True,
     ):
         """
         Create Document from dict. An optional field_map can be supplied to adjust for custom names of the keys in the
@@ -179,13 +179,14 @@ class Document:
         ]
         if "meta" not in _doc.keys():  # noqa: SIM118
             _doc["meta"] = {}
-        # copy additional fields into "meta"
-        for k, v in _doc.items():
-            # Exclude internal fields (Pydantic, ...) fields from the conversion process
-            if k.startswith("__"):
-                continue
-            if k not in init_args and k not in field_map:
-                _doc["meta"][k] = v
+        if store_extra_fields_in_meta:
+            # copy additional fields into "meta"
+            for k, v in _doc.items():
+                # Exclude internal fields (Pydantic, ...) fields from the conversion process
+                if k.startswith("__"):
+                    continue
+                if k not in init_args and k not in field_map:
+                    _doc["meta"][k] = v
         # remove additional fields from top level
         _new_doc = {}
         for k, v in _doc.items():
@@ -198,9 +199,9 @@ class Document:
         if _doc.get("id") is None:
             _new_doc["id_hash_keys"] = id_hash_keys
 
-        # Convert list of rows to pd.DataFrame
+        # Convert list of rows to pl.DataFrame
         if _new_doc.get("content_type") == "table" and isinstance(_new_doc["content"], list):
-            _new_doc["content"] = pd.DataFrame(columns=_new_doc["content"][0], data=_new_doc["content"][1:])
+            _new_doc["content"] = pl.DataFrame(columns=_new_doc["content"][0], data=_new_doc["content"][1:])
 
         return cls(**_new_doc)
 

@@ -90,13 +90,13 @@ class EvalMetricsTest(unittest.TestCase):
             queries_col="queries",
         )
 
-        docs = list(adapter.iter_documents())
+        docs = list(adapter.iterator())
         self.assertEqual(docs[0]["meta"]["labels"], [])
         self.assertEqual(docs[1]["meta"]["labels"], ["cat diet"])
         self.assertEqual(docs[2]["meta"]["labels"], ["dog training"])
         self.assertEqual(docs[3]["meta"]["labels"], ["planet facts"])
 
-        queries = list(adapter.iter_labels())
+        queries = DatasetRecordAdapter.extract_labels(docs)
         self.assertEqual(queries, ["cat diet", "dog training", "planet facts"])
 
         retriever = KeywordsRetriever(store=_DummyKeywordsStore())

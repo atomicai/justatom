@@ -1,8 +1,6 @@
 import logging
 from typing import Any
 
-from justatom.etc.visual import SAMPLE
-
 logger = logging.getLogger(__name__)
 
 

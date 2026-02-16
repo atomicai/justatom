@@ -85,19 +85,18 @@ class EvalStreamingIntegrationTest(unittest.TestCase):
 
         collection_name = self._random_collection_name()
         dataset_path = self._dummy_iterative_dataset(n_docs=100)
-        store = None
         try:
-            docs_adapter = DatasetRecordAdapter.from_source(
-                dataset_name_or_path=dataset_path,
-                content_col="content",
-                queries_col="labels",
-                chunk_id_col="chunk_id",
-            )
+            async def _run_pipeline() -> tuple[int, int, int]:
+                docs_adapter = DatasetRecordAdapter.from_source(
+                    dataset_name_or_path=dataset_path,
+                    content_col="content",
+                    queries_col="labels",
+                    chunk_id_col="chunk_id",
+                )
 
-            ir_runner = asyncio.run(
-                RunningService.do_index_and_prepare_for_search(
+                ir_runner = await RunningService.do_index_and_prepare_for_search(
                     collection_name=collection_name,
-                    documents=docs_adapter.iter_documents(),
+                    documents=docs_adapter.iterator(),
                     model_name_or_path=None,
                     index_and_eval_by="keywords",
                     batch_size=4,
@@ -105,39 +104,40 @@ class EvalStreamingIntegrationTest(unittest.TestCase):
                     weaviate_host="localhost",
                     weaviate_port=2211,
                 )
-            )
 
-            store = ir_runner.store
-            n_docs = asyncio.run(store.count_documents())
+                n_docs = await ir_runner.store.count_documents()
+
+                labels_adapter = DatasetRecordAdapter.from_source(
+                    dataset_name_or_path=dataset_path,
+                    content_col="content",
+                    queries_col="labels",
+                    chunk_id_col="chunk_id",
+                )
+
+                n_total, n_hit = 0, 0
+                for q in DatasetRecordAdapter.extract_labels(labels_adapter.iterator()):
+                    retrieved = await ir_runner.retrieve_topk(queries=q, top_k=5)
+                    n_total += 1
+                    if any(q in (doc.meta or {}).get("labels", []) for doc in retrieved):
+                        n_hit += 1
+
+                return n_docs, n_total, n_hit
+
+            n_docs, n_total, n_hit = asyncio.run(_run_pipeline())
             self.assertGreaterEqual(n_docs, 100)
-
-            labels_adapter = DatasetRecordAdapter.from_source(
-                dataset_name_or_path=dataset_path,
-                content_col="content",
-                queries_col="labels",
-                chunk_id_col="chunk_id",
-            )
-
-            n_total, n_hit = 0, 0
-            for q in labels_adapter.iter_labels():
-                retrieved = asyncio.run(ir_runner.retrieve_topk(queries=q, top_k=5))
-                n_total += 1
-                if any(q in (doc.meta or {}).get("labels", []) for doc in retrieved):
-                    n_hit += 1
-
             self.assertGreater(n_total, 0)
             self.assertGreater(n_hit, 0)
         finally:
             try:
-                if store is None:
-                    store = asyncio.run(
-                        WeaviateApi.find(
-                            collection_name,
-                            WEAVIATE_HOST="localhost",
-                            WEAVIATE_PORT=2211,
-                        )
+                async def _cleanup() -> None:
+                    store = await WeaviateApi.find(
+                        collection_name,
+                        WEAVIATE_HOST="localhost",
+                        WEAVIATE_PORT=2211,
                     )
-                asyncio.run(store.delete_collection())
+                    await store.delete_collection()
+
+                asyncio.run(_cleanup())
             except Exception:
                 pass
             Path(dataset_path).unlink(missing_ok=True)

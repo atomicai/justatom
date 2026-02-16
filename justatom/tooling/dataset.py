@@ -1,4 +1,5 @@
 import json
+import inspect
 from collections.abc import Generator, Iterable
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,8 @@ import polars as pl
 from json_repair import loads as json_repair_loads
 from loguru import logger
 
+from justatom.etc.schema import Document
+from justatom.tooling.profiler import MemoryProfiler
 from justatom.storing.dataset import API as DatasetApi
 
 
@@ -15,45 +18,85 @@ class DatasetRecordAdapter:
     def __init__(
         self,
         records: Iterable[dict[str, Any]],
-        content_col: str,
+        content_col: str | None = "content",
         queries_col: str | None = "queries",
+        dataframe_col: str | None = None,
         chunk_id_col: str | None = None,
         keywords_col: str | None = None,
         keywords_nested_col: str | None = "keyword_or_phrase",
         explanation_nested_col: str | None = "explanation",
         filter_fields: list[str] | None = None,
+        preserve_all_fields: bool = True,
     ):
         self.records = records
         self.content_col = content_col
         self.queries_col = queries_col
+        self.dataframe_col = dataframe_col
         self.chunk_id_col = chunk_id_col
         self.keywords_col = keywords_col
         self.keywords_nested_col = keywords_nested_col
         self.explanation_nested_col = explanation_nested_col
         self.filter_fields = filter_fields or []
+        self.preserve_all_fields = preserve_all_fields
 
     @classmethod
     def from_source(
         cls,
         dataset_name_or_path: str | Path,
+        lazy: bool = False,
         **kwargs,
     ) -> "DatasetRecordAdapter":
+        adapter_param_names = {
+            name
+            for name in inspect.signature(cls.__init__).parameters
+            if name not in {"self", "records"}
+        }
+        adapter_kwargs = {
+            key: value for key, value in kwargs.items() if key in adapter_param_names
+        }
+        dataset_kwargs = {
+            key: value for key, value in kwargs.items() if key not in adapter_param_names
+        }
+
         maybe_df_or_iter = DatasetApi.named(str(dataset_name_or_path)).iterator(
-            lazy=True
+            lazy=lazy, **dataset_kwargs
         )
+        records = cls._to_records(maybe_df_or_iter, lazy=lazy)
 
+        return cls(records=records, **adapter_kwargs)
+
+    @staticmethod
+    def _to_records(
+        maybe_df_or_iter: Any,
+        lazy: bool,
+    ) -> list[dict[str, Any]] | Generator[dict[str, Any], None, None]:
         if isinstance(maybe_df_or_iter, pl.DataFrame):
-            records = maybe_df_or_iter.iter_rows(named=True)
-        elif isinstance(maybe_df_or_iter, pl.LazyFrame):
-            records = maybe_df_or_iter.collect(streaming=True).iter_rows(named=True)
-        elif isinstance(maybe_df_or_iter, (bytes, bytearray)):
-            msg = "Dataset API returned raw bytes. Expected a path/DataFrame/iterator of dicts."
-            logger.error(msg)
-            raise ValueError(msg)
-        else:
-            records = cls._coerce_iter(maybe_df_or_iter)
+            return (
+                maybe_df_or_iter.iter_rows(named=True)
+                if lazy
+                else maybe_df_or_iter.to_dicts()
+            )
+        if isinstance(maybe_df_or_iter, pl.LazyFrame):
+            if not lazy:
+                pl_view = maybe_df_or_iter.collect(streaming=True)
+                return pl_view.to_dicts()
 
-        return cls(records=records, **kwargs)
+            def _iter_lazyframe_rows() -> Generator[dict[str, Any], None, None]:
+                for batch in maybe_df_or_iter.collect_batches(maintain_order=True):
+                    for row in batch.iter_rows(named=True):
+                        yield row
+
+            return _iter_lazyframe_rows()
+        if not isinstance(maybe_df_or_iter, Iterable):
+            msg = (
+                "Dataset API returned unsupported value. Expected one of: "
+                "polars.DataFrame, polars.LazyFrame, or iterable of dict-like rows."
+            )
+            logger.error(msg)
+            raise TypeError(msg)
+
+        coerced_records = DatasetRecordAdapter._coerce_iter(maybe_df_or_iter)
+        return coerced_records if lazy else list(coerced_records)
 
     @staticmethod
     def _coerce_iter(raw_iter: Iterable[Any]) -> Generator[dict[str, Any], None, None]:
@@ -92,15 +135,19 @@ class DatasetRecordAdapter:
         return repaired_obj
 
     @classmethod
-    def normalize_queries(cls, raw: Any) -> list[str]:
+    def normalize_labels(cls, raw: Any) -> list[str]:
         raw = cls._maybe_parse_json_string(raw)
         if cls._is_missing(raw):
             return []
         if isinstance(raw, str):
             return [raw] if raw.strip() else []
         if isinstance(raw, Iterable):
-            return [str(x) for x in raw if not cls._is_missing(x) and str(x).strip()]
-        return [str(raw)]
+            return [str(x).strip() for x in raw if not cls._is_missing(x) and str(x).strip()]
+        return [str(raw).strip() ] if str(raw).strip() else []
+
+    @classmethod
+    def normalize_queries(cls, raw: Any) -> list[str]:
+        return cls.normalize_labels(raw)
 
     @classmethod
     def normalize_keywords(
@@ -163,72 +210,134 @@ class DatasetRecordAdapter:
 
         return output
 
-    def iter_documents(self) -> Generator[dict[str, Any], None, None]:
-        seen_chunk_ids = set()
+    def iterator(
+        self,
+        profiler: MemoryProfiler | None = None,
+        as_json: bool = True,
+        preserve_all_fields: bool | None = None,
+    ) -> Generator[dict[str, Any] | Document, None, None]:
+        active_profiler = profiler or MemoryProfiler(enabled=False)
+        preserve_fields = self.preserve_all_fields if preserve_all_fields is None else preserve_all_fields
+        seen_chunk_ids: set[str] = set()
 
-        for row in self.records:
-            if not isinstance(row, dict):
-                continue
-            if any(self._is_missing(row.get(field)) for field in self.filter_fields):
-                continue
-            if self._is_missing(row.get(self.content_col)):
-                continue
+        with active_profiler.span(
+            "DatasetRecordAdapter.iterator",
+            rows_source_type=type(self.records).__name__,
+            preserve_all_fields=preserve_fields,
+        ) as span:
+            for row in self.records:
+                if not isinstance(row, dict):
+                    continue
+                if any(self._is_missing(row.get(field)) for field in self.filter_fields):
+                    continue
+                if self._is_missing(row.get(self.content_col)):
+                    continue
 
-            content = str(row[self.content_col])
-            queries = (
-                self.normalize_queries(row.get(self.queries_col))
-                if self.queries_col
-                else []
-            )
-
-            out: dict[str, Any] = {"content": content, "meta": {"labels": queries}}
-
-            if self.chunk_id_col:
-                chunk_id = row.get(self.chunk_id_col)
-                if not self._is_missing(chunk_id):
-                    normalized_chunk_id = str(chunk_id)
-                    if normalized_chunk_id in seen_chunk_ids:
-                        msg = f"chunk_id must be unique. Duplicate found: {normalized_chunk_id}"
-                        logger.error(msg)
-                        raise ValueError(msg)
-                    seen_chunk_ids.add(normalized_chunk_id)
-                    out["id"] = normalized_chunk_id
-                    out["meta"]["chunk_id"] = normalized_chunk_id
-
-            if self.keywords_col is not None:
-                normalized_keywords = self.normalize_keywords(
-                    row.get(self.keywords_col),
-                    keywords_nested_col=self.keywords_nested_col,
-                    explanation_nested_col=self.explanation_nested_col,
+                content = str(row[self.content_col])
+                raw_labels = row.get(self.queries_col) if self.queries_col else None
+                if self._is_missing(raw_labels):
+                    maybe_meta = row.get("meta")
+                    if isinstance(maybe_meta, dict):
+                        if self.queries_col:
+                            raw_labels = maybe_meta.get(self.queries_col)
+                        if self._is_missing(raw_labels):
+                            raw_labels = maybe_meta.get("labels")
+                labels = (
+                    self.normalize_labels(raw_labels)
+                    if self.queries_col is not None
+                    else []
                 )
-                if normalized_keywords:
-                    out["keywords_or_phrases"] = normalized_keywords
 
-            yield out
+                field_map: dict[str, str] = {}
+                if self.content_col and self.content_col != "content":
+                    field_map[self.content_col] = "content"
+                if self.dataframe_col and self.dataframe_col != "dataframe":
+                    field_map[self.dataframe_col] = "dataframe"
+                if self.chunk_id_col and self.chunk_id_col != "id":
+                    field_map[self.chunk_id_col] = "id"
 
-    def iter_labels(self) -> Generator[str, None, None]:
-        for row in self.records:
-            if not isinstance(row, dict):
-                continue
-            if any(self._is_missing(row.get(field)) for field in self.filter_fields):
-                continue
-            if self._is_missing(row.get(self.content_col)):
-                continue
-            if self.queries_col is None:
-                continue
+                if preserve_fields:
+                    source = row
+                else:
+                    source = {}
+                    if self.content_col:
+                        source[self.content_col] = row.get(self.content_col)
+                    if self.dataframe_col:
+                        source[self.dataframe_col] = row.get(self.dataframe_col)
+                    if self.chunk_id_col:
+                        source[self.chunk_id_col] = row.get(self.chunk_id_col)
+                    maybe_meta = row.get("meta")
+                    if isinstance(maybe_meta, dict):
+                        source["meta"] = maybe_meta
 
-            labels = self.normalize_queries(row.get(self.queries_col))
-            for label in labels:
-                if isinstance(label, str) and label.strip():
-                    yield label
+                doc = Document.from_dict(
+                    source,
+                    field_map=field_map,
+                    store_extra_fields_in_meta=preserve_fields,
+                )
+                doc.content = content
+                doc.meta = doc.meta or {}
+                doc.meta["labels"] = labels
+
+                if self.chunk_id_col:
+                    chunk_id = row.get(self.chunk_id_col)
+                    if not self._is_missing(chunk_id):
+                        normalized_chunk_id = str(chunk_id)
+                        if normalized_chunk_id in seen_chunk_ids:
+                            msg = f"Duplicate chunk_id detected: '{normalized_chunk_id}'"
+                            raise ValueError(msg)
+                        seen_chunk_ids.add(normalized_chunk_id)
+                        doc.id = normalized_chunk_id
+                        if not preserve_fields:
+                            doc.meta["chunk_id"] = normalized_chunk_id
+
+                if self.keywords_col is not None:
+                    normalized_keywords = self.normalize_keywords(
+                        row.get(self.keywords_col),
+                        keywords_nested_col=self.keywords_nested_col,
+                        explanation_nested_col=self.explanation_nested_col,
+                    )
+                    doc.meta["keywords_or_phrases"] = normalized_keywords
+
+                span.tick()
+                if as_json:
+                    doc_json = doc.to_dict()
+                    yield doc_json
+                else:
+                    yield doc
+
+    def dataset(
+        self,
+        profiler: MemoryProfiler | None = None,
+        as_json: bool = True,
+        preserve_all_fields: bool | None = None,
+    ) -> list[dict[str, Any] | Document]:
+        logger.warning(
+            "DatasetRecordAdapter.dataset() materializes the whole iterator in memory. "
+            "Use iterator() for streaming large datasets."
+        )
+        active_profiler = profiler or MemoryProfiler(enabled=False)
+        documents: list[dict[str, Any] | Document] = []
+        with active_profiler.span("DatasetRecordAdapter.dataset") as span:
+            for row in self.iterator(as_json=as_json, preserve_all_fields=preserve_all_fields):
+                documents.append(row)
+                span.tick()
+        return documents
 
     @staticmethod
-    def extract_queries(documents: Iterable[dict[str, Any]]) -> list[str]:
-        queries: list[str] = []
+    def extract_labels(documents: Iterable[dict[str, Any] | Document]) -> list[str]:
+        labels_out: list[str] = []
         for doc in documents:
-            labels = doc.get("meta", {}).get("labels", [])
+            if isinstance(doc, Document):
+                labels = doc.meta.get("labels", []) if doc.meta is not None else []
+            else:
+                labels = doc.get("meta", {}).get("labels", [])
             if isinstance(labels, str):
                 labels = [labels]
             if isinstance(labels, Iterable):
-                queries.extend([q for q in labels if isinstance(q, str) and q.strip()])
-        return queries
+                labels_out.extend([q for q in labels if isinstance(q, str) and q.strip()])
+        return labels_out
+
+    @staticmethod
+    def extract_queries(documents: Iterable[dict[str, Any] | Document]) -> list[str]:
+        return DatasetRecordAdapter.extract_labels(documents)

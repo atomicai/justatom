@@ -209,6 +209,60 @@ class E5LModel(E5GeneralWrapper):
         return (response,)
 
 
+class E5LInstructModel(E5GeneralWrapper):
+
+    def __init__(
+        self,
+        model_name_or_instance: str | nn.Module = "intfloat/multilingual-e5-large-instruct",
+        device="cpu",
+        **kwargs,
+    ):
+        super().__init__()
+        self.model = (
+            AutoModel.from_pretrained(model_name_or_instance)
+            if isinstance(model_name_or_instance, str)
+            else model_name_or_instance
+        )
+        self.name = "intfloat/multilingual-e5-large-instruct"
+        self.model.to(device)
+    
+    @classmethod
+    def load(cls, model_name_or_path: str, **kwargs):
+        model = AutoModel.from_pretrained(model_name_or_path)
+        return cls(model, **kwargs)
+    
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        group_ids: torch.Tensor = None,
+        pos_input_ids: torch.Tensor = None,
+        pos_attention_mask: torch.Tensor = None,
+        norm: bool = True,
+        average: bool = True,
+    ):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        response = self.maybe_norm_or_average(
+            outputs.last_hidden_state,
+            attention_mask=attention_mask,
+            norm=norm,
+            average=average,
+        )
+        if pos_input_ids is not None and pos_attention_mask is not None:
+            pos_outputs = self.model(
+                input_ids=pos_input_ids, attention_mask=pos_attention_mask
+            )
+            pos_response = self.maybe_norm_or_average(
+                pos_outputs.last_hidden_state,
+                attention_mask=pos_attention_mask,
+                norm=norm,
+                average=average,
+            )
+            return response, pos_response
+
+        return (response,)
+
+
 class MBERTModel(ILanguageModel):
     def __init__(
         self,

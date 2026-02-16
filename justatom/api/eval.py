@@ -1,6 +1,5 @@
 import argparse
 import asyncio as asio
-import itertools
 import os
 import sys
 from collections.abc import Generator, Iterable
@@ -184,7 +183,7 @@ async def main(
             explanation_nested_col=explanation_nested_col,
             filter_fields=(filters or {}).get("fields", []),
         )
-        docs_iter = tqdm(docs_adapter.iter_documents())
+        docs_iter = tqdm(docs_adapter.iterator())
         logger.info("Dataset is prepared in lazy/iterative mode for indexing.")
     else:
         logger.info("No dataset provided. Using existing index only.")
@@ -232,14 +231,12 @@ async def main(
         explanation_nested_col=explanation_nested_col,
         filter_fields=(filters or {}).get("fields", []),
     )
-    labels_iter = labels_adapter.iter_labels()
-    first_label = next(labels_iter, None)
-    if first_label is None:
+    queries = DatasetRecordAdapter.extract_labels(labels_adapter.iterator())
+    if len(queries) == 0:
         logger.warning(
             "labels-col is provided, but no labels were found in dataset. Evaluation is skipped."
         )
         return
-    queries = itertools.chain([first_label], labels_iter)
 
     el: IEvaluatorRunner = EvaluatorRunner(ir=ir_runner)
     eval_metrics = await el.evaluate_topk(

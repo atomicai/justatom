@@ -27,7 +27,7 @@ bertopic==0.16.2
 python-dotenv==1.0.0
 loguru==0.7.2
 pyfiglet==1.0.2
-polars==0.19.19
+polars==1.38.1
 weaviate-client==4.11.3
 docx2txt==0.8
 simplejson==3.19.2
