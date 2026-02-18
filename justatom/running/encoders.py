@@ -286,6 +286,11 @@ class GammaHybridRunner(EncoderRunner):
         prediction_heads: list[IHead],
         device="cpu",
         processor: IProcessor | None = None,
+        include_semantic_gamma: bool = True,
+        include_keywords_gamma: bool = True,
+        semantic_gamma: float = 0.5,
+        keywords_gamma: float = 1.5,
+        activation_fn: str = "sigmoid",
     ):
         super(GammaHybridRunner, self).__init__(
             model=model,
@@ -293,3 +298,119 @@ class GammaHybridRunner(EncoderRunner):
             device=device,
             processor=processor,
         )  # noqa: UP008
+
+        if not include_semantic_gamma and not include_keywords_gamma:
+            raise ValueError("Both include_semantic_gamma and include_keywords_gamma are False. Nothing to calibrate.")
+
+        self.include_semantic_gamma = include_semantic_gamma
+        self.include_keywords_gamma = include_keywords_gamma
+        self.activation_fn = activation_fn
+        self.activation = self._resolve_activation(activation_fn)
+
+        self.gamma1 = torch.nn.Parameter(
+            torch.tensor([semantic_gamma], dtype=torch.float32, device=device),
+            requires_grad=include_semantic_gamma,
+        )
+        self.gamma2 = torch.nn.Parameter(
+            torch.tensor([keywords_gamma], dtype=torch.float32, device=device),
+            requires_grad=include_keywords_gamma,
+        )
+
+    @staticmethod
+    def _resolve_activation(name: str):
+        normalized = str(name).strip().lower()
+        mapping = {
+            "sigmoid": torch.nn.Sigmoid(),
+            "tanh": torch.nn.Tanh(),
+            "relu": torch.nn.ReLU(),
+            "identity": torch.nn.Identity(),
+        }
+        if normalized not in mapping:
+            raise ValueError(f"Unsupported gamma activation_fn={name}. Use one of {','.join(mapping.keys())}")
+        return mapping[normalized]
+
+    def gamma_parameters(self) -> list[torch.nn.Parameter]:
+        params: list[torch.nn.Parameter] = []
+        if self.include_semantic_gamma:
+            params.append(self.gamma1)
+        if self.include_keywords_gamma:
+            params.append(self.gamma2)
+        return params
+
+    def gamma_weights(self) -> tuple[float, float]:
+        semantic_weight = (
+            float(self.activation(self.gamma1).detach().item())
+            if self.include_semantic_gamma
+            else 1.0
+        )
+        keywords_weight = (
+            float(self.activation(self.gamma2).detach().item())
+            if self.include_keywords_gamma
+            else 1.0
+        )
+        return semantic_weight, keywords_weight
+
+    def gamma_payload(self) -> dict:
+        semantic_weight, keywords_weight = self.gamma_weights()
+        return {
+            "activation_fn": self.activation_fn,
+            "semantic_gamma": {
+                "enabled": self.include_semantic_gamma,
+                "raw": float(self.gamma1.detach().item()),
+                "effective": semantic_weight,
+            },
+            "keywords_gamma": {
+                "enabled": self.include_keywords_gamma,
+                "raw": float(self.gamma2.detach().item()),
+                "effective": keywords_weight,
+            },
+        }
+
+    def mix_scores(self, semantic_scores: torch.Tensor, lexical_scores: torch.Tensor) -> torch.Tensor:
+        semantic_weight = self.activation(self.gamma1) if self.include_semantic_gamma else 1.0
+        keywords_weight = self.activation(self.gamma2) if self.include_keywords_gamma else 1.0
+        return semantic_weight * semantic_scores + keywords_weight * lexical_scores
+
+    def save(self, save_dir: str):
+        self.config = {
+            **(self.config or {}),
+            "gamma_hybrid": self.gamma_payload(),
+        }
+        super().save(save_dir)
+
+    @classmethod
+    def load(cls, data_dir: Path | str, config=None, **props):
+        _model_config = Path(data_dir) / "runner_config.json"
+        assert _model_config.exists(), logger.error(
+            f"The model file is not found for klass=[{cls.__class__.__name__}]"
+        )
+
+        model = ILanguageModel.load(Path(data_dir))
+
+        if config is None:
+            _runner_config = Path(data_dir) / "runner_config.json"
+            with open(_runner_config) as f:
+                config = json.load(f)
+
+        heads = []
+        heads_dir = Path(data_dir) / "heads"
+        if heads_dir.is_dir():
+            n_dirs = len(list(heads_dir.iterdir()))
+            for idx in range(n_dirs):
+                head_path = heads_dir / f"head_{idx}"
+                hi = IHead.load(head_path)
+                heads.append(hi)
+
+        gamma_hybrid = config.get("gamma_hybrid", {}) if isinstance(config, dict) else {}
+        semantic_cfg = gamma_hybrid.get("semantic_gamma", {})
+        keywords_cfg = gamma_hybrid.get("keywords_gamma", {})
+
+        return cls(
+            model=model,
+            prediction_heads=heads,
+            include_semantic_gamma=semantic_cfg.get("enabled", True),
+            include_keywords_gamma=keywords_cfg.get("enabled", True),
+            semantic_gamma=semantic_cfg.get("raw", 0.5),
+            keywords_gamma=keywords_cfg.get("raw", 1.5),
+            activation_fn=gamma_hybrid.get("activation_fn", "sigmoid"),
+        )

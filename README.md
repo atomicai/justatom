@@ -3,7 +3,7 @@
 </p>
 
 
-Information retrieval - <a href="https://en.wikipedia.org/wiki/Information_retrieval">IR</a> is one of the most "in-demand" subtask. In many search systems the `IR` part is implemented as a separate component `R` that narrows down the search form billions to, let's say, `k=5` candidates.
+Information retrieval - <a href="https://en.wikipedia.org/wiki/Information_retrieval">IR</a> is one of the most "in-demand" subtasks. In many search systems the `IR` part is implemented as a separate component `R` that narrows down the search from billions to, let's say, `k=5` candidates.
 
 ---
 
@@ -22,7 +22,7 @@ The good-old-fashioned solution is to use the well-known <a href="https://en.wik
 ### Get started
 > They say a good example is worth 2077 pages of API documentation, a million directives, or a thousand words.
 
-Let's start from observing the built-in dataset - `polaroids.ai`. It consists of various snippets from movies, games and books. Below few examples:
+Let's start from observing the built-in dataset - `polaroids.ai`. It consists of various snippets from movies, games and books. Below are a few examples:
 
 <small>
 
@@ -57,16 +57,54 @@ Let's start from observing the built-in dataset - `polaroids.ai`. It consists of
 <pre style="background-color: #000; color: #fff; border: none;">
 
 ```python
-import polars
 from pathlib import Path
-import os
-from justatom.storing.dataset import source_from_dataset
+from justatom.tooling.dataset import DatasetRecordAdapter
 
-pl_docs = source_from_dataset(Path(os.getcwd()) / ".data" / "polaroids.ai.data.all.json")
-js_docs = pl_docs.to_dicts()
+dataset_path = Path.cwd() / ".data" / "polaroids.ai.data.json"
+adapter = DatasetRecordAdapter.from_source(dataset_path, lazy=True)
+js_docs = list(adapter.iterator())
 ```
 </pre>
 </details>
+
+### Datasets 📦
+
+> Load large datasets lazily and map custom columns to `Document` schema with one adapter.
+
+Supported input formats (via `justatom.storing.dataset.API`):
+- `json`
+- `jsonl`
+- `parquet`
+- `csv`
+- `xlsx`
+
+`DatasetRecordAdapter` maps your source columns to canonical `Document` fields:
+- `content_col` -> `content`
+- `queries_col` -> `meta.labels`
+- `chunk_id_col` -> `id` (if provided)
+
+All non-canonical source fields are stored in `meta` (for example: `instruction`, `input`, custom business fields).
+
+```python
+from pathlib import Path
+from justatom.tooling.dataset import DatasetRecordAdapter
+
+dataset_path = Path.home() / "IDataset" / "electrical_engineering_ru.parquet"
+
+adapter = DatasetRecordAdapter.from_source(
+  dataset_path,
+  lazy=True,
+  content_col="output",   # map source output -> Document.content
+  queries_col="input",    # map source input -> Document.meta.labels
+)
+
+first_doc = next(adapter.iterator())
+print(first_doc["content"])                  # canonical content
+print(first_doc["meta"]["labels"])          # normalized labels from input
+print(first_doc["meta"]["instruction"])     # extra source field moved to meta
+```
+
+> See practical notebook example: `notebook/datasets-tutorials/pipeline-large-datasets.ipynb`
 
 ### Encoders
 
@@ -93,8 +131,8 @@ js_docs = pl_docs.to_dicts()
 ```python
 import torch
 from justatom.modeling.mask import ILanguageModel
-from justatom.running.m1 import M1LMRunner
-from justatom.processing import INFERProcessor, ITokenizer
+from justatom.running.encoders import EncoderRunner
+from justatom.processing import RuntimeProcessor, ITokenizer
 
 def maybe_cuda_or_mps():
     if torch.backends.mps.is_built():
@@ -104,19 +142,19 @@ def maybe_cuda_or_mps():
     else:
         return "cpu"
 
-model_name_or_path = "intfloat/multilingual-e5-base"
+model_name_or_path = "intfloat/multilingual-e5-small"
 
 lm_model = ILanguageModel.load(model_name_or_path) # load encoder
 device = maybe_cuda_or_mps() # pick the device
-runner = M1LMRunner(model=lm_model, prediction_heads=[], device=device) # create `Runner`
-processor = INFERProcessor(ITokenizer.from_pretrained(model_name_or_path)) # load `Processor`
+runner = EncoderRunner(model=lm_model, prediction_heads=[], device=device) # create `Runner`
+processor = RuntimeProcessor(ITokenizer.from_pretrained(model_name_or_path)) # load `Processor`
 ```
 </pre>
 </details>
 
-❗️According to the <a href="https://arxiv.org/abs/2212.03533">paper</a> E5 family is trained in assymetric way meaning:
+❗️According to the <a href="https://arxiv.org/abs/2212.03533">paper</a> E5 family is trained in an asymmetric way, meaning:
 
-> Use `"query: "` and `"passage: "` correspondingly for asymmetric tasks such as passage retrieval in open QA, ad-hoc information retrieval.
+> Use `"query: "` and `"passage: "` respectively for asymmetric tasks such as passage retrieval in open QA, ad-hoc information retrieval.
 
 > Use `"query: "` prefix for symmetric tasks such as semantic similarity, bitext mining, paraphrase retrieval.
 
@@ -195,16 +233,16 @@ store = await WeaviateApi.find(collection_name, WEAVIATE_HOST=weaviate_host, WEA
 
 ---
 
-> ✔️ Let's double check that everything worked out fine.
+> ✔️ Let's double-check that everything worked out fine.
 
 ```python
 n_docs = await store.count_documents()
 print(n_docs)
 ```
 
->❓Are you still here? Congratulations, most of the work is almost done. Now, simply wrap the IndexerApi pipeline and start indexing!
+>❓Are you still here? Congratulations, most of the work is almost done. Now, simply wrap the IndexerAPI pipeline and start indexing!
 
-> Now let's create indexing pipeline in one line
+> Now let's create an indexing pipeline in one line
 
 <details style="
 background-color: #000; 
@@ -268,13 +306,13 @@ cursor: pointer;
 ">Search</summary>
 <p>
 
-> ❗️According to the <a href="https://arxiv.org/abs/2212.03533">paper</a> E5 family is trained in assymetric way meaning we have to set `prefix` back to `query: `
+> ❗️According to the <a href="https://arxiv.org/abs/2212.03533">paper</a> E5 family is trained in an asymmetric way, meaning we have to set `prefix` back to `query: `
 
 ```python
 processor.prefix = "query: "
 ```
 
-> Now, let's create some queries we would to search for:
+> Now, let's create some queries we would like to search for:
 
 ```python
 queries = [

@@ -140,12 +140,10 @@ class E5SModel(E5GeneralWrapper):
             pos_outputs = self.model(
                 input_ids=pos_input_ids,
                 attention_mask=pos_attention_mask,
-                norm=norm,
-                average=average,
             )
             pos_response = self.maybe_norm_or_average(
-                pos_outputs,
-                attention_mask=attention_mask,
+                pos_outputs.last_hidden_state,
+                attention_mask=pos_attention_mask,
                 norm=norm,
                 average=average,
             )
