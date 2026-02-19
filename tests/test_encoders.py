@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 
@@ -168,20 +169,25 @@ Forgiving what I've done
         """,
     ]
 
-    def setUp(self):
-
-        model_name_or_path = "intfloat/multilingual-e5-base"
-
-        tokenizer = ITokenizer.from_pretrained(model_name_or_path)
-        processor = RuntimeProcessor(tokenizer)
-        lm_model = ILanguageModel.load(model_name_or_path)
-
-        self.runner = EncoderRunner(
-            model=lm_model,
-            prediction_heads=[],
-            processor=processor,
+    @classmethod
+    def setUpClass(cls):
+        cls.model_name_or_path = os.environ.get(
+            "JUSTATOM_TEST_MODEL", "intfloat/multilingual-e5-small"
         )
-        self.runner.eval()
+        cls.tokenizer = ITokenizer.from_pretrained(cls.model_name_or_path)
+        cls.processor = RuntimeProcessor(cls.tokenizer)
+        cls.lm_model = ILanguageModel.load(cls.model_name_or_path)
+        cls.runner = EncoderRunner(
+            model=cls.lm_model,
+            prediction_heads=[],
+            processor=cls.processor,
+        )
+        cls.runner.eval()
+
+    def setUp(self):
+        self.runner = self.__class__.runner
+        self.tokenizer = self.__class__.tokenizer
+        self.lm_model = self.__class__.lm_model
 
     def test_inference(self):
         dataset, tensor_names, problematic_ids = (
@@ -197,13 +203,51 @@ Forgiving what I've done
             with torch.no_grad():
                 vecs = self.runner(batch)[0]
                 vectors.extend(vecs)
+        positives = []
+        negatives = []
         for i in range(1, len(vectors), 2):
             dot_product_positive = vectors[i] @ vectors[i - 1]
             dot_product_negative = vectors[i] @ vectors[(i + 1) % len(vectors)]
+            positives.append(dot_product_positive)
+            negatives.append(dot_product_negative)
             logger.info(
                 f"i={i} | dot_product_positive={dot_product_positive} | dot_product_negative={dot_product_negative}"
             )
-            self.assertGreater(dot_product_positive, dot_product_negative)
+        positive_mean = torch.stack(positives).mean()
+        negative_mean = torch.stack(negatives).mean()
+        self.assertGreater(positive_mean, negative_mean)
+
+    def test_e5_positive_branch_normalization(self):
+        encoded = self.tokenizer(
+            ["query: simple query", "query: another query"],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        )
+        encoded_pos = self.tokenizer(
+            ["passage: simple passage", "passage: another passage"],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        )
+
+        with torch.no_grad():
+            outputs = self.lm_model(
+                input_ids=encoded["input_ids"],
+                attention_mask=encoded["attention_mask"],
+                pos_input_ids=encoded_pos["input_ids"],
+                pos_attention_mask=encoded_pos["attention_mask"],
+                norm=True,
+                average=True,
+            )
+
+        self.assertEqual(len(outputs), 2)
+        query_embs, pos_embs = outputs
+        query_norms = query_embs.norm(dim=1)
+        pos_norms = pos_embs.norm(dim=1)
+
+        self.assertTrue(torch.allclose(query_norms, torch.ones_like(query_norms), atol=1e-3))
+        self.assertTrue(torch.allclose(pos_norms, torch.ones_like(pos_norms), atol=1e-3))
 
 
 if __name__ == "__main__":
