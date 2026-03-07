@@ -15,6 +15,33 @@ from justatom.storing.mask import INNDocStore
 from justatom.tooling.nlp import keywords_metrics
 
 
+def _coerce_results_per_query(results, n_queries: int):
+    """Normalize backend retrieval response to list-per-query layout."""
+    if n_queries <= 1:
+        if not isinstance(results, list):
+            return [[results]]
+        if len(results) == 0:
+            return [[]]
+        if isinstance(results[0], list):
+            return results
+        return [results]
+
+    if not isinstance(results, list):
+        raise ValueError("Retriever expected list of per-query results.")
+    if len(results) == 0:
+        return [[] for _ in range(n_queries)]
+    if not isinstance(results[0], list):
+        raise ValueError(
+            "Retriever expected list[list[Document]] for multi-query calls. "
+            "Please ensure backend store returns per-query grouped results."
+        )
+    if len(results) != n_queries:
+        raise ValueError(
+            f"Retriever expected {n_queries} per-query result groups, got {len(results)}."
+        )
+    return results
+
+
 class GammaHybridRetriever(IRetrieverRunner):
 
     RANKER: dict = {
@@ -106,15 +133,23 @@ class GammaHybridRetriever(IRetrieverRunner):
         max_parallel_requests: int = 128,
         **props,
     ):
-        alpha = alpha or self.alpha
-        top_p = top_p or self.top_p
-        prefix = prefix or self.prefix
-        cutoff_score = cutoff_score or self.cutoff_score
-        gamma1 = gamma1 or self.gamma1
-        gamma2 = gamma2 or self.gamma2
-        include_keywords = include_keywords or self.include_keywords
-        include_explanation = include_explanation or self.include_explanation
-        include_content = include_content or self.include_content
+        alpha = self.alpha if alpha is None else alpha
+        top_p = self.top_p if top_p is None else top_p
+        prefix = self.prefix if prefix is None else prefix
+        cutoff_score = self.cutoff_score if cutoff_score is None else cutoff_score
+        gamma1 = self.gamma1 if gamma1 is None else gamma1
+        gamma2 = self.gamma2 if gamma2 is None else gamma2
+        include_keywords = (
+            self.include_keywords if include_keywords is None else include_keywords
+        )
+        include_explanation = (
+            self.include_explanation
+            if include_explanation is None
+            else include_explanation
+        )
+        include_content = (
+            self.include_content if include_content is None else include_content
+        )
         if not include_keywords and not include_explanation and not include_content:
             msg = f"""
             You've initialized `{self.__class__.__name__}` IR but not using any of the atomic keywords features.
@@ -129,7 +164,8 @@ class GammaHybridRetriever(IRetrieverRunner):
             """
             logger.error(msg)
             raise ValueError(msg)
-        queries = [queries] if isinstance(queries, str) else queries
+        single_query = isinstance(queries, str)
+        queries = [queries] if single_query else queries
         js_queries = [
             (
                 {"content": q}
@@ -162,13 +198,17 @@ class GammaHybridRetriever(IRetrieverRunner):
                 filters=filters,
                 include_vector=include_embedding,
             )
+            answer_per_batch_topp = _coerce_results_per_query(
+                answer_per_batch_topp,
+                n_queries=len(_queries),
+            )
             # answer_per_batch_topp: batch_size x top_p
             # Post-process each response to filter by fusion score.
             answer_per_batch_topk = []
             for query, res_topp in zip(_queries, answer_per_batch_topp, strict=False):
                 if isinstance(res_topp, Exception):
                     raise res_topp
-                
+
                 res_topk = []
                 fus_topk = []
                 # Iterate over top-p results to compute fusion score.
@@ -217,7 +257,7 @@ class GammaHybridRetriever(IRetrieverRunner):
                 res_topk = [res_topp[pos["rank"]] for pos in fus_topk]  # type: ignore
                 answer_per_batch_topk.append(copy.deepcopy(res_topk))
             answer.extend(answer_per_batch_topk)
-        return answer
+        return answer[0] if single_query else answer
 
 
 class HybridRetriever(IRetrieverRunner):
@@ -256,9 +296,10 @@ class HybridRetriever(IRetrieverRunner):
         filters: dict | None = None,
         **props,
     ):
-        alpha = alpha or self.alpha
-        prefix = prefix or self.prefix
-        queries = [queries] if isinstance(queries, str) else queries
+        alpha = self.alpha if alpha is None else alpha
+        prefix = self.prefix if prefix is None else prefix
+        single_query = isinstance(queries, str)
+        queries = [queries] if single_query else queries
         js_queries = [
             (
                 {"content": q}
@@ -291,8 +332,12 @@ class HybridRetriever(IRetrieverRunner):
                 filters=filters,
                 include_vector=include_embedding,
             )
+            answer_per_batch = _coerce_results_per_query(
+                answer_per_batch,
+                n_queries=len(_queries),
+            )
             answer.extend(answer_per_batch)
-        return answer
+        return answer[0] if single_query else answer
 
 
 class EmbeddingRetriever(IRetrieverRunner):
@@ -330,8 +375,9 @@ class EmbeddingRetriever(IRetrieverRunner):
         keywords: list[str] | None = None,
         **props,
     ):
-        prefix = prefix or self.prefix
-        queries = [queries] if isinstance(queries, str) else queries
+        prefix = self.prefix if prefix is None else prefix
+        single_query = isinstance(queries, str)
+        queries = [queries] if single_query else queries
         js_queries = [
             (
                 {"content": q}
@@ -362,21 +408,34 @@ class EmbeddingRetriever(IRetrieverRunner):
                 keywords=keywords,
                 include_vector=include_embedding,
             )
+            answer_per_batch = _coerce_results_per_query(
+                answer_per_batch,
+                n_queries=len(_queries),
+            )
             answer.extend(answer_per_batch)
-        return answer
+        return answer[0] if single_query else answer
 
 
 class KeywordsRetriever(IRetrieverRunner):
     def __init__(self, store: INNDocStore, **props):
         super().__init__()
         self.store = store
-    
-    def retrieve_topk_sync(self, queries: str | list[str], top_k: int = 5, filters: dict | None = None, keywords: list[str] | None = None, **props):
-        queries = [queries] if isinstance(queries, str) else queries
+
+    def retrieve_topk_sync(
+        self,
+        queries: str | list[str],
+        top_k: int = 5,
+        filters: dict | None = None,
+        keywords: list[str] | None = None,
+        **props,
+    ):
+        single_query = isinstance(queries, str)
+        queries = [queries] if single_query else queries
         answer = self.store.search_by_keywords_sync(
             queries=queries, top_k=top_k, filters=filters, keywords=keywords
         )
-        return answer
+        answer = _coerce_results_per_query(answer, n_queries=len(queries))
+        return answer[0] if single_query else answer
 
     async def retrieve_topk(
         self,
@@ -387,15 +446,17 @@ class KeywordsRetriever(IRetrieverRunner):
         keywords: list[str] | None = None,
         **props,
     ):
-        queries = [queries] if isinstance(queries, str) else queries
+        single_query = isinstance(queries, str)
+        queries = [queries] if single_query else queries
         answer = await self.store.search_by_keywords(
             queries=queries, top_k=top_k, filters=filters, keywords=keywords
         )
-        return answer
+        answer = _coerce_results_per_query(answer, n_queries=len(queries))
+        return answer[0] if single_query else answer
 
 
 class ByName:
-    OPS = ["keywords", "emebedding", "hybrid", "gamma-hybrid"]
+    OPS = ["keywords", "embedding", "hybrid", "gamma-hybrid"]
 
     def named(self, name: str, **kwargs):
 
@@ -408,7 +469,10 @@ class ByName:
         elif name == "gamma-hybrid":
             klass = GammaHybridRetriever
         else:
-            msg = f"Unknown name=[{name}] to init IRetrieverRunner instance. Use one of {','.join(OPS)}"
+            msg = (
+                f"Unknown name=[{name}] to init IRetrieverRunner instance. "
+                f"Use one of {','.join(self.OPS)}"
+            )
             logger.error(msg)
             raise ValueError(msg)
 
