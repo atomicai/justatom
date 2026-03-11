@@ -1,9 +1,12 @@
 import abc
+from typing import Any
 
 import polars as pl
 
 
 class IChart(abc.ABC):
+    chart: Any
+
     @abc.abstractmethod
     def view(self, data: pl.DataFrame, **props):
         pass

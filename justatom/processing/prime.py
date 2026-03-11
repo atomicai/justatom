@@ -87,6 +87,7 @@ class EncoderProcessor(IProcessor):
         self.do_lower_case = do_lower_case
         self.content_field = content_field
         self.prefix_field = prefix_field
+        self.prefix = prefix or ""
 
     def dataset_from_dicts(self, dicts, indices=None, return_baskets=False):
         if indices is None:

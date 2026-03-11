@@ -198,11 +198,27 @@ def _iterate_from_raw_samples(
 
 def _iterate_from_frame_batches(
     frame_batches: Iterable[pl.DataFrame],
-    **kwargs,
+    *,
+    content_field: str,
+    labels_field: str,
+    chunk_id_col: str | None,
+    keywords_or_phrases_field: str | None,
+    keywords_nested_col: str | None,
+    explanation_nested_col: str | None,
+    filters: dict | None,
 ) -> Generator[dict[str, Any], None, None]:
     for batch in frame_batches:
         # `batch` is one materialized DataFrame chunk, not the whole dataset.
-        yield from _iterate_from_raw_samples(batch.iter_rows(named=True), **kwargs)
+        yield from _iterate_from_raw_samples(
+            batch.iter_rows(named=True),
+            content_field=content_field,
+            labels_field=labels_field,
+            chunk_id_col=chunk_id_col,
+            keywords_or_phrases_field=keywords_or_phrases_field,
+            keywords_nested_col=keywords_nested_col,
+            explanation_nested_col=explanation_nested_col,
+            filters=filters,
+        )
 
 
 def _frame_batches_from_source(

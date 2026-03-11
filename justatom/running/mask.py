@@ -2,6 +2,7 @@ import abc
 import copy
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import simplejson as json
@@ -19,6 +20,8 @@ class IModelRunner:
     subclasses = {}  # type: dict
 
     config: dict = {}
+    model: ILanguageModel | None = None
+    prediction_heads: list[Any] = []
 
     def __init__(self) -> None:
         super().__init__()

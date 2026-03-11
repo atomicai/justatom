@@ -562,7 +562,7 @@ class WeaviateDocStore(AsyncConstructor):
                 continue
 
             try:
-                reference_uuid_object = await self.__collection.data.insert(
+                await self.__collection.data.insert(
                     uuid=generate_uuid5(doc.id),
                     properties=self._to_data_object(doc),
                     vector=doc.embedding,  # type: ignore
@@ -571,7 +571,7 @@ class WeaviateDocStore(AsyncConstructor):
                 written += 1
             except weaviate.exceptions.UnexpectedStatusCodeError:
                 if policy == DuplicatePolicy.FAIL:
-                    duplicate_errors_ids.append(reference_uuid_object)
+                    duplicate_errors_ids.append(str(doc.id))
         if duplicate_errors_ids:
             msg = f"IDs '{', '.join(duplicate_errors_ids)}' already exist in the document store."
             raise DuplicateDocumentError(msg)
