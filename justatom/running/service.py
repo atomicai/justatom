@@ -9,8 +9,6 @@ from loguru import logger
 
 from justatom.etc.errors import DocumentStoreError
 from justatom.configuring.builtins import load_builtin_yaml
-from justatom.configuring.builtins import load_repo_yaml
-from justatom.configuring.builtins import get_master_ref
 from justatom.modeling.mask import ILanguageModel
 from justatom.processing import ITokenizer, RuntimeProcessor
 from justatom.running.encoders import EncoderRunner
@@ -112,18 +110,7 @@ class RunningService:
     @staticmethod
     @lru_cache(maxsize=1)
     def _embedding_openai_defaults() -> dict[str, Any]:
-        cfg_ref = get_master_ref(
-            "refs",
-            "builtins",
-            "embeddings_config",
-            default="justatom/builtins/configs/embeddings.yaml",
-        )
-        if cfg_ref and cfg_ref.startswith("justatom/builtins/"):
-            cfg = load_builtin_yaml(cfg_ref.replace("justatom/builtins/", "", 1))
-        elif cfg_ref:
-            cfg = load_repo_yaml(cfg_ref)
-        else:
-            cfg = load_builtin_yaml("configs/embeddings.yaml")
+        cfg = load_builtin_yaml("configs/embeddings.yaml")
         openai_cfg = cfg.get("openai_compatible") or {}
         prefixes = openai_cfg.get("prefixes") or {}
         req = openai_cfg.get("request") or {}

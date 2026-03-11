@@ -1,0 +1,42 @@
+dataset:
+  # Optional preset name. If set, loader will try configs/dataset/<id>.yaml.
+  id: null
+  name_or_path: null
+  labels_field: queries
+  content_field: content
+  split: null
+  limit: null
+  chunk_id_col: null
+  keywords_col: null
+  keywords_nested_col: null
+  explanation_nested_col: null
+
+filters:
+  fields: null
+
+model:
+  name: intfloat/multilingual-e5-small
+
+training:
+  loss: contrastive
+  num_samples: 100
+  batch_size: 4
+  max_seq_len: 512
+  n_epochs: 1
+  freeze_encoder: true
+  include_semantic_gamma: true
+  include_keywords_gamma: true
+  activation_fn: sigmoid
+  focal_gamma: 2.0
+  lr_gamma: 0.01
+  lr_encoder: 0.00002
+  weight_decay: 0.01
+
+output:
+  save_dir: null
+  metrics_path: null
+
+logging:
+  backend: csv
+  wandb_project: justatom-gamma
+  wandb_run_name: null

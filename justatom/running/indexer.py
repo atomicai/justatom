@@ -39,6 +39,7 @@ class NNIndexer(IIndexerRunner):
         batch_size: int = 512,
         device: str = None,
         flush_memory_every: int = 32,
+        streaming_preprocessing: bool = False,
         **props,
     ):
         device = device or self.device
@@ -59,6 +60,7 @@ class NNIndexer(IIndexerRunner):
                 dicts=documents_as_dicts,
                 processor=self.processor,
                 batch_size=batch_size,
+                streaming=streaming_preprocessing,
             )
             loader = NamedDataLoader(
                 dataset=dataset,
@@ -108,10 +110,15 @@ class NNIndexer(IIndexerRunner):
         max_parallel_requests: int = 1,
         device: str = None,
         flush_memory_every: int = 10,
+        streaming_preprocessing: bool = False,
         **props,
     ):
         docs_with_embeddings = self._runner(
-            documents, batch_size, device, flush_memory_every
+            documents,
+            batch_size,
+            device,
+            flush_memory_every,
+            streaming_preprocessing=streaming_preprocessing,
         )
         max_parallel_requests = max(1, int(max_parallel_requests))
 

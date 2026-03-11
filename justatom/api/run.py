@@ -9,10 +9,11 @@ from quart_session import Session
 
 from justatom.configuring.prime import Config
 from justatom.etc.filters import check_filters_and_cast
-from justatom.running.igni import IGNIRunner
+from justatom.running.indexer import API as IndexerAPI
+from justatom.running.retriever import API as RetrieverApi
+from justatom.running.service import RunningService
 from justatom.storing.dataset import API as DatasetApi
 from justatom.storing.weaviate import Finder as WeaviateApi
-from justatom.tooling.hardware import initialize_device_settings
 
 app = Quart(
     __name__,
@@ -47,9 +48,14 @@ async def serve():
 
     client = RabbitMQClient(settings, client_name=CLIENT_NAME)
 
-    server = await IGNIRunner.SERVER()
+    def server(message: str, metadata: dict):
+        logger.info(
+            f"MQ callback received message with metadata keys={list(metadata.keys())}"
+        )
 
-    app.run_and_serve = asio.get_event_loop().create_task(client.consume_with_callback(callback=server, routing_key=CLIENT_NAME))
+    app.run_and_serve = asio.get_event_loop().create_task(
+        client.consume_with_callback(callback=server, routing_key=CLIENT_NAME)
+    )
 
 
 @app.after_serving
@@ -85,20 +91,40 @@ async def search():
         data.get("top_p", None),
         data.get("alpha", None),
     )
-    session["searching"] = query  # TODO: wrap around with meta fields and prepare for logging
-    if top_p is not None and search_by not in {"fusion", "atomic"}:
-        msg = f"You provided `top_p`=[{top_p}] but `search_by`=[{search_by}]. Please use one of {','.join(['fusion', 'atomic'])}"
+    session["searching"] = (
+        query  # TODO: wrap around with meta fields and prepare for logging
+    )
+    if top_p is not None and search_by != "gamma-hybrid":
+        msg = (
+            f"You provided `top_p`=[{top_p}] but `search_by`=[{search_by}]. "
+            "Please use `gamma-hybrid` for top-p retrieval"
+        )
         logger.error(msg)
         return json.dumps({"msg": msg})
     filters = check_filters_and_cast(filter_by)
-    store = WeaviateApi.find(
-        collection_name, WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"), WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT"))
+    store = await WeaviateApi.find(
+        collection_name,
+        WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),
+        WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT")),
     )
-    device, _ = initialize_device_settings(use_gpus=Config.api.use_gpus, **Config.api.gpu_props)
+    device = RunningService.maybe_cuda_or_mps(
+        devices=(Config.api.gpu_props or {}).get("devices", ["cuda", "mps", "cpu"])
+    )
     logger.info(f"/SEARCHING collection=[{collection_name}] device=[{device}]")
-    retriever = await IGNIRunner.RETRIEVER(store=store, search_by=search_by, device=device)
-    response = retriever.retrieve_topk(queries=[query], top_k=top_k, top_p=top_p, alpha=alpha, filters=filters)[0]
-    return json.dumps({"docs": [d.to_dict(uuid_to_str=True) for d in response]}, ensure_ascii=False).encode("utf-8")
+    _, retriever = RunningService.igni_runners(
+        store=store,
+        search_pipeline=search_by,
+        model_name_or_path=Config.api.model_name_or_path,
+        device=device,
+        top_p=top_p,
+        alpha=alpha,
+    )
+    response = await retriever.retrieve_topk(
+        queries=query, top_k=top_k, top_p=top_p, alpha=alpha, filters=filters
+    )
+    return json.dumps(
+        {"docs": [d.to_dict(uuid_to_str=True) for d in response]}, ensure_ascii=False
+    ).encode("utf-8")
 
 
 @app.post("/indexing")
@@ -125,16 +151,24 @@ async def index():
             for di in dataset_name_or_docs
         ]
     )
-    store = WeaviateApi.find(
-        collection_name, WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"), WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT"))
+    store = await WeaviateApi.find(
+        collection_name,
+        WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),
+        WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT")),
     )
-    device, _ = initialize_device_settings(use_gpus=Config.api.use_gpus, **Config.api.gpu_props)
+    device = RunningService.maybe_cuda_or_mps(
+        devices=(Config.api.gpu_props or {}).get("devices", ["cuda", "mps", "cpu"])
+    )
     logger.info(f"/INDEXING collection=[{collection_name}] device=[{device}]")
-    indexer = await IGNIRunner.INDEXER(store=store, index_by=index_by, device=device)
+    indexer = IndexerAPI.named(
+        index_by,
+        store=store,
+        device=device,
+    )
 
     await indexer.index(docs, batch_size=int(batch_size))
 
-    return json.dumps({"total_docs": indexer.store.count_documents()})
+    return json.dumps({"total_docs": await indexer.store.count_documents()})
 
 
 @app.post("/delete")
@@ -144,14 +178,18 @@ async def delete():
     data = json.loads(data)
 
     collection_name = data.get("collection_name", None)
-    assert collection_name is not None, logger.error("/DELETE | `collection_name` is not specified")
-
-    store = WeaviateApi.find(
-        collection_name, WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"), WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT"))
+    assert collection_name is not None, logger.error(
+        "/DELETE | `collection_name` is not specified"
     )
 
-    total_docs = store.count_documents()
-    store.delete_all_documents()
+    store = await WeaviateApi.find(
+        collection_name,
+        WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),
+        WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT")),
+    )
+
+    total_docs = await store.count_documents()
+    await store.delete_all_documents()
 
     return json.dumps({"deleted_docs": total_docs})
 
@@ -165,14 +203,43 @@ async def patch():
     data = json.loads(data)
 
     collection_name = data.get("collection_name", None)
-    assert collection_name is not None, logger.error("/PATCHING | `collection_name` to delete is not specified")
+    assert collection_name is not None, logger.error(
+        "/PATCHING | `collection_name` to delete is not specified"
+    )
     new_collection_name = data.get("new_collection_name", None)
-    assert new_collection_name is not None, logger.error("/PATCHING | `new_collection_name` to create is not specified")
+    assert new_collection_name is not None, logger.error(
+        "/PATCHING | `new_collection_name` to create is not specified"
+    )
 
     keep_previous_collection = data.get("keep_previous_collection", True)
     batch_size = data.get("batch_size", 256)
-    patcher = await IGNIRunner.PATCHER(collection_name=collection_name, new_collection_name=new_collection_name)
-    response, status = await patcher.patch(batch_size=batch_size, keep_previous_collection=keep_previous_collection)
+    source_store = await WeaviateApi.find(
+        collection_name,
+        WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),
+        WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT")),
+    )
+    target_store = await WeaviateApi.find(
+        new_collection_name,
+        WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),
+        WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT")),
+    )
+
+    docs = [
+        source_store._to_document(doc)
+        async for doc in source_store.get_all_documents(include_vector=True)
+    ]
+    n_written = await target_store.write_documents(docs, batch_size=int(batch_size))
+
+    if not keep_previous_collection:
+        await source_store.delete_collection()
+
+    response = {
+        "from_collection": collection_name,
+        "to_collection": new_collection_name,
+        "copied_docs": n_written,
+        "keep_previous_collection": keep_previous_collection,
+    }
+    status = True
 
     return json.dumps(response)
 
@@ -183,17 +250,34 @@ async def deletebyids():
     data = data.decode("utf-8")
     data = json.loads(data)
     collection_name = data.get("collection_name", None)
-    assert collection_name is not None, logger.error("/DELETEBYIDS | `collection_name` is not specified")
+    assert collection_name is not None, logger.error(
+        "/DELETEBYIDS | `collection_name` is not specified"
+    )
     document_ids = data.get("document_ids", None)
-    assert document_ids is not None, logger.error("/DELETEBYIDS | `document_ids` are not specified")
+    assert document_ids is not None, logger.error(
+        "/DELETEBYIDS | `document_ids` are not specified"
+    )
 
-    store = WeaviateApi.find(collection_name)
-    js_existed_documents = list(store.get_document_by_ids(document_ids=document_ids, include_vector=False))
+    store = await WeaviateApi.find(collection_name)
+    js_existed_documents = [
+        doc
+        async for doc in store.get_all_documents_by_ids(
+            document_ids=document_ids,
+            include_vector=False,
+        )
+    ]
     logger.info(f"/DELETEBYIDS | Found K=[{len(js_existed_documents)}]")
-    is_ok: bool = store.delete_documents(document_ids=document_ids)
+    await store.delete_documents(document_ids=document_ids)
+    is_ok: bool = True
 
     return json.dumps(
-        {"deleted_docs": [js_doc.to_dict(uuid_to_str=True) for js_doc in js_existed_documents], "status": is_ok}, ensure_ascii=False
+        {
+            "deleted_docs": [
+                js_doc.to_dict(uuid_to_str=True) for js_doc in js_existed_documents
+            ],
+            "status": is_ok,
+        },
+        ensure_ascii=False,
     ).encode("utf-8")
 
 
@@ -204,15 +288,26 @@ async def findbyids():
     data = json.loads(data)
 
     collection_name = data.get("collection_name", None)
-    assert collection_name is not None, logger.error("/FINDBYIDS | `collection_name` is not specified")
+    assert collection_name is not None, logger.error(
+        "/FINDBYIDS | `collection_name` is not specified"
+    )
     document_ids = data.get("document_ids", None)
     assert document_ids is not None, "/FINDBYIDS | `document_ids` are not specified"
     include_vector = data.get("include_vector", False)
 
-    store = WeaviateApi.find(collection_name)
-    response = list(store.get_document_by_ids(document_ids=document_ids, include_vector=include_vector))
+    store = await WeaviateApi.find(collection_name)
+    response = [
+        doc
+        async for doc in store.get_all_documents_by_ids(
+            document_ids=document_ids,
+            include_vector=include_vector,
+        )
+    ]
 
-    return json.dumps({"found_docs": [d.to_dict(uuid_to_str=True) for d in response]}, ensure_ascii=False).encode("utf-8")
+    return json.dumps(
+        {"found_docs": [d.to_dict(uuid_to_str=True) for d in response]},
+        ensure_ascii=False,
+    ).encode("utf-8")
 
 
 @app.post("/find")
@@ -224,9 +319,12 @@ async def find():
     collection_name = data.get("collection_name", None)
     include_vector = data.get("include_vector", None) or False
     assert collection_name is not None, "Collection is not specified."
-    store = WeaviateApi.find(collection_name)
+    store = await WeaviateApi.find(collection_name)
 
-    result = [store._to_document(doc).to_dict(uuid_to_str=True) for doc in store.get_all_documents(include_vector=include_vector)]
+    result = [
+        store._to_document(doc).to_dict(uuid_to_str=True)
+        async for doc in store.get_all_documents(include_vector=include_vector)
+    ]
     return json.dumps({"found_docs": result}, ensure_ascii=False).encode("utf-8")
 
 

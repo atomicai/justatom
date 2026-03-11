@@ -1,0 +1,16 @@
+openai_compatible:
+  prefixes:
+    # Turn on/off client-side prefix injection for query/passage style models (E5/BGE-like).
+    enabled: ${EMBEDDING_PREFIX_ENABLED}
+    query: ${EMBEDDING_QUERY_PREFIX}
+    passage: ${EMBEDDING_PASSAGE_PREFIX}
+    # One of: raw | query | passage
+    default_input_type: ${EMBEDDING_DEFAULT_INPUT_TYPE}
+    # Avoid double-prefixing when text already starts with the configured prefix.
+    skip_if_present: ${EMBEDDING_PREFIX_SKIP_IF_PRESENT}
+
+  request:
+    # Optional default request knobs for OpenAI-compatible /embeddings calls.
+    pooling: ${EMBEDDING_OPENAI_POOLING}
+    encoding_format: ${EMBEDDING_ENCODING_FORMAT}
+    max_seq_len: ${EMBEDDING_MAX_SEQ_LEN}

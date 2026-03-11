@@ -131,6 +131,7 @@ class GammaHybridRetriever(IRetrieverRunner):
         gamma1: float | None = None,
         gamma2: float | None = None,
         max_parallel_requests: int = 128,
+        streaming_preprocessing: bool = False,
         **props,
     ):
         alpha = self.alpha if alpha is None else alpha
@@ -175,7 +176,10 @@ class GammaHybridRetriever(IRetrieverRunner):
             for q in queries
         ]
         dataset, tensor_names = igniset(
-            js_queries, processor=self.processor, batch_size=batch_size
+            js_queries,
+            processor=self.processor,
+            batch_size=batch_size,
+            streaming=streaming_preprocessing,
         )
         loader = NamedDataLoader(
             dataset, tensor_names=tensor_names, batch_size=batch_size
@@ -294,6 +298,7 @@ class HybridRetriever(IRetrieverRunner):
         include_scores: bool = False,
         batch_size: int = 16,
         filters: dict | None = None,
+        streaming_preprocessing: bool = False,
         **props,
     ):
         alpha = self.alpha if alpha is None else alpha
@@ -309,7 +314,10 @@ class HybridRetriever(IRetrieverRunner):
             for q in queries
         ]
         dataset, tensor_names = igniset(
-            js_queries, processor=self.processor, batch_size=batch_size
+            js_queries,
+            processor=self.processor,
+            batch_size=batch_size,
+            streaming=streaming_preprocessing,
         )
         loader = NamedDataLoader(
             dataset, tensor_names=tensor_names, batch_size=batch_size
@@ -373,6 +381,7 @@ class EmbeddingRetriever(IRetrieverRunner):
         batch_size: int = 16,
         filters: dict | None = None,
         keywords: list[str] | None = None,
+        streaming_preprocessing: bool = False,
         **props,
     ):
         prefix = self.prefix if prefix is None else prefix
@@ -387,7 +396,10 @@ class EmbeddingRetriever(IRetrieverRunner):
             for q in queries
         ]
         dataset, tensor_names = igniset(
-            js_queries, processor=self.processor, batch_size=batch_size
+            js_queries,
+            processor=self.processor,
+            batch_size=batch_size,
+            streaming=streaming_preprocessing,
         )
         loader = NamedDataLoader(
             dataset, tensor_names=tensor_names, batch_size=batch_size

@@ -1,5 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 requires-python = ">=3.10"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["justatom*"]
+
+[tool.setuptools.package-data]
+justatom = [
+  "builtins/**/*.txt",
+  "builtins/**/*.yaml",
+  "builtins/**/*.jsonl",
+]
 
 [tool.pytest.ini_options]
 pythonpath = [
@@ -11,3 +28,13 @@ testpaths = [
 markers = [
   "integration: tests that require external services (e.g. Weaviate/Docker)",
 ]
+
+[tool.black]
+line-length = 132
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 132
+py_version = 310
+src_paths = ["justatom", "tests", "scripts"]

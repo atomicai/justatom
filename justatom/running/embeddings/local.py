@@ -42,12 +42,18 @@ class LocalEmbeddingClient(IEmbeddingClient):
         ).eval()
 
     @torch.no_grad()
-    def _embed_sync(self, texts: list[str]) -> list[list[float]]:
+    def _embed_sync(
+        self,
+        texts: list[str],
+        *,
+        streaming_preprocessing: bool = False,
+    ) -> list[list[float]]:
         rows = [{"content": t} for t in texts]
         dataset, tensor_names = igniset(
             dicts=rows,
             processor=self.processor,
             batch_size=self.batch_size,
+            streaming=streaming_preprocessing,
         )
         loader = NamedDataLoader(
             dataset=dataset,
@@ -66,9 +72,14 @@ class LocalEmbeddingClient(IEmbeddingClient):
         self,
         texts: list[str],
         model: str | None = None,
+        streaming_preprocessing: bool = False,
         **props,
     ) -> list[list[float]]:
         del model, props
         if len(texts) == 0:
             return []
-        return await asio.to_thread(self._embed_sync, texts)
+        return await asio.to_thread(
+            self._embed_sync,
+            texts,
+            streaming_preprocessing=streaming_preprocessing,
+        )
