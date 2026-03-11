@@ -1,0 +1,48 @@
+collection:
+  name: Document
+
+dataset:
+  id: null
+  config_path: null
+  name_or_path: null
+  labels_field: null
+  content_field: content
+  split: null
+  limit: null
+  chunk_id_col: null
+  keywords_col: null
+  keywords_nested_col: null
+  explanation_nested_col: null
+
+output:
+  save_results_to_dir: null
+
+search:
+  pipeline: embedding
+  top_k: 20
+  batch_size: 32
+
+index:
+  batch_size: 4
+  flush_collection: false
+
+model:
+  name: null
+  query_prefix: null
+  content_prefix: null
+
+metrics:
+  names: null
+  top_k:
+    - HitRate
+  eval_top_k: null
+
+filters:
+  fields: null
+
+weaviate:
+  host: null
+  port: null
+
+props:
+  alpha: null

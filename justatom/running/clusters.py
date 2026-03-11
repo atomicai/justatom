@@ -1,3 +1,5 @@
+import asyncio as asio
+import threading
 from collections.abc import Iterator
 
 import numpy as np
@@ -12,6 +14,7 @@ from justatom.modeling.mask import ILanguageModel
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.mask import IProcessor
 from justatom.processing.silo import igniset
+from justatom.running.embeddings.base import IEmbeddingClient
 from justatom.running.mask import IClusteringRunner, IDimReducer, IDocEmbedder
 
 
@@ -37,6 +40,7 @@ class DocEmbedder(IDocEmbedder):
         truncation: bool = True,
         normalize_embeddings: bool = True,
         verbose: bool = False,
+        streaming_preprocessing: bool = False,
         **kwargs,
     ) -> Iterator[np.ndarray]:
 
@@ -46,6 +50,7 @@ class DocEmbedder(IDocEmbedder):
             texts,
             processor=self.processor,
             batch_size=batch_size,
+            streaming=streaming_preprocessing,
         )
 
         loader = NamedDataLoader(
@@ -91,6 +96,46 @@ class IHFWrapperBackend(BaseEmbedder):
         return embeddings
 
 
+class IEmbeddingClientBackend(BaseEmbedder):
+    def __init__(self, client: IEmbeddingClient, **embed_props):
+        super().__init__()
+        self.client = client
+        self.embed_props = dict(embed_props)
+
+    @staticmethod
+    def _run_async(coro):
+        try:
+            asio.get_running_loop()
+        except RuntimeError:
+            return asio.run(coro)
+
+        result: dict[str, object] = {}
+        error: dict[str, BaseException] = {}
+
+        def _runner() -> None:
+            try:
+                result["value"] = asio.run(coro)
+            except BaseException as ex:  # pragma: no cover - passthrough wrapper
+                error["value"] = ex
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join()
+
+        if "value" in error:
+            raise error["value"]
+        return result.get("value", [])
+
+    def embed(self, documents: list[str], verbose: bool = False) -> np.ndarray:
+        del verbose
+        vectors = self._run_async(
+            self.client.embed(texts=documents, **self.embed_props)
+        )
+        if len(vectors) == 0:
+            return np.empty((0, 0))
+        return np.asarray(vectors, dtype=np.float32)
+
+
 class IBTRunner(IClusteringRunner):
     """BERTopic class"""
 
@@ -122,4 +167,4 @@ class IUMAPDimReducer(IDimReducer):
         return embs  # type: ignore
 
 
-__all__ = ["IBTRunner", "IHFWrapperBackend"]
+__all__ = ["IBTRunner", "IHFWrapperBackend", "IEmbeddingClientBackend"]

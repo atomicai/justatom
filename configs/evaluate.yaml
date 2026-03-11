@@ -1,0 +1,54 @@
+collection:
+  name: Document
+
+dataset:
+  # Optional preset name. If set, loader will try configs/dataset/<id>.yaml.
+  id: null
+  name_or_path: null
+  labels_field: null
+  content_field: content
+  split: null
+  limit: null
+  chunk_id_col: null
+  keywords_col: null
+  keywords_nested_col: null
+  explanation_nested_col: null
+
+output:
+  save_results_to_dir: evals
+
+search:
+  pipeline: embedding
+  top_k: 20
+  batch_size: 32
+
+index:
+  batch_size: 4
+  flush_collection: false
+
+model:
+  name: null
+  query_prefix: null
+  content_prefix: null
+
+metrics:
+  names: null
+  top_k:
+    - HitRate
+    - mrr
+    - map
+    - ndcg
+  eval_top_k:
+    - 1
+    - 5
+    - 10
+
+filters:
+  fields: null
+
+weaviate:
+  host: null
+  port: null
+
+props:
+  alpha: null

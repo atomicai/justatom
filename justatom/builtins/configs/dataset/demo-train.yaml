@@ -1,0 +1,9 @@
+name_or_path: builtin://datasets/demo_retrieval.jsonl
+labels_field: queries
+content_field: content
+split: null
+limit: null
+chunk_id_col: chunk_id
+keywords_col: keywords
+keywords_nested_col: keyword_or_phrase
+explanation_nested_col: explanation

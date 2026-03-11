@@ -1,0 +1,5 @@
+name_or_path: hf://MLNavigator/russian-retrieval
+labels_field: q
+content_field: text
+split: train
+limit: null

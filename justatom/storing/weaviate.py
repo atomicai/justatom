@@ -55,6 +55,16 @@ DEFAULT_INVERTED_INDEX_CONFIG = {"bm25": {"b": 0.75, "k1": 1.2}}
 DEFAULT_VECTOR_INDEX_CONFIG = {"vectorIndexConfig": {"distance": "dot"}}
 
 DEFAULT_QUERY_LIMIT = 9999
+DEFAULT_WEAVIATE_HOST = "localhost"
+DEFAULT_WEAVIATE_PORT = 2211
+DEFAULT_WEAVIATE_GRPC_PORT = 50051
+
+
+def _to_documents_per_query(results: list[Any], converter) -> list[list[Document]]:
+    response: list[list[Document]] = []
+    for res in results:
+        response.append([converter(doc) for doc in res.objects])
+    return response
 
 
 class WeaviateDocStore(AsyncConstructor):
@@ -207,25 +217,89 @@ class WeaviateDocStore(AsyncConstructor):
             additional_config=additional_config,
         )
 
+    @staticmethod
+    def _normalize_host(value: Any, default: str = DEFAULT_WEAVIATE_HOST) -> str:
+        if value is None:
+            return default
+        host = str(value).strip()
+        if host == "":
+            return default
+        if host.lower() in {"none", "null"}:
+            return default
+        if host.startswith("${") and host.endswith("}"):
+            return default
+        return host
+
+    @staticmethod
+    def _normalize_port(
+        value: Any,
+        *,
+        default: int,
+        setting_name: str,
+    ) -> int:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped == "":
+                return default
+            if stripped.lower() in {"none", "null"}:
+                return default
+            if stripped.startswith("${") and stripped.endswith("}"):
+                return default
+            value = stripped
+
+        try:
+            port = int(value)
+        except (TypeError, ValueError) as exc:
+            raise DocumentStoreError(
+                f"Invalid {setting_name}={value!r}. Expected a positive integer port."
+            ) from exc
+
+        if port <= 0:
+            raise DocumentStoreError(
+                f"Invalid {setting_name}={value!r}. Expected a positive integer port."
+            )
+
+        return port
+
     @classmethod
     async def connect(cls, collection_schema_name: str, **kwargs):
-        WEAVIATE_HOST = (
-            kwargs.get("WEAVIATE_HOST")
-            or os.environ.get("WEAVIATE_HOST")
-            or "localhost"
+        weaviate_host = cls._normalize_host(
+            kwargs.get("WEAVIATE_HOST") or os.environ.get("WEAVIATE_HOST"),
+            default=DEFAULT_WEAVIATE_HOST,
         )
-        WEAVIATE_PORT = kwargs.get("WEAVIATE_PORT") or os.environ.get("WEAVIATE_PORT")
-        WEAVIATE_GRPC_PORT = (
-            kwargs.get("WEAVIATE_GRPC_PORT")
-            or os.environ.get("WEAVIATE_GRPC_PORT")
-            or "50051"
+        weaviate_port = cls._normalize_port(
+            kwargs.get("WEAVIATE_PORT") or os.environ.get("WEAVIATE_PORT"),
+            default=DEFAULT_WEAVIATE_PORT,
+            setting_name="WEAVIATE_PORT",
+        )
+        weaviate_grpc_port = cls._normalize_port(
+            kwargs.get("WEAVIATE_GRPC_PORT") or os.environ.get("WEAVIATE_GRPC_PORT"),
+            default=DEFAULT_WEAVIATE_GRPC_PORT,
+            setting_name="WEAVIATE_GRPC_PORT",
         )
         logger.info(f"FINDER | collection_schema_name=[{collection_schema_name}]")
-        store = await cls(
-            collection_schema_name=collection_schema_name,
-            url=f"http://{WEAVIATE_HOST}:{WEAVIATE_PORT}",
-            grpc_port=int(WEAVIATE_GRPC_PORT),  # type: ignore
-        )
+        url = f"http://{weaviate_host}:{weaviate_port}"
+        try:
+            store = await cls(
+                collection_schema_name=collection_schema_name,
+                url=url,
+                grpc_port=weaviate_grpc_port,
+            )
+        except Exception as exc:
+            logger.warning(
+                "WEAVIATE | connection failed for url=[{}] grpc_port=[{}] collection=[{}]",
+                url,
+                weaviate_grpc_port,
+                collection_schema_name,
+            )
+            raise DocumentStoreError(
+                "Failed to connect to Weaviate at "
+                f"{url} (grpc_port={weaviate_grpc_port}) for collection "
+                f"{collection_schema_name!r}. Check `weaviate.host`, `weaviate.port`, "
+                "`WEAVIATE_HOST`, `WEAVIATE_PORT`, and whether Weaviate is running."
+            ) from exc
         return store
 
     async def _ensure_async_connection(self) -> None:
@@ -630,7 +704,7 @@ class WeaviateDocStore(AsyncConstructor):
         keywords: list | None = None,
         top_k: int | None = None,
         include_vector: bool | None = False,
-    ) -> list[Document]:
+    ) -> list[list[Document]]:
         # properties = [p.name for p in self._collection.config.get().properties]
         logger.info(
             f"SEARCH | algo=[BM25] | collection_name=[{self.__collection.name}]"
@@ -674,7 +748,7 @@ class WeaviateDocStore(AsyncConstructor):
             msg = f"You specified {str(policy)} that is not compatable with [search_by_keywords]. Only [BM25] is avalaible"
             logger.error(msg)
             raise ValueError(msg)
-        response = [self._to_document(doc) for res in result for doc in res.objects]
+        response = _to_documents_per_query(result, self._to_document)
         return response
 
     async def search(
@@ -688,7 +762,7 @@ class WeaviateDocStore(AsyncConstructor):
         top_k: int | None = None,
         return_metadata: list[str] | None = None,
         include_vector: bool | None = False,
-    ) -> list[Document]:
+    ) -> list[list[Document]]:
         """
         This method assumes the hybrid search with one of the present `ranking` methods out there.
         """
@@ -738,7 +812,7 @@ class WeaviateDocStore(AsyncConstructor):
                 )
             ]
             result = await asio.gather(*parallel_workers)
-        response = [self._to_document(doc) for res in result for doc in res.objects]
+        response = _to_documents_per_query(result, self._to_document)
         return response
 
     async def search_by_embedding(
@@ -751,7 +825,7 @@ class WeaviateDocStore(AsyncConstructor):
         certainty: float | None = None,
         return_metadata: list[str] | None = None,
         include_vector: bool | None = False,
-    ) -> list[Document]:
+    ) -> list[list[Document]]:
         if distance is not None and certainty is not None:
             msg = "Can't use 'distance' and 'certainty' parameters together"
             raise ValueError(msg)
@@ -790,7 +864,7 @@ class WeaviateDocStore(AsyncConstructor):
                 for query_embedding in queries_embeddings
             ]
             result = await asio.gather(*parallel_workers)
-        response = [self._to_document(doc) for res in result for doc in res.objects]
+        response = _to_documents_per_query(result, self._to_document)
         return response
 
 

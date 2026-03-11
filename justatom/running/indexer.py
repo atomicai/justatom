@@ -1,3 +1,4 @@
+import asyncio as asio
 import torch
 from collections.abc import Iterable
 from loguru import logger
@@ -32,12 +33,13 @@ class NNIndexer(IIndexerRunner):
             )
         self.runner.to(device)
 
-    def _pipeline(
+    def _runner(
         self,
         documents: Iterable[dict | Document],
         batch_size: int = 512,
         device: str = None,
         flush_memory_every: int = 32,
+        streaming_preprocessing: bool = False,
         **props,
     ):
         device = device or self.device
@@ -58,6 +60,7 @@ class NNIndexer(IIndexerRunner):
                 dicts=documents_as_dicts,
                 processor=self.processor,
                 batch_size=batch_size,
+                streaming=streaming_preprocessing,
             )
             loader = NamedDataLoader(
                 dataset=dataset,
@@ -80,36 +83,74 @@ class NNIndexer(IIndexerRunner):
                         torch.cuda.empty_cache()
                 yield docs
 
+    async def _write_batch(
+        self,
+        batch_idx: int,
+        docs_with_embeddings_batch: list[dict],
+        batch_size_per_request: int,
+    ) -> int:
+        try:
+            return await self.store.write_documents(
+                [Document.from_dict(doc) for doc in docs_with_embeddings_batch],
+                batch_size=batch_size_per_request,
+            )
+        except DocumentStoreError as error:
+            msg = (
+                f"{self.__class__.__name__} error writing docs on batch_idx={batch_idx}. "
+                f"batch_size={len(docs_with_embeddings_batch)}"
+            )
+            raise DocumentStoreError(msg) from error
+
     @torch.no_grad()
     async def index(
         self,
         documents: Iterable[dict | Document],
         batch_size: int = 512,
         batch_size_per_request: int = 64,
+        max_parallel_requests: int = 1,
         device: str = None,
         flush_memory_every: int = 10,
+        streaming_preprocessing: bool = False,
         **props,
     ):
-        docs_with_embeddings = self._pipeline(
-            documents, batch_size, device, flush_memory_every
+        docs_with_embeddings = self._runner(
+            documents,
+            batch_size,
+            device,
+            flush_memory_every,
+            streaming_preprocessing=streaming_preprocessing,
         )
+        max_parallel_requests = max(1, int(max_parallel_requests))
+
         n_total_written_docs: int = 0
+        pending: set[asio.Task] = set()
+
         for batch_idx, docs_with_embeddings_batch in tqdm_asyncio(
             enumerate(docs_with_embeddings)
         ):
-            try:
-                cur_written_docs = await self.store.write_documents(
-                    [Document.from_dict(doc) for doc in docs_with_embeddings_batch],
-                    batch_size=batch_size_per_request,
+            pending.add(
+                asio.create_task(
+                    self._write_batch(
+                        batch_idx=batch_idx,
+                        docs_with_embeddings_batch=docs_with_embeddings_batch,
+                        batch_size_per_request=batch_size_per_request,
+                    )
                 )
-            except DocumentStoreError as error:
-                raise Exception from error(
-                    f"""
-                    {self.__class__.__name__} Error writing docs on batch_idx {batch_idx}. Total written docs {n_total_written_docs}
-                    """
+            )
+
+            if len(pending) >= max_parallel_requests:
+                done, pending = await asio.wait(
+                    pending,
+                    return_when=asio.FIRST_COMPLETED,
                 )
-            else:
-                n_total_written_docs += cur_written_docs
+                for task in done:
+                    n_total_written_docs += task.result()
+
+        if pending:
+            done, _ = await asio.wait(pending)
+            for task in done:
+                n_total_written_docs += task.result()
+
         return n_total_written_docs
 
 
@@ -151,7 +192,7 @@ class KWARGIndexer(IIndexerRunner):
 
 class ByName:
 
-    OPS = ["keywords", "emebedding", "hybrid", "gamma-hybrid"]
+    OPS = ["keywords", "embedding", "hybrid", "gamma-hybrid"]
 
     def named(self, name: str, **kwargs):
 
@@ -160,7 +201,10 @@ class ByName:
         elif name in ["embedding", "hybrid", "gamma-hybrid"]:
             klass = NNIndexer
         else:
-            msg = f"Unknown name=[{name}] to init IIndexerRunner instance. Use one of {', '.join(OPS)}"
+            msg = (
+                f"Unknown name=[{name}] to init IIndexerRunner instance. "
+                f"Use one of {', '.join(self.OPS)}"
+            )
             logger.error(msg)
             raise ValueError(msg)
 
