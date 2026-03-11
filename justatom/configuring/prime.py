@@ -146,6 +146,9 @@ def _build_config_tree(data: dict[str, Any] | None = None) -> ConfigNode:
 
 @singleton
 class IConfig:
+    loguru: ConfigNode
+    api: ConfigNode
+    train: ConfigNode
 
     def __init__(self):
         config = _build_config_tree()

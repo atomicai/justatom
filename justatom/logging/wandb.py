@@ -4,7 +4,6 @@ import pickle
 import numpy as np
 from loguru import logger
 
-from justatom.configuring import Config
 from justatom.etc.lazy_imports import LazyImport
 from justatom.logging.mask import ILogger
 
@@ -168,6 +167,8 @@ class WandbLogger(ILogger):
         elif scope == "epoch":
             log_path = "_".join([tag, f"epoch-{runner.epoch_step:04d}"])
         elif scope == "experiment" or scope is None:
+            log_path = tag
+        else:
             log_path = tag
 
         step = runner.sample_step if self.log_batch_metrics else runner.epoch_step

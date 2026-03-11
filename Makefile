@@ -16,6 +16,12 @@ format-check:
 	black --check --diff $$PY_FILES; \
 	isort --check-only --diff $$PY_FILES
 
+docs-serve:
+	python -m mkdocs serve
+
+docs-build:
+	python -m mkdocs build --strict
+
 fix-format-noqa:
 	@$(MAKE) fix-format
 	-ruff check --add-noqa

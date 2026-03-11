@@ -171,7 +171,7 @@ class KWARGIndexer(IIndexerRunner):
                 cur_written_docs = await self.store.write_documents(
                     [
                         (
-                            Document.from_dict(content=doc)
+                            Document(content=doc)
                             if isinstance(doc, str)
                             else Document.from_dict(doc)
                         )
@@ -180,11 +180,10 @@ class KWARGIndexer(IIndexerRunner):
                     batch_size=batch_size_per_request,
                 )
             except DocumentStoreError as error:
-                raise Exception from error(
-                    f"""
-                    {self.__class__.__name__} Error writing docs on batch_idx {batch_idx}. Total written docs {n_total_written_docs}
-                    """
-                )
+                raise Exception(
+                    f"{self.__class__.__name__} error writing docs on batch_idx {batch_idx}. "
+                    f"Total written docs {n_total_written_docs}"
+                ) from error
             else:
                 n_total_written_docs += cur_written_docs
         return n_total_written_docs

@@ -5,8 +5,8 @@ from typing import Any
 
 import simplejson as json
 import torch
-import torch.functional as F
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def _get_clones(module, N):
@@ -14,7 +14,11 @@ def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
-def loss_per_head_sum(loss_per_head: list[torch.Tensor], global_step: int | None = None, batch: dict | None = None):
+def loss_per_head_sum(
+    loss_per_head: list[torch.Tensor],
+    global_step: int | None = None,
+    batch: dict | None = None,
+):
     """
     Sums up the loss of each prediction head.
 
@@ -111,7 +115,9 @@ class IEmbedding(nn.Module):
     @classmethod
     def load(cls, pretrained_model_name_or_path, **kwargs):
         _path = Path(pretrained_model_name_or_path) / "embedding"
-        assert _path.exists(), f"Path doesn't exists. Please double-check the path {str(pretrained_model_name_or_path)}"
+        assert (
+            _path.exists()
+        ), f"Path doesn't exists. Please double-check the path {str(pretrained_model_name_or_path)}"
         farm_config = Path(_path) / "embedding_config.json"
         farm_model = Path(_path) / "embedding_model.bin"
         _model = None
@@ -119,7 +125,11 @@ class IEmbedding(nn.Module):
             with open(str(farm_config)) as fin:
                 config = json.load(fin)
             # vocab_size, embedding_dim = config["vocab_size"], config["embedding_dim"]
-            props = {k: config[k] for k in inspect.signature(cls.__init__).parameters.keys() if k in cls.props}  # noqa: SIM118
+            props = {
+                k: config[k]
+                for k in inspect.signature(cls.__init__).parameters.keys()
+                if k in cls.props
+            }  # noqa: SIM118
             _model = cls(**props)
             _model.load_state_dict(torch.load(str(farm_model)))
         else:
@@ -193,10 +203,16 @@ class AttentionHead(nn.Module):
         self.v = nn.Linear(dim_inp, dim_out)
 
     def forward(self, input_tensor: torch.Tensor, attention_mask: torch.Tensor = None):
-        query, key, value = self.q(input_tensor), self.k(input_tensor), self.v(input_tensor)
+        query, key, value = (
+            self.q(input_tensor),
+            self.k(input_tensor),
+            self.v(input_tensor),
+        )
 
         scale = query.size(1) ** 0.5
-        scores = torch.bmm(query, key.transpose(1, 2)) / scale  # batch_size x max_seq_len  x max_seq_len
+        scores = (
+            torch.bmm(query, key.transpose(1, 2)) / scale
+        )  # batch_size x max_seq_len  x max_seq_len
         # TODO:
         # Чтобы веса аттеншена не распределялись на паддинг - надо эти паддинги сделать нулевыми (перед софтмаксом).
         # Но attention_mask приходит в нативной форме. batch_size x max_seq_len.
@@ -212,7 +228,9 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, num_heads, dim_inp, dim_out):
         super(MultiHeadAttention, self).__init__()  # noqa: UP008
 
-        self.heads = nn.ModuleList([AttentionHead(dim_inp, dim_out) for _ in range(num_heads)])
+        self.heads = nn.ModuleList(
+            [AttentionHead(dim_inp, dim_out) for _ in range(num_heads)]
+        )
         self.linear = nn.Linear(dim_out * num_heads, dim_inp)
         self.norm = nn.LayerNorm(dim_inp)
 
@@ -226,7 +244,9 @@ class MultiHeadAttention(nn.Module):
 class IAttention(nn.Module):
     props = ("embedding_dim", "dim_out", "attention_heads", "dropout")
 
-    def __init__(self, embedding_dim, dim_out, attention_heads=4, dropout=0.1, **kwargs):
+    def __init__(
+        self, embedding_dim, dim_out, attention_heads=4, dropout=0.1, **kwargs
+    ):
         super(IAttention, self).__init__()  # noqa: UP008
         self.config = dict(
             attention_heads=attention_heads,
@@ -235,7 +255,9 @@ class IAttention(nn.Module):
             dropout=dropout,
         )
 
-        self.attention = MultiHeadAttention(attention_heads, embedding_dim, dim_out)  # batch_size x max_seq_len x embedding_size
+        self.attention = MultiHeadAttention(
+            attention_heads, embedding_dim, dim_out
+        )  # batch_size x max_seq_len x embedding_size
         self.feed_forward = nn.Sequential(
             nn.Linear(embedding_dim, dim_out),
             nn.Dropout(dropout),
@@ -248,14 +270,20 @@ class IAttention(nn.Module):
     @classmethod
     def load(cls, pretrained_model_name_or_path):
         _path = Path(pretrained_model_name_or_path) / "attention"
-        assert _path.exists(), f"Path doesn't exists. Please double-check the path {str(pretrained_model_name_or_path)}"
+        assert (
+            _path.exists()
+        ), f"Path doesn't exists. Please double-check the path {str(pretrained_model_name_or_path)}"
         farm_config = Path(_path) / "attention_config.json"
         farm_model = Path(_path) / "attention_model.bin"
         if farm_config.exists():
             with open(str(farm_config)) as fin:
                 config = json.load(fin)
             # drop the "klass" key and all of the rest keys not corresponding to constructor
-            props = {k: config[k] for k in inspect.signature(cls.__init__).parameters.keys() if k in cls.props}  # noqa: SIM118
+            props = {
+                k: config[k]
+                for k in inspect.signature(cls.__init__).parameters.keys()
+                if k in cls.props
+            }  # noqa: SIM118
             _model = cls(**props)
             _model.load_state_dict(torch.load(str(farm_model)))
         else:
@@ -295,9 +323,22 @@ class IAttention(nn.Module):
 class MLAttention(nn.Module):
     props = ("embedding_dim", "dim_out", "attention_heads", "dropout", "num_blocks")
 
-    def __init__(self, embedding_dim, dim_out, attention_heads=4, dropout=0.1, num_blocks=1, **kwargs):
+    def __init__(
+        self,
+        embedding_dim,
+        dim_out,
+        attention_heads=4,
+        dropout=0.1,
+        num_blocks=1,
+        **kwargs,
+    ):
         super(MLAttention, self).__init__()  # noqa: UP008
-        self.blocks = _get_clones(IAttention(embedding_dim, dim_out, attention_heads=attention_heads, dropout=dropout), num_blocks)
+        self.blocks = _get_clones(
+            IAttention(
+                embedding_dim, dim_out, attention_heads=attention_heads, dropout=dropout
+            ),
+            num_blocks,
+        )
         self.config = dict(
             attention_heads=attention_heads,
             embedding_dim=embedding_dim,
@@ -315,14 +356,20 @@ class MLAttention(nn.Module):
     @classmethod
     def load(cls, pretrained_model_name_or_path):
         _path = Path(pretrained_model_name_or_path) / "attention"
-        assert _path.exists(), f"Path doesn't exists. Please double-check the path {str(pretrained_model_name_or_path)}"
+        assert (
+            _path.exists()
+        ), f"Path doesn't exists. Please double-check the path {str(pretrained_model_name_or_path)}"
         farm_config = Path(_path) / "mlattention_config.json"
         farm_model = Path(_path) / "mlattention_model.bin"
         if farm_config.exists():
             with open(str(farm_config)) as fin:
                 config = json.load(fin)
             # drop the "klass" key and all of the rest keys not corresponding to constructor
-            props = {k: config[k] for k in inspect.signature(cls.__init__).parameters.keys() if k in cls.props}  # noqa: SIM118
+            props = {
+                k: config[k]
+                for k in inspect.signature(cls.__init__).parameters.keys()
+                if k in cls.props
+            }  # noqa: SIM118
             _model = cls(**props)
             _model.load_state_dict(torch.load(str(farm_model)))
         else:

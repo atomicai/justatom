@@ -325,14 +325,17 @@ class ILanguageModel(nn.Module, abc.ABC):
             ignore_mask_2d[:, 0] = True
         ignore_mask_3d = np.zeros(token_vecs.shape, dtype=bool)
         ignore_mask_3d[:, :, :] = ignore_mask_2d[:, :, np.newaxis]
+        pooled_vecs = None
         if strategy == "reduce_max":
             pooled_vecs = (
                 np.ma.array(data=token_vecs, mask=ignore_mask_3d).max(axis=1).data
             )
-        if strategy == "reduce_mean":
+        elif strategy == "reduce_mean":
             pooled_vecs = (
                 np.ma.array(data=token_vecs, mask=ignore_mask_3d).mean(axis=1).data
             )
+        else:
+            raise ValueError(f"Unsupported pooling strategy={strategy!r}.")
 
         return pooled_vecs
 
@@ -360,12 +363,15 @@ class IHead(nn.Module, abc.ABC):
     ):
         config_file = Path(path) / "config.json"
         # assert config_file.exists(), "The config is not found, couldn't load the model"
+        language_model = None
         if config_file.exists():
             logger.info(f"Head found locally at {path}")
             # it's a local directory in FARM format
             with open(config_file) as f:
                 config = json.load(f)
             language_model = cls.subclasses[config["klass"]].load(path, **kwargs)
+        if language_model is None:
+            raise FileNotFoundError(f"Head config is not found at {config_file}")
         return language_model
 
     def generate_config(self):

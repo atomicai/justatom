@@ -22,7 +22,10 @@ from justatom.modeling.head import ANNHead
 from justatom.modeling.mask import ILanguageModel
 from justatom.processing import IProcessor, ITokenizer, igniset
 from justatom.processing.loader import NamedDataLoader
-from justatom.processing.prime import TrainWithContrastiveProcessor, TrainWithTripletProcessor
+from justatom.processing.prime import (
+    TrainWithContrastiveProcessor,
+    TrainWithTripletProcessor,
+)
 from justatom.running.encoders import EncoderRunner, BiEncoderRunner
 from justatom.tooling import stl
 from justatom.tooling.stl import merge_in_order
@@ -36,11 +39,11 @@ dotenv.load_dotenv()
 logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK')}")
 
 
-
 class ILDataModule(L.LightningDataModule):
     """
     Wrapper class for handling data loading with dynamic batch size.
     """
+
     def __init__(
         self,
         processor: IProcessor | None = None,
@@ -59,12 +62,15 @@ class ILDataModule(L.LightningDataModule):
         filters: dict | None = None,
         dtypes: dict | None = None,
         dbs_epochs: list[int] | None = None,
-        dbs_batch_sizes: list[int]| None = None,
+        dbs_batch_sizes: list[int] | None = None,
     ):
         super().__init__()
         dbs_epochs = dbs_epochs or []
         dbs_batch_sizes = dbs_batch_sizes or []
-        self._dbs = {epoch: batch_size for epoch, batch_size in zip(dbs_epochs, dbs_batch_sizes, strict=False)}
+        self._dbs = {
+            epoch: batch_size
+            for epoch, batch_size in zip(dbs_epochs, dbs_batch_sizes, strict=False)
+        }
         self.processor = processor
         self.train_filepath = train_filepath
         self.batch_size = self._dbs.get(min(dbs_epochs), 1) if self._dbs else batch_size
@@ -76,7 +82,9 @@ class ILDataModule(L.LightningDataModule):
         self.prefix_content_field = prefix_content_field
         self.shuffle = shuffle
         self.dtypes = dtypes
-        self._train_dataloader, self._val_dataloader, self._test_dataloader, _ = self.ignite_loaders(self.batch_size)
+        self._train_dataloader, self._val_dataloader, self._test_dataloader, _ = (
+            self.ignite_loaders(self.batch_size)
+        )
         self.min_train_dataloader_len = self._min_train_dataloader_len()
         return
 
@@ -109,8 +117,11 @@ class ILDataModule(L.LightningDataModule):
 
     def _min_train_dataloader_len(self) -> int:
         return (
-            len(self._train_dataloader) if not self._dbs
-            else len(self._train_dataloader) * self.batch_size // max(self._dbs.values())
+            len(self._train_dataloader)
+            if not self._dbs
+            else len(self._train_dataloader)
+            * self.batch_size
+            // max(self._dbs.values())
         )
 
 
@@ -131,7 +142,10 @@ def maybe_cuda_or_mps():
 
 
 def metric_learning_pipeline(loss_name: str, **props):
-    MAPPING = {"TrainWithContrastive": TrainWithContrastiveProcessor, "TrainWithTriplet": TrainWithTripletProcessor}
+    MAPPING = {
+        "TrainWithContrastive": TrainWithContrastiveProcessor,
+        "TrainWithTriplet": TrainWithTripletProcessor,
+    }
     if loss_name.lower() not in MAPPING:
         msg = f"Specified loss {loss_name.upper()} is not available. Use one of the following {','.join(MAPPING.keys())}"
         logger.error(msg)
@@ -148,7 +162,9 @@ def random_split(ds: ConcatDataset, lengths: list[int]):
     :param lengths: Lengths of splits to be produced.
     """
     if sum(lengths) != len(ds):
-        raise ValueError("Sum of input lengths does not equal the length of the input dataset!")
+        raise ValueError(
+            "Sum of input lengths does not equal the length of the input dataset!"
+        )
 
     try:
         import numpy as np
@@ -162,7 +178,10 @@ def random_split(ds: ConcatDataset, lengths: list[int]):
             f"train/dev split: {lengths}"
         )
 
-    assert idx_dataset >= 1, "Dev_split ratio is too large, there is no data in train set. Please lower split =" f" {str(lengths)}"
+    assert idx_dataset >= 1, (
+        "Dev_split ratio is too large, there is no data in train set. Please lower split ="
+        f" {str(lengths)}"
+    )
 
     train = ConcatDataset(ds.datasets[:idx_dataset])  # type: Dataset
     test = ConcatDataset(ds.datasets[idx_dataset:])  # type: Dataset
@@ -196,13 +215,21 @@ def check_structure_and_raise_with_prepare(
     prefix_content_field: str | None = None,
 ) -> pl.DataFrame:
     if search_field is not None:
-        assert search_field in pl_data.columns, f"Search field [{search_field}] is not present within dataset."
+        assert (
+            search_field in pl_data.columns
+        ), f"Search field [{search_field}] is not present within dataset."
     if content_field is not None:
-        assert content_field in pl_data.columns, f"Content field [{content_field}] is not present within dataset."
+        assert (
+            content_field in pl_data.columns
+        ), f"Content field [{content_field}] is not present within dataset."
     if group_field is not None:
-        assert group_field in pl_data.columns, f"Group field [{group_field}] is not present within dataset."
+        assert (
+            group_field in pl_data.columns
+        ), f"Group field [{group_field}] is not present within dataset."
     if prefix_field is not None:
-        assert prefix_field in pl_data.columns, f"Prefix field [{prefix_field}] is not present within dataset."
+        assert (
+            prefix_field in pl_data.columns
+        ), f"Prefix field [{prefix_field}] is not present within dataset."
     js_data: list[dict] = None
     # Make sure that the `processor` has correct type
     if search_field is not None and content_field is not None:
@@ -210,9 +237,16 @@ def check_structure_and_raise_with_prepare(
             processor, TrainWithContrastiveProcessor
         ), f"You provided both `search_field`={search_field} and `content_field`={content_field} but processor is of wrong type = [{type(processor)}]"  # noqa: E501
         # TODO: Return
-        if prefix_field is None and prefix_search_field is None and prefix_content_field is None:
+        if (
+            prefix_field is None
+            and prefix_search_field is None
+            and prefix_content_field is None
+        ):
             pl_data = pl_data.select([search_field, content_field])
-            js_data = [dict(query=x.get(search_field), content=x.get(content_field)) for x in pl_data.to_dicts()]
+            js_data = [
+                dict(query=x.get(search_field), content=x.get(content_field))
+                for x in pl_data.to_dicts()
+            ]
         elif prefix_field is not None:
             pl_data = pl_data.select([search_field, content_field, prefix_field])
             js_data = [
@@ -230,7 +264,9 @@ def check_structure_and_raise_with_prepare(
             assert (
                 prefix_search_field is not None and prefix_content_field is not None
             ), "You seem to provide one of `prefix_search_field` or `prefix_content_field` but not both and at the same time, yet `prefix_field` is None"  # noqa: E501
-            pl_data = pl_data.select([search_field, content_field, prefix_search_field, prefix_content_field])
+            pl_data = pl_data.select(
+                [search_field, content_field, prefix_search_field, prefix_content_field]
+            )
             js_data = [
                 dict(
                     query=x.get(search_field),
@@ -284,7 +320,9 @@ def check_and_scan(
     dtypes: dict | None = None,
     strict_raise: bool = True,
 ):
-    if not check_and_raise(filepath, name=split_name, allowed_suffixes=allowed_suffixes):
+    if not check_and_raise(
+        filepath, name=split_name, allowed_suffixes=allowed_suffixes
+    ):
         if strict_raise:
             msg = "Filepath you have set is None. `strict_raise`=True by default. Either turn it off or provide valid path."
             logger.error(msg)
@@ -293,7 +331,11 @@ def check_and_scan(
             return None
     fpath = Path(filepath)
     if fpath.suffix in [".csv", ".xlsx"]:
-        pl_view = pl.read_csv(fpath, dtypes=dtypes) if fpath.suffix == ".csv" else pl.read_excel(fpath)
+        pl_view = (
+            pl.read_csv(fpath, dtypes=dtypes)
+            if fpath.suffix == ".csv"
+            else pl.read_excel(fpath)
+        )
     elif fpath.suffix in [".json", ".jsonl"]:
         pl_view = pl.read_json(fpath)
     else:
@@ -327,7 +369,11 @@ def ignite_loaders(
     torch.utils.data.DataLoader,
     torch.utils.data.DataLoader,
 ]:
-    train_filepath = Path(train_filepath) / "train.csv" if Path(train_filepath).is_dir() else train_filepath
+    train_filepath = (
+        Path(train_filepath) / "train.csv"
+        if Path(train_filepath).is_dir()
+        else train_filepath
+    )
 
     pl_train_view = check_and_scan(
         train_filepath,
@@ -353,7 +399,9 @@ def ignite_loaders(
         prefix_content_field=prefix_content_field,
     )
 
-    dataset, tensor_names = igniset(js_train_docs, processor=processor, batch_size=batch_size, shuffle=shuffle)
+    dataset, tensor_names = igniset(
+        js_train_docs, processor=processor, batch_size=batch_size, shuffle=shuffle
+    )
 
     split_ratio = 0.2 if dev_filepath is None and split_ratio is None else split_ratio
 
@@ -365,11 +413,13 @@ def ignite_loaders(
         strict_raise=False,
     )
 
+    train_dataset = dataset
+
     if pl_dev_view is not None:
         logger.info(
             f"TRAINING [2/3] Using {str(dev_filepath)} to perform training pipeline loading and converting to PyTorch DEV dataset"
         )
-        pl_dev_view = check_and_filter(pl_dev_view, dtypes=dtypes)
+        pl_dev_view = check_and_filter(pl_dev_view)
         pl_dev_view, js_dev_docs = check_structure_and_raise_with_prepare(
             pl_dev_view,
             processor=processor,
@@ -380,7 +430,9 @@ def ignite_loaders(
             prefix_search_field=prefix_search_field,
             prefix_content_field=prefix_content_field,
         )
-        dev_dataset, _ = igniset(js_dev_docs, processor=processor, batch_size=batch_size, shuffle=shuffle)
+        dev_dataset, _ = igniset(
+            js_dev_docs, processor=processor, batch_size=batch_size, shuffle=shuffle
+        )
     else:  # Exception was not raised => perform split by ratio from train
         logger.info(
             f"TRAINING [2/3] Using SPLIT ration of {str(split_ratio)} to perform training pipeline loading and converting to PyTorch DEV dataset"  # noqa: E501
@@ -403,9 +455,10 @@ def ignite_loaders(
         logger.info(
             f"TRAINING [3/3] Using {str(test_filepath)} to perform training pipeline loading and converting to PyTorch TEST dataset"
         )
-        pl_test_view = check_and_filter(pl_dev_view, dtypes=dtypes)
+        pl_test_view = check_and_filter(pl_test_view)
         pl_test_view, js_test_docs = check_structure_and_raise_with_prepare(
             pl_test_view,
+            processor=processor,
             search_field=search_field,
             content_field=content_field,
             group_field=group_field,
@@ -413,14 +466,20 @@ def ignite_loaders(
             prefix_search_field=prefix_search_field,
             prefix_content_field=prefix_content_field,
         )
-        test_dataset, _ = igniset(js_test_docs, processor=processor, batch_size=batch_size, shuffle=shuffle)
+        test_dataset, _ = igniset(
+            js_test_docs, processor=processor, batch_size=batch_size, shuffle=shuffle
+        )
     else:  # Was NONE
         test_dataset = dev_dataset
-        logger.info("TRAINING [3/3] Using DEV split to perform training pipeline loading and converting to PyTorch TEST dataset")
+        logger.info(
+            "TRAINING [3/3] Using DEV split to perform training pipeline loading and converting to PyTorch TEST dataset"
+        )
 
     # TODO: DRY. Replace boilerplate codes for <name>_fpath checking with one method.
     return (
-        NamedDataLoader(train_dataset, batch_size=batch_size, tensor_names=tensor_names),
+        NamedDataLoader(
+            train_dataset, batch_size=batch_size, tensor_names=tensor_names
+        ),
         NamedDataLoader(dev_dataset, batch_size=batch_size, tensor_names=tensor_names),
         NamedDataLoader(test_dataset, batch_size=batch_size, tensor_names=tensor_names),
         tensor_names,
@@ -458,8 +517,14 @@ class ILRunner(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         # TODO: Fix Focal Loss ?
-        xs = {k: batch[k].to(self.device) for k in batch if not k.endswith(self.label_suffix)}
-        ys = {k: batch[k].to(self.device) for k in batch if k.endswith(self.label_suffix)}
+        xs = {
+            k: batch[k].to(self.device)
+            for k in batch
+            if not k.endswith(self.label_suffix)
+        }
+        ys = {
+            k: batch[k].to(self.device) for k in batch if k.endswith(self.label_suffix)
+        }
 
         # TODO: How to perform `loss.FocalLoss` using this `group_ids` architecture ?
 
@@ -490,7 +555,9 @@ class ILRunner(L.LightningModule):
                 # (3) output[2] -> neg_queries
                 self.log("TrainingLoss", loss, logger=True)
             else:
-                raise ValueError(f"Unexpected LOSS {self.loss} of UNKNOWN type for ANN tuning")
+                raise ValueError(
+                    f"Unexpected LOSS {self.loss} of UNKNOWN type for ANN tuning"
+                )
             all_losses.append(loss)
         per_sample_loss = self.runner.loss_aggregation_fn(all_losses)
         L = self.adjust_loss(per_sample_loss)
@@ -511,6 +578,7 @@ class ILRunner(L.LightningModule):
         GRANTED_CONTRASTIVE_METRIC_NAME = dict(top1="HitRate")  # noqa: F841
         metrics = dict()
         response = dict()
+        info = {}
         if isinstance(head.loss, TripletLoss):
             _, info = head.loss(logits, labels)
             metrics = merge_in_order(GRANTED_TRIPLET_METRIC_NAME, metrics)
@@ -524,8 +592,14 @@ class ILRunner(L.LightningModule):
 
     @torch.no_grad
     def validation_step(self, batch, batch_idx):
-        xs = {k: batch[k].to(self.device) for k in batch if not k.endswith(self.label_suffix)}
-        ys = {k: batch[k].to(self.device) for k in batch if k.endswith(self.label_suffix)}
+        xs = {
+            k: batch[k].to(self.device)
+            for k in batch
+            if not k.endswith(self.label_suffix)
+        }
+        ys = {
+            k: batch[k].to(self.device) for k in batch if k.endswith(self.label_suffix)
+        }
         output = self.runner(xs, average=True)  # num_heads x batch_size x embedding_dim
 
         for head, logits in zip(self.runner.prediction_heads, output, strict=False):
@@ -601,17 +675,23 @@ def main(
     early_stopping_size = int(early_stopping_size or Config.train.early_stopping.size)
     max_epochs = max_epochs or Config.train.max_epochs
     # Add scaling
-    do_scale, do_scale_unit = do_scale or Config.train.do_scale, int(do_scale_unit or Config.train.do_scale_unit)
+    do_scale, do_scale_unit = do_scale or Config.train.do_scale, int(
+        do_scale_unit or Config.train.do_scale_unit
+    )
     if do_scale is True and not do_scale_unit:
         do_scale_unit = 1.0
     else:
         do_scale_unit *= 1.0
     # TODO: maybe_scale()
 
-    log_every_n_steps = int((log_every_n_steps or Config.train.log_every_n_steps) / do_scale_unit)
+    log_every_n_steps = int(
+        (log_every_n_steps or Config.train.log_every_n_steps) / do_scale_unit
+    )
     save_top_k = save_top_k or Config.train.save_top_k
     devices = devices or Config.train.devices
-    val_check_interval = int((val_check_interval or Config.train.val_check_interval) / do_scale_unit)
+    val_check_interval = int(
+        (val_check_interval or Config.train.val_check_interval) / do_scale_unit
+    )
     save_model_path = Path(save_model_path or Config.train.save_model_path)
     # Snapshot for naming given correct hyperparams
     snap_opts = merge_in_order(loss_props, opts)
@@ -622,7 +702,9 @@ def main(
     # TODO: Add other props via general `opts: Dict` => `merge_in_order(opts, loss_props)` =>
     # and make snapshot of `opts`
     tokenizer = ITokenizer.from_pretrained(model_name_or_path)
-    pipeline = metric_learning_pipeline(loss, tokenizer=tokenizer, max_seq_len=max_seq_len)
+    pipeline = metric_learning_pipeline(
+        loss, tokenizer=tokenizer, max_seq_len=max_seq_len
+    )
     device = maybe_cuda_or_mps()
     runner = EncoderRunner(
         model=model,
@@ -652,10 +734,14 @@ def main(
     )
 
     # ML Logger
-    ml_logger = WandbLogger(project="POLAROIDS.AI", name=f"LOSS={loss.upper()} {snap_name}")
+    ml_logger = WandbLogger(
+        project="POLAROIDS.AI", name=f"LOSS={loss.upper()} {snap_name}"
+    )
 
     # Callback(s)...
-    es_callback = EarlyStopping(monitor=early_stopping_metric, patience=early_stopping_size)
+    es_callback = EarlyStopping(
+        monitor=early_stopping_metric, patience=early_stopping_size
+    )
     mc_callback = ModelCheckpoint(
         monitor=early_stopping_metric,
         mode=early_stopping_mode,

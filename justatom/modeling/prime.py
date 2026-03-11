@@ -211,7 +211,9 @@ class E5LInstructModel(E5GeneralWrapper):
 
     def __init__(
         self,
-        model_name_or_instance: str | nn.Module = "intfloat/multilingual-e5-large-instruct",
+        model_name_or_instance: (
+            str | nn.Module
+        ) = "intfloat/multilingual-e5-large-instruct",
         device="cpu",
         **kwargs,
     ):
@@ -223,12 +225,12 @@ class E5LInstructModel(E5GeneralWrapper):
         )
         self.name = "intfloat/multilingual-e5-large-instruct"
         self.model.to(device)
-    
+
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
         model = AutoModel.from_pretrained(model_name_or_path)
         return cls(model, **kwargs)
-    
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -456,6 +458,7 @@ class PosFreeEncoderModel(IModel):
                 out,
                 attention_mask=attention_mask,  # pyright: ignore[reportArgumentType]
             )
+        response = out
         if norm:
             response = F.normalize(out, p=2, dim=len(out.shape) - 1)
         return response

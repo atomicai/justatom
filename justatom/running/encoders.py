@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 import simplejson as json
@@ -300,7 +299,9 @@ class GammaHybridRunner(EncoderRunner):
         )  # noqa: UP008
 
         if not include_semantic_gamma and not include_keywords_gamma:
-            raise ValueError("Both include_semantic_gamma and include_keywords_gamma are False. Nothing to calibrate.")
+            raise ValueError(
+                "Both include_semantic_gamma and include_keywords_gamma are False. Nothing to calibrate."
+            )
 
         self.include_semantic_gamma = include_semantic_gamma
         self.include_keywords_gamma = include_keywords_gamma
@@ -326,7 +327,9 @@ class GammaHybridRunner(EncoderRunner):
             "identity": torch.nn.Identity(),
         }
         if normalized not in mapping:
-            raise ValueError(f"Unsupported gamma activation_fn={name}. Use one of {','.join(mapping.keys())}")
+            raise ValueError(
+                f"Unsupported gamma activation_fn={name}. Use one of {','.join(mapping.keys())}"
+            )
         return mapping[normalized]
 
     def gamma_parameters(self) -> list[torch.nn.Parameter]:
@@ -356,19 +359,25 @@ class GammaHybridRunner(EncoderRunner):
             "activation_fn": self.activation_fn,
             "semantic_gamma": {
                 "enabled": self.include_semantic_gamma,
-                "raw": float(self.gamma1.detach().item()),
+                "raw": float(self.gamma1.item()),
                 "effective": semantic_weight,
             },
             "keywords_gamma": {
                 "enabled": self.include_keywords_gamma,
-                "raw": float(self.gamma2.detach().item()),
+                "raw": float(self.gamma2.item()),
                 "effective": keywords_weight,
             },
         }
 
-    def mix_scores(self, semantic_scores: torch.Tensor, lexical_scores: torch.Tensor) -> torch.Tensor:
-        semantic_weight = self.activation(self.gamma1) if self.include_semantic_gamma else 1.0
-        keywords_weight = self.activation(self.gamma2) if self.include_keywords_gamma else 1.0
+    def mix_scores(
+        self, semantic_scores: torch.Tensor, lexical_scores: torch.Tensor
+    ) -> torch.Tensor:
+        semantic_weight = (
+            self.activation(self.gamma1) if self.include_semantic_gamma else 1.0
+        )
+        keywords_weight = (
+            self.activation(self.gamma2) if self.include_keywords_gamma else 1.0
+        )
         return semantic_weight * semantic_scores + keywords_weight * lexical_scores
 
     def save(self, save_dir: str):
@@ -401,7 +410,9 @@ class GammaHybridRunner(EncoderRunner):
                 hi = IHead.load(head_path)
                 heads.append(hi)
 
-        gamma_hybrid = config.get("gamma_hybrid", {}) if isinstance(config, dict) else {}
+        gamma_hybrid = (
+            config.get("gamma_hybrid", {}) if isinstance(config, dict) else {}
+        )
         semantic_cfg = gamma_hybrid.get("semantic_gamma", {})
         keywords_cfg = gamma_hybrid.get("keywords_gamma", {})
 

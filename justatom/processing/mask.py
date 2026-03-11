@@ -2,6 +2,7 @@ import abc
 import inspect
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import simplejson as json
 import torch
@@ -43,6 +44,14 @@ def tensor_features(features):
 
 class IProcessor(abc.ABC):
     subclasses = {}
+
+    tokenizer: Any
+    tasks: dict[str, dict[str, Any]]
+    prefix: str
+
+    def __init__(self):
+        self.tasks = {}
+        self.prefix = ""
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
