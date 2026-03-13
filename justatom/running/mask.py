@@ -20,12 +20,15 @@ class IModelRunner:
 
     subclasses = {}  # type: dict
 
-    config: dict = {}
-    model: ILanguageModel | None = None
-    prediction_heads: list[Any] = []
+    config: dict
+    model: ILanguageModel | None
+    prediction_heads: list[Any]
 
     def __init__(self) -> None:
         super().__init__()
+        self.config = {}
+        self.model = None
+        self.prediction_heads = []
 
     def __init_subclass__(cls, **kwargs):
         """
