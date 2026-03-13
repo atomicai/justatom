@@ -17,9 +17,9 @@ if "bertopic" not in sys.modules:
     sys.modules["bertopic"] = bertopic_mod
     sys.modules["bertopic.backend"] = backend_mod
 
+from justatom.etc.schema import Document
 from justatom.running.evaluator import EvaluatorRunner
 from justatom.running.retriever import KeywordsRetriever
-from justatom.etc.schema import Document
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 

@@ -59,9 +59,7 @@ class IModel(nn.Module, abc.ABC):
             # it's a local directory in FARM format
             with open(config_file) as f:
                 config = json.load(f)
-            language_model = cls.subclasses[config["klass"]].load(
-                model_name_or_path, **kwargs
-            )
+            language_model = cls.subclasses[config["klass"]].load(model_name_or_path, **kwargs)
         else:
             from justatom.modeling.prime import COMMON_CLASS_MAPPING
 
@@ -95,9 +93,7 @@ class IModel(nn.Module, abc.ABC):
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         # Save Weights
         save_name = Path(save_dir) / "pytorch_model.bin"
-        model_to_save = (
-            self.model.module if hasattr(self.model, "module") else self.model
-        )  # Only save the model itself
+        model_to_save = self.model.module if hasattr(self.model, "module") else self.model  # Only save the model itself
 
         if not state_dict:
             state_dict = model_to_save.state_dict()  # type: ignore [union-attr]
@@ -140,9 +136,7 @@ class ILanguageModel(nn.Module, abc.ABC):
             # it's a local directory in FARM format
             with open(config_file) as f:
                 config = json.load(f)
-            language_model = cls.subclasses[config["klass"]].load(
-                model_name_or_path, **kwargs
-            )
+            language_model = cls.subclasses[config["klass"]].load(model_name_or_path, **kwargs)
         else:
             from justatom.modeling.prime import HF_CLASS_MAPPING
 
@@ -160,9 +154,7 @@ class ILanguageModel(nn.Module, abc.ABC):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        segment_ids: (
-            torch.Tensor | None
-        ),  # DistilBERT does not use them, see DistilBERTLanguageModel
+        segment_ids: torch.Tensor | None,  # DistilBERT does not use them, see DistilBERTLanguageModel
         output_hidden_states: bool | None = None,
         output_attentions: bool | None = None,
         return_dict: bool = False,
@@ -198,13 +190,9 @@ class ILanguageModel(nn.Module, abc.ABC):
                     self._output_dims = value
                     return value
             except AttributeError:
-                raise ModelingError(
-                    "Can't get the output dimension before loading the model."
-                )  # noqa: B904
+                raise ModelingError("Can't get the output dimension before loading the model.")  # noqa: B904
 
-        raise ModelingError(
-            "Could not infer the output dimensions of the language model."
-        )
+        raise ModelingError("Could not infer the output dimensions of the language model.")
 
     def save_config(self, save_dir: Path | str):
         """
@@ -227,9 +215,7 @@ class ILanguageModel(nn.Module, abc.ABC):
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         # Save Weights
         save_name = Path(save_dir) / "pytorch_model.bin"
-        model_to_save = (
-            self.model.module if hasattr(self.model, "module") else self.model
-        )  # Only save the model itself
+        model_to_save = self.model.module if hasattr(self.model, "module") else self.model  # Only save the model itself
 
         if not state_dict:
             state_dict = model_to_save.state_dict()  # type: ignore [union-attr]
@@ -260,9 +246,7 @@ class ILanguageModel(nn.Module, abc.ABC):
         :param kwargs: kwargs
         :return: A list of dictionaries containing predictions, for example: [{"context": "some text", "vec": [-0.01, 0.5 ...]}].
         """  # noqa: E501
-        if not hasattr(self, "extraction_layer") or not hasattr(
-            self, "extraction_strategy"
-        ):
+        if not hasattr(self, "extraction_layer") or not hasattr(self, "extraction_strategy"):
             raise ModelingError(
                 "`extraction_layer` or `extraction_strategy` not specified for LM. "
                 "Make sure to set both, e.g. via Inferencer(extraction_strategy='cls_token', extraction_layer=-1)`"
@@ -284,10 +268,7 @@ class ILanguageModel(nn.Module, abc.ABC):
         elif self.extraction_strategy == "per_token":
             vecs = sequence_output.cpu().numpy()
 
-        elif (
-            self.extraction_strategy == "reduce_mean"
-            or self.extraction_strategy == "reduce_max"
-        ):
+        elif self.extraction_strategy == "reduce_mean" or self.extraction_strategy == "reduce_max":
             vecs = self._pool_tokens(
                 sequence_output,
                 padding_mask,
@@ -297,9 +278,7 @@ class ILanguageModel(nn.Module, abc.ABC):
         elif self.extraction_strategy == "cls_token":
             vecs = sequence_output[:, 0, :].cpu().numpy()
         else:
-            raise NotImplementedError(
-                f"This extraction strategy ({self.extraction_strategy}) is not supported by Haystack."
-            )
+            raise NotImplementedError(f"This extraction strategy ({self.extraction_strategy}) is not supported by Haystack.")
 
         preds = []
         for vec, sample in zip(vecs, samples, strict=False):
@@ -327,13 +306,9 @@ class ILanguageModel(nn.Module, abc.ABC):
         ignore_mask_3d[:, :, :] = ignore_mask_2d[:, :, np.newaxis]
         pooled_vecs = None
         if strategy == "reduce_max":
-            pooled_vecs = (
-                np.ma.array(data=token_vecs, mask=ignore_mask_3d).max(axis=1).data
-            )
+            pooled_vecs = np.ma.array(data=token_vecs, mask=ignore_mask_3d).max(axis=1).data
         elif strategy == "reduce_mean":
-            pooled_vecs = (
-                np.ma.array(data=token_vecs, mask=ignore_mask_3d).mean(axis=1).data
-            )
+            pooled_vecs = np.ma.array(data=token_vecs, mask=ignore_mask_3d).mean(axis=1).data
         else:
             raise ValueError(f"Unsupported pooling strategy={strategy!r}.")
 

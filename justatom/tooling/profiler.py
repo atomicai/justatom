@@ -116,8 +116,7 @@ class MemoryProfiler:
     def _push_report(self, report: MemoryReport) -> None:
         self._reports.append(report)
         logger.info(
-            "MEMORY | {name} | items={items} | duration_ms={duration:.2f} | "
-            "rss_delta_mb={rss_delta} | heap_peak_mb={heap_peak}",
+            "MEMORY | {name} | items={items} | duration_ms={duration:.2f} | " "rss_delta_mb={rss_delta} | heap_peak_mb={heap_peak}",
             name=report.name,
             items=report.items_processed,
             duration=report.duration_ms,

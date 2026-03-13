@@ -1,10 +1,10 @@
+import os
 from pathlib import Path
 
 import simplejson as json
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
-import os
+import torch.nn.functional as F
 from loguru import logger
 
 from justatom.modeling.div import loss_per_head_sum
@@ -48,9 +48,7 @@ class EncoderRunner(IModelRunner, torch.nn.Module):
     def load(cls, data_dir: Path | str, config=None, **props):
         # model_config.json supposed to be present in directory
         _model_config = Path(data_dir) / "runner_config.json"
-        assert _model_config.exists(), logger.error(
-            f"The model file is not found for klass=[{cls.__class__.__name__}]"
-        )
+        assert _model_config.exists(), logger.error(f"The model file is not found for klass=[{cls.__class__.__name__}]")
         model = ILanguageModel.load(Path(data_dir))
         if config is None:
             _runner_config = Path(data_dir) / "runner_config.json"
@@ -91,25 +89,17 @@ class EncoderRunner(IModelRunner, torch.nn.Module):
                  have length n_pred_heads, batch_size.
         """
         all_losses = []
-        for head, logits_for_one_head, labels_for_one_head in zip(
-            self.prediction_heads, logits, labels, strict=False
-        ):
+        for head, logits_for_one_head, labels_for_one_head in zip(self.prediction_heads, logits, labels, strict=False):
             # check if PredictionHead connected to Processor
             assert hasattr(head, "label_tensor_name"), (
                 f"Label_tensor_names are missing inside the {head.task_name} Prediction Head. Did you connect the model"
                 " with the processor through either 'model.connect_heads_with_processor(processor.tasks)'"
                 " or by passing the processor to the Adaptive Model?"
             )
-            all_losses.append(
-                head.logits_to_loss(
-                    logits=logits_for_one_head, labels=labels_for_one_head
-                )
-            )
+            all_losses.append(head.logits_to_loss(logits=logits_for_one_head, labels=labels_for_one_head))
         return all_losses
 
-    def logits_to_loss(
-        self, logits: torch.Tensor, global_step: int | None = None, **kwargs
-    ):
+    def logits_to_loss(self, logits: torch.Tensor, global_step: int | None = None, **kwargs):
         """
         Get losses from all prediction heads & reduce to single loss *per sample*.
 
@@ -122,9 +112,7 @@ class EncoderRunner(IModelRunner, torch.nn.Module):
         all_losses = self.logits_to_loss_per_head(logits, **kwargs)
         # This aggregates the loss per sample across multiple prediction heads
         # Default is sum(), but you can configure any fn that takes [Tensor, Tensor ...] and returns [Tensor]
-        loss = self.loss_aggregation_fn(
-            all_losses, global_step=global_step, batch=kwargs
-        )
+        loss = self.loss_aggregation_fn(all_losses, global_step=global_step, batch=kwargs)
         return loss
 
     def prepare_labels(self, labels):
@@ -158,9 +146,7 @@ class EncoderRunner(IModelRunner, torch.nn.Module):
         for Qi in Q:
             if len(self.prediction_heads) > 0:
                 for head in self.prediction_heads:
-                    all_logits.append(
-                        self.maybe_norm(head(self.dropout(Qi)), norm=norm)
-                    )
+                    all_logits.append(self.maybe_norm(head(self.dropout(Qi)), norm=norm))
             else:  # If no head is initialized => simple forward pass of a model
                 all_logits.append(self.maybe_norm(self.dropout(Qi), norm=norm))
 
@@ -188,11 +174,7 @@ class BiEncoderRunner(IModelRunner, nn.Module):
         self.passage_model = passage_model.to(device)
         self.passage_model_out_dims = passage_model.output_dims
         self.passage_dropout = nn.Dropout(embeds_dropout_prob)
-        self.prediction_heads = (
-            [ph.to(device) for ph in prediction_heads]
-            if prediction_heads is not None
-            else []
-        )
+        self.prediction_heads = [ph.to(device) for ph in prediction_heads] if prediction_heads is not None else []
 
         self.loss_aggregation_fn = loss_per_head_sum
 
@@ -242,11 +224,7 @@ class BiEncoderRunner(IModelRunner, nn.Module):
         """
         pooled_output = [None, None]
 
-        if (
-            query_input_ids is not None
-            and query_segment_ids is not None
-            and query_attention_mask is not None
-        ):
+        if query_input_ids is not None and query_segment_ids is not None and query_attention_mask is not None:
             pooled_output1, _ = self.query_model(
                 input_ids=query_input_ids,
                 segment_ids=query_segment_ids,
@@ -254,11 +232,7 @@ class BiEncoderRunner(IModelRunner, nn.Module):
             )
             pooled_output[0] = pooled_output1
 
-        if (
-            passage_input_ids is not None
-            and passage_segment_ids is not None
-            and passage_attention_mask is not None
-        ):
+        if passage_input_ids is not None and passage_segment_ids is not None and passage_attention_mask is not None:
             max_seq_len = passage_input_ids.shape[-1]
             passage_input_ids = passage_input_ids.view(-1, max_seq_len)
             passage_attention_mask = passage_attention_mask.view(-1, max_seq_len)
@@ -299,9 +273,7 @@ class GammaHybridRunner(EncoderRunner):
         )  # noqa: UP008
 
         if not include_semantic_gamma and not include_keywords_gamma:
-            raise ValueError(
-                "Both include_semantic_gamma and include_keywords_gamma are False. Nothing to calibrate."
-            )
+            raise ValueError("Both include_semantic_gamma and include_keywords_gamma are False. Nothing to calibrate.")
 
         self.include_semantic_gamma = include_semantic_gamma
         self.include_keywords_gamma = include_keywords_gamma
@@ -327,9 +299,7 @@ class GammaHybridRunner(EncoderRunner):
             "identity": torch.nn.Identity(),
         }
         if normalized not in mapping:
-            raise ValueError(
-                f"Unsupported gamma activation_fn={name}. Use one of {','.join(mapping.keys())}"
-            )
+            raise ValueError(f"Unsupported gamma activation_fn={name}. Use one of {','.join(mapping.keys())}")
         return mapping[normalized]
 
     def gamma_parameters(self) -> list[torch.nn.Parameter]:
@@ -341,16 +311,8 @@ class GammaHybridRunner(EncoderRunner):
         return params
 
     def gamma_weights(self) -> tuple[float, float]:
-        semantic_weight = (
-            float(self.activation(self.gamma1).detach().item())
-            if self.include_semantic_gamma
-            else 1.0
-        )
-        keywords_weight = (
-            float(self.activation(self.gamma2).detach().item())
-            if self.include_keywords_gamma
-            else 1.0
-        )
+        semantic_weight = float(self.activation(self.gamma1).detach().item()) if self.include_semantic_gamma else 1.0
+        keywords_weight = float(self.activation(self.gamma2).detach().item()) if self.include_keywords_gamma else 1.0
         return semantic_weight, keywords_weight
 
     def gamma_payload(self) -> dict:
@@ -369,15 +331,9 @@ class GammaHybridRunner(EncoderRunner):
             },
         }
 
-    def mix_scores(
-        self, semantic_scores: torch.Tensor, lexical_scores: torch.Tensor
-    ) -> torch.Tensor:
-        semantic_weight = (
-            self.activation(self.gamma1) if self.include_semantic_gamma else 1.0
-        )
-        keywords_weight = (
-            self.activation(self.gamma2) if self.include_keywords_gamma else 1.0
-        )
+    def mix_scores(self, semantic_scores: torch.Tensor, lexical_scores: torch.Tensor) -> torch.Tensor:
+        semantic_weight = self.activation(self.gamma1) if self.include_semantic_gamma else 1.0
+        keywords_weight = self.activation(self.gamma2) if self.include_keywords_gamma else 1.0
         return semantic_weight * semantic_scores + keywords_weight * lexical_scores
 
     def save(self, save_dir: str):
@@ -390,9 +346,7 @@ class GammaHybridRunner(EncoderRunner):
     @classmethod
     def load(cls, data_dir: Path | str, config=None, **props):
         _model_config = Path(data_dir) / "runner_config.json"
-        assert _model_config.exists(), logger.error(
-            f"The model file is not found for klass=[{cls.__class__.__name__}]"
-        )
+        assert _model_config.exists(), logger.error(f"The model file is not found for klass=[{cls.__class__.__name__}]")
 
         model = ILanguageModel.load(Path(data_dir))
 
@@ -410,9 +364,7 @@ class GammaHybridRunner(EncoderRunner):
                 hi = IHead.load(head_path)
                 heads.append(hi)
 
-        gamma_hybrid = (
-            config.get("gamma_hybrid", {}) if isinstance(config, dict) else {}
-        )
+        gamma_hybrid = config.get("gamma_hybrid", {}) if isinstance(config, dict) else {}
         semantic_cfg = gamma_hybrid.get("semantic_gamma", {})
         keywords_cfg = gamma_hybrid.get("keywords_gamma", {})
 

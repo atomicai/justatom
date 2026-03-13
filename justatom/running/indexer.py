@@ -1,6 +1,7 @@
 import asyncio as asio
-import torch
 from collections.abc import Iterable
+
+import torch
 from loguru import logger
 from more_itertools import chunked
 from tqdm.asyncio import tqdm_asyncio
@@ -10,7 +11,7 @@ from justatom.etc.schema import Document
 from justatom.processing import igniset
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.mask import IProcessor
-from justatom.running.encoders import EncoderRunner, BiEncoderRunner
+from justatom.running.encoders import BiEncoderRunner, EncoderRunner
 from justatom.running.mask import IIndexerRunner
 from justatom.storing.mask import INNDocStore
 
@@ -28,9 +29,7 @@ class NNIndexer(IIndexerRunner):
         self.processor = processor
         self.device = device
         if runner.device != device:
-            logger.info(
-                f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}"
-            )
+            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
         self.runner.to(device)
 
     def _runner(
@@ -50,9 +49,7 @@ class NNIndexer(IIndexerRunner):
             self.runner.to(device)
             self.runner = self.runner.eval()
         for i, docs_chunk in enumerate(chunked(documents, n=batch_size)):
-            documents_as_dicts = [
-                d.to_dict() if isinstance(d, Document) else d for d in docs_chunk
-            ]
+            documents_as_dicts = [d.to_dict() if isinstance(d, Document) else d for d in docs_chunk]
             if len(documents_as_dicts) == 0:
                 continue
 
@@ -68,9 +65,7 @@ class NNIndexer(IIndexerRunner):
                 batch_size=batch_size,
             )
 
-            for docs, batch in zip(
-                chunked(documents_as_dicts, n=batch_size), loader, strict=False
-            ):
+            for docs, batch in zip(chunked(documents_as_dicts, n=batch_size), loader, strict=False):
                 batches = {k: v.to(device) for k, v in batch.items()}
                 with torch.no_grad():
                     vectors = self.runner(batch=batches)[0].cpu().numpy()
@@ -125,9 +120,7 @@ class NNIndexer(IIndexerRunner):
         n_total_written_docs: int = 0
         pending: set[asio.Task] = set()
 
-        for batch_idx, docs_with_embeddings_batch in tqdm_asyncio(
-            enumerate(docs_with_embeddings)
-        ):
+        for batch_idx, docs_with_embeddings_batch in tqdm_asyncio(enumerate(docs_with_embeddings)):
             pending.add(
                 asio.create_task(
                     self._write_batch(
@@ -169,14 +162,7 @@ class KWARGIndexer(IIndexerRunner):
         for batch_idx, docs_batch in enumerate(chunked(documents, n=batch_size)):
             try:
                 cur_written_docs = await self.store.write_documents(
-                    [
-                        (
-                            Document(content=doc)
-                            if isinstance(doc, str)
-                            else Document.from_dict(doc)
-                        )
-                        for doc in docs_batch
-                    ],
+                    [(Document(content=doc) if isinstance(doc, str) else Document.from_dict(doc)) for doc in docs_batch],
                     batch_size=batch_size_per_request,
                 )
             except DocumentStoreError as error:
@@ -200,10 +186,7 @@ class ByName:
         elif name in ["embedding", "hybrid", "gamma-hybrid"]:
             klass = NNIndexer
         else:
-            msg = (
-                f"Unknown name=[{name}] to init IIndexerRunner instance. "
-                f"Use one of {', '.join(self.OPS)}"
-            )
+            msg = f"Unknown name=[{name}] to init IIndexerRunner instance. " f"Use one of {', '.join(self.OPS)}"
             logger.error(msg)
             raise ValueError(msg)
 

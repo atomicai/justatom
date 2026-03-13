@@ -7,19 +7,17 @@ from typing import Any
 import torch
 from loguru import logger
 
-from justatom.etc.errors import DocumentStoreError
 from justatom.configuring.builtins import load_builtin_yaml
+from justatom.etc.errors import DocumentStoreError
 from justatom.modeling.mask import ILanguageModel
 from justatom.processing import ITokenizer, RuntimeProcessor
+from justatom.running.embeddings import EmbeddingClientFactory, IEmbeddingClient
 from justatom.running.encoders import EncoderRunner
-from justatom.running.embeddings import EmbeddingClientFactory
-from justatom.running.embeddings import IEmbeddingClient
 from justatom.running.indexer import API as IndexerAPI
 from justatom.running.mask import IRetrieverRunner
 from justatom.running.retriever import API as RetrieverApi
 from justatom.storing.weaviate import Finder as WeaviateApi
 from justatom.storing.weaviate import WeaviateDocStore
-
 
 LM_CACHE_MAXSIZE = int(os.getenv("RUNNING_MODEL_CACHE_SIZE", "4"))
 TOKENIZER_CACHE_MAXSIZE = int(os.getenv("RUNNING_TOKENIZER_CACHE_SIZE", "4"))
@@ -223,27 +221,19 @@ class RunningService:
             device=device,
             max_seq_len=max_seq_len,
         )
-        cached_client = RunningService._cache_get(
-            RunningService._embedding_clients, cache_key
-        )
+        cached_client = RunningService._cache_get(RunningService._embedding_clients, cache_key)
         if cached_client is not None:
             return cached_client
 
         normalized_backend = backend.strip().lower()
         if normalized_backend in {"openai", "openai-compatible", "openai_compatible"}:
             defaults = RunningService._embedding_openai_defaults()
-            resolved_base_url = (
-                base_url or os.getenv("EMBEDDING_BASE_URL") or ""
-            ).strip()
+            resolved_base_url = (base_url or os.getenv("EMBEDDING_BASE_URL") or "").strip()
             resolved_api_key = (api_key or os.getenv("EMBEDDING_API_KEY") or "").strip()
             if resolved_base_url == "":
-                raise ValueError(
-                    "`base_url` or `EMBEDDING_BASE_URL` is required for openai backend"
-                )
+                raise ValueError("`base_url` or `EMBEDDING_BASE_URL` is required for openai backend")
             if resolved_api_key == "":
-                raise ValueError(
-                    "`api_key` or `EMBEDDING_API_KEY` is required for openai backend"
-                )
+                raise ValueError("`api_key` or `EMBEDDING_API_KEY` is required for openai backend")
 
             client = EmbeddingClientFactory.from_backend(
                 normalized_backend,
@@ -258,11 +248,7 @@ class RunningService:
                 prefix_skip_if_present=defaults["prefix_skip_if_present"],
                 default_pooling=defaults["default_pooling"],
                 default_encoding_format=defaults["default_encoding_format"],
-                default_max_seq_len=(
-                    max_seq_len
-                    if max_seq_len is not None
-                    else defaults["default_max_seq_len"]
-                ),
+                default_max_seq_len=(max_seq_len if max_seq_len is not None else defaults["default_max_seq_len"]),
             )
         else:
             client = EmbeddingClientFactory.from_backend(
@@ -379,17 +365,13 @@ class RunningService:
         RunningService._embedding_clients.clear()
 
     @staticmethod
-    async def check_store_and_message(
-        store: WeaviateDocStore, delete_if_not_empty: bool
-    ):
+    async def check_store_and_message(store: WeaviateDocStore, delete_if_not_empty: bool):
         n_docs_count: int = await store.count_documents()
         collection_name = store.collection_name
         if delete_if_not_empty:
             status_message: bool = await store.delete_all_documents()
             if not status_message:
-                raise DocumentStoreError(
-                    f"Documents per collection {collection_name} are not deleted. See logs for more details"
-                )
+                raise DocumentStoreError(f"Documents per collection {collection_name} are not deleted. See logs for more details")
         elif n_docs_count > 0:
             logger.warning(
                 f"You're not deleting any documents. Using pre-built {n_docs_count} documents per collection {collection_name}"
@@ -437,9 +419,7 @@ class RunningService:
         **props,
     ):
         if search_pipeline == "keywords":
-            return IndexerAPI.named(search_pipeline, store=store), RetrieverApi.named(
-                search_pipeline, store=store
-            )
+            return IndexerAPI.named(search_pipeline, store=store), RetrieverApi.named(search_pipeline, store=store)
 
         if model_name_or_path is None:
             msg = f"You have specified `runner_name`=[{search_pipeline}] but `model_name_or_path` is None."
@@ -491,12 +471,8 @@ class RunningService:
         weaviate_port: int = 2211,
         **props,
     ) -> IRetrieverRunner:
-        store: WeaviateDocStore = await WeaviateApi.find(
-            collection_name, WEAVIATE_HOST=weaviate_host, WEAVIATE_PORT=weaviate_port
-        )
-        store, n_total_docs = await RunningService.check_store_and_message(
-            store, delete_if_not_empty=flush_collection
-        )
+        store: WeaviateDocStore = await WeaviateApi.find(collection_name, WEAVIATE_HOST=weaviate_host, WEAVIATE_PORT=weaviate_port)
+        store, n_total_docs = await RunningService.check_store_and_message(store, delete_if_not_empty=flush_collection)
         device = RunningService.maybe_cuda_or_mps(devices=devices)
 
         ix_runner, ir_runner = RunningService.igni_runners(
@@ -512,9 +488,7 @@ class RunningService:
             return ir_runner
 
         logger.info("Indexing in progress")
-        n_total_docs = await ix_runner.index(
-            documents=documents, batch_size=batch_size, device=device
-        )
+        n_total_docs = await ix_runner.index(documents=documents, batch_size=batch_size, device=device)
         logger.info(f"Total docs in index {n_total_docs}")
         return ir_runner
 

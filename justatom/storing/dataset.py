@@ -74,9 +74,7 @@ class JSONLinesDataset(IDataset):
             try:
                 return pl.scan_ndjson(self.fp, **kwargs)
             except Exception:
-                logger.warning(
-                    f"Falling back to eager NDJSON loading for file [{self.fp}]."
-                )
+                logger.warning(f"Falling back to eager NDJSON loading for file [{self.fp}].")
 
         try:
             import jsonlines
@@ -102,15 +100,9 @@ class PARQUETDataset(IDataset):
             try:
                 return pl.scan_parquet(self.fp, **kwargs)
             except Exception:
-                logger.warning(
-                    f"Falling back to eager Parquet loading for file [{self.fp}]."
-                )
+                logger.warning(f"Falling back to eager Parquet loading for file [{self.fp}].")
         try:
-            return (
-                pl.scan_parquet(self.fp, **kwargs)
-                if lazy
-                else pl.read_parquet(self.fp, **kwargs)
-            )
+            return pl.scan_parquet(self.fp, **kwargs) if lazy else pl.read_parquet(self.fp, **kwargs)
         except Exception as ex:
             logger.error(f"Failed to load Parquet file [{self.fp}]: {ex}")
             raise ex
@@ -136,9 +128,7 @@ class XLSXDataset(IDataset):
         kwargs.pop("split", None)
         kwargs.pop("limit", None)
         if "lazy" in kwargs:
-            logger.warning(
-                "Lazy loading is not supported for XLSXDataset, ignoring the 'lazy' argument."
-            )
+            logger.warning("Lazy loading is not supported for XLSXDataset, ignoring the 'lazy' argument.")
         pl_view = pl.read_excel(self.fp, **kwargs)
         return pl_view
 

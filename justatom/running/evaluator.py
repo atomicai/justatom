@@ -2,12 +2,7 @@ from collections.abc import Callable
 
 import torch
 from more_itertools import chunked
-from torchmetrics.retrieval import (
-    RetrievalHitRate,
-    RetrievalMAP,
-    RetrievalMRR,
-    RetrievalNormalizedDCG,
-)
+from torchmetrics.retrieval import RetrievalHitRate, RetrievalMAP, RetrievalMRR, RetrievalNormalizedDCG
 from tqdm.asyncio import tqdm_asyncio
 
 from justatom.modeling.metrics import IAdditiveMetric
@@ -25,9 +20,7 @@ def _normalize_metric_name(metric_name: str) -> str:
         "ndcg": "ndcg",
     }
     if cleaned not in aliases:
-        raise ValueError(
-            f"Unsupported retrieval metric '{metric_name}'. Use one of: HitRate, mrr, map, ndcg"
-        )
+        raise ValueError(f"Unsupported retrieval metric '{metric_name}'. Use one of: HitRate, mrr, map, ndcg")
     return aliases[cleaned]
 
 
@@ -70,32 +63,22 @@ class EvaluatorRunner(IEvaluatorRunner):
         metric_prefix_by_name: dict[str, str] = {}
         for metric_name in metrics_top_k:
             if not isinstance(metric_name, str):
-                raise ValueError(
-                    "Only string metric names are supported in metrics_top_k: HitRate, mrr, map, ndcg"
-                )
+                raise ValueError("Only string metric names are supported in metrics_top_k: HitRate, mrr, map, ndcg")
             normalized_name = _normalize_metric_name(metric_name)
             if normalized_name not in normalized_metric_names:
                 normalized_metric_names.append(normalized_name)
             metric_prefix_by_name[normalized_name] = f"{normalized_name}@"
 
         aggregated_metrics = {
-            f"{metric_prefix_by_name[name]}{tk}": IAdditiveMetric()
-            for name in normalized_metric_names
-            for tk in eval_top_k
+            f"{metric_prefix_by_name[name]}{tk}": IAdditiveMetric() for name in normalized_metric_names for tk in eval_top_k
         }
 
-        metric_objects = {
-            (name, tk): _build_metric(name, top_k=tk)
-            for name in normalized_metric_names
-            for tk in eval_top_k
-        }
+        metric_objects = {(name, tk): _build_metric(name, top_k=tk) for name in normalized_metric_names for tk in eval_top_k}
 
         retrieval_top_k = max([top_k, *eval_top_k])
         async for batch_queries in tqdm_asyncio(chunked(queries, n=batch_size)):
             js_batch_queries = [qi for qi in batch_queries if qi is not None]
-            res_topk = await self.ir.retrieve_topk(
-                queries=js_batch_queries, batch_size=batch_size, top_k=retrieval_top_k
-            )
+            res_topk = await self.ir.retrieve_topk(queries=js_batch_queries, batch_size=batch_size, top_k=retrieval_top_k)
             for question, docs_topk in zip(js_batch_queries, res_topk, strict=False):
                 target = []
                 preds = []

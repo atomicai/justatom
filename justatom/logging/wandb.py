@@ -67,9 +67,7 @@ class WandbLogger(ILogger):
         log_epoch_metrics: bool = True,
         **kwargs,
     ) -> None:
-        super().__init__(
-            log_batch_metrics=log_batch_metrics, log_epoch_metrics=log_epoch_metrics
-        )
+        super().__init__(log_batch_metrics=log_batch_metrics, log_epoch_metrics=log_epoch_metrics)
         if self.log_batch_metrics:
             logger.warning(
                 "Wandb does NOT support several x-axes for logging."
@@ -103,15 +101,11 @@ class WandbLogger(ILogger):
             if prefix != "":
                 if loader_key is not None:
                     self.run.log(
-                        {
-                            f"{key.capitalize()}{prefix.capitalize()}{loader_key.capitalize()}": value
-                        },
+                        {f"{key.capitalize()}{prefix.capitalize()}{loader_key.capitalize()}": value},
                         step=step,
                     )
                 else:
-                    self.run.log(
-                        {f"{key.capitalize()}{prefix.capitalize()}": value}, step=step
-                    )
+                    self.run.log({f"{key.capitalize()}{prefix.capitalize()}": value}, step=step)
             else:
                 if loader_key is not None:
                     self.run.log(
@@ -161,9 +155,7 @@ class WandbLogger(ILogger):
     ) -> None:
         """Logs image to the logger."""
         if scope == "batch" or scope == "loader":
-            log_path = "_".join(
-                [tag, f"epoch-{runner.epoch_step:04d}", f"loader-{runner.loader}"]
-            )
+            log_path = "_".join([tag, f"epoch-{runner.epoch_step:04d}", f"loader-{runner.loader}"])
         elif scope == "epoch":
             log_path = "_".join([tag, f"epoch-{runner.epoch_step:04d}"])
         elif scope == "experiment" or scope is None:
@@ -174,9 +166,7 @@ class WandbLogger(ILogger):
         step = runner.sample_step if self.log_batch_metrics else runner.epoch_step
         self.run.log({f"{log_path}.png": wandb.Image(image)}, step=step)
 
-    def log_hparams(
-        self, hparams: dict, runner: "IRunner" = None
-    ) -> None:  # noqa: F821
+    def log_hparams(self, hparams: dict, runner: "IRunner" = None) -> None:  # noqa: F821
         """Logs hyperparameters to the logger."""
         self.run.config.update(hparams)
 

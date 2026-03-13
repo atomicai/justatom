@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
 from loguru import logger
 
 
@@ -26,9 +27,7 @@ def _resolve_training_mode(
     enabled_count = int(include_semantic_gamma) + int(include_keywords_gamma)
     if enabled_count == 0:
         if freeze_encoder:
-            raise ValueError(
-                "encoder-only training requires freeze_encoder=False because otherwise nothing is trainable"
-            )
+            raise ValueError("encoder-only training requires freeze_encoder=False because otherwise nothing is trainable")
         return "encoder-only"
     if freeze_encoder:
         return "gamma-only"
@@ -228,10 +227,7 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
     ):
         from justatom.modeling.mask import ILanguageModel
         from justatom.running.encoders import GammaHybridRunner
-        from justatom.running.trainer import (
-            BiGammaLightningTrainer,
-            UniGammaLightningTrainer,
-        )
+        from justatom.running.trainer import BiGammaLightningTrainer, UniGammaLightningTrainer
 
         lm_model = ILanguageModel.load(model_name_or_path=self.model_name_or_path)
         device = maybe_cuda_or_mps()
@@ -244,12 +240,8 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
             include_keywords_gamma=self.include_keywords_gamma,
             activation_fn=self.activation_fn,
         )
-        enabled_count = int(self.include_semantic_gamma) + int(
-            self.include_keywords_gamma
-        )
-        trainer_cls = (
-            BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
-        )
+        enabled_count = int(self.include_semantic_gamma) + int(self.include_keywords_gamma)
+        trainer_cls = BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
         return trainer_cls(
             runner=runner,
             freeze_encoder=True,
@@ -279,10 +271,7 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
     ):
         from justatom.modeling.mask import ILanguageModel
         from justatom.running.encoders import GammaHybridRunner
-        from justatom.running.trainer import (
-            BiGammaLightningTrainer,
-            UniGammaLightningTrainer,
-        )
+        from justatom.running.trainer import BiGammaLightningTrainer, UniGammaLightningTrainer
 
         lm_model = ILanguageModel.load(model_name_or_path=self.model_name_or_path)
         device = maybe_cuda_or_mps()
@@ -295,12 +284,8 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             include_keywords_gamma=self.include_keywords_gamma,
             activation_fn=self.activation_fn,
         )
-        enabled_count = int(self.include_semantic_gamma) + int(
-            self.include_keywords_gamma
-        )
-        trainer_cls = (
-            BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
-        )
+        enabled_count = int(self.include_semantic_gamma) + int(self.include_keywords_gamma)
+        trainer_cls = BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
         return trainer_cls(
             runner=runner,
             freeze_encoder=False,

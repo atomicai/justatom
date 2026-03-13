@@ -1,3 +1,3 @@
-from justatom.running.llm import OpenAiTask, OpenAIAsyncWrapper
+from justatom.running.llm import OpenAIAsyncWrapper, OpenAiTask
 
 __all__ = ["OpenAiTask", "OpenAIAsyncWrapper"]

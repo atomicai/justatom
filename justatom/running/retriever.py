@@ -9,8 +9,8 @@ from more_itertools import chunked
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.mask import IProcessor
 from justatom.processing.silo import igniset
-from justatom.running.encoders import EncoderRunner, BiEncoderRunner
-from justatom.running.mask import IRetrieverRunner, IModelRunner
+from justatom.running.encoders import BiEncoderRunner, EncoderRunner
+from justatom.running.mask import IModelRunner, IRetrieverRunner
 from justatom.storing.mask import INNDocStore
 from justatom.tooling.nlp import keywords_metrics
 
@@ -36,9 +36,7 @@ def _coerce_results_per_query(results, n_queries: int):
             "Please ensure backend store returns per-query grouped results."
         )
     if len(results) != n_queries:
-        raise ValueError(
-            f"Retriever expected {n_queries} per-query result groups, got {len(results)}."
-        )
+        raise ValueError(f"Retriever expected {n_queries} per-query result groups, got {len(results)}.")
     return results
 
 
@@ -72,9 +70,7 @@ class GammaHybridRetriever(IRetrieverRunner):
         self.processor = processor
         self.device = device
         if runner.device != device:
-            logger.info(
-                f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}"
-            )
+            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
             runner.to(device)  # type: ignore
         self.runner = runner.eval()  # type: ignore
         if ranker not in self.RANKER:
@@ -140,17 +136,9 @@ class GammaHybridRetriever(IRetrieverRunner):
         cutoff_score = self.cutoff_score if cutoff_score is None else cutoff_score
         gamma1 = self.gamma1 if gamma1 is None else gamma1
         gamma2 = self.gamma2 if gamma2 is None else gamma2
-        include_keywords = (
-            self.include_keywords if include_keywords is None else include_keywords
-        )
-        include_explanation = (
-            self.include_explanation
-            if include_explanation is None
-            else include_explanation
-        )
-        include_content = (
-            self.include_content if include_content is None else include_content
-        )
+        include_keywords = self.include_keywords if include_keywords is None else include_keywords
+        include_explanation = self.include_explanation if include_explanation is None else include_explanation
+        include_content = self.include_content if include_content is None else include_content
         if not include_keywords and not include_explanation and not include_content:
             msg = f"""
             You've initialized `{self.__class__.__name__}` IR but not using any of the atomic keywords features.
@@ -167,33 +155,20 @@ class GammaHybridRetriever(IRetrieverRunner):
             raise ValueError(msg)
         single_query = isinstance(queries, str)
         queries = [queries] if single_query else queries
-        js_queries = [
-            (
-                {"content": q}
-                if prefix is None
-                else {"content": q, "meta": {"prefix": prefix}}
-            )
-            for q in queries
-        ]
+        js_queries = [({"content": q} if prefix is None else {"content": q, "meta": {"prefix": prefix}}) for q in queries]
         dataset, tensor_names = igniset(
             js_queries,
             processor=self.processor,
             batch_size=batch_size,
             streaming=streaming_preprocessing,
         )
-        loader = NamedDataLoader(
-            dataset, tensor_names=tensor_names, batch_size=batch_size
-        )
+        loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=batch_size)
         answer = []
 
-        for _queries, _batches in zip(
-            chunked(queries, n=batch_size), loader, strict=False
-        ):
+        for _queries, _batches in zip(chunked(queries, n=batch_size), loader, strict=False):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
             with torch.no_grad():
-                vectors = (
-                    self.runner(batch=batches)[0].cpu().numpy().tolist()
-                )  # batch_size x vector_dim
+                vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
             answer_per_batch_topp = await self.store.search(
                 queries=_queries,
                 queries_embeddings=vectors,
@@ -221,21 +196,14 @@ class GammaHybridRetriever(IRetrieverRunner):
                     keywords_content: str = [doc.content] if include_content else []  # type: ignore
                     if include_keywords and include_explanation:
                         keywords_content += [
-                            kwp["keyword_or_phrase"].strip()
-                            + " "
-                            + kwp["explanation"].strip()
-                            for kwp in keywords_or_phrases
+                            kwp["keyword_or_phrase"].strip() + " " + kwp["explanation"].strip() for kwp in keywords_or_phrases
                         ]  # type: ignore
                     elif include_keywords:
                         keywords_content += [kwp["keyword_or_phrase"].strip() for kwp in keywords_or_phrases]  # type: ignore
                     else:
                         keywords_content += [kwp["explanation"].strip() for kwp in keywords_or_phrases]  # type: ignore
-                        keywords_content += "\n".join(
-                            [kwp["explanation"].strip() for kwp in keywords_or_phrases]
-                        )
-                    keyword_score: float = self.ranker(
-                        query, keywords_content, score_cutoff=cutoff_score
-                    )
+                        keywords_content += "\n".join([kwp["explanation"].strip() for kwp in keywords_or_phrases])
+                    keyword_score: float = self.ranker(query, keywords_content, score_cutoff=cutoff_score)
                     semantic_score: float = doc.score
                     fusion_score: float = self.compute_fusion_score(
                         distance=semantic_score,
@@ -253,9 +221,7 @@ class GammaHybridRetriever(IRetrieverRunner):
                 # Sort by fusion score and get top-k
                 fus_topk = sorted(
                     fus_topk,
-                    key=cmp_to_key(
-                        lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]
-                    ),
+                    key=cmp_to_key(lambda obj1, obj2: obj1["fusion_score"] - obj2["fusion_score"]),
                     reverse=True,
                 )[:top_k]
                 res_topk = [res_topp[pos["rank"]] for pos in fus_topk]  # type: ignore
@@ -280,9 +246,7 @@ class HybridRetriever(IRetrieverRunner):
         self.processor = processor
         self.device = device
         if runner.device != device:
-            logger.info(
-                f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}"
-            )
+            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
             runner.to(device)
         self.runner = runner.eval()
         self.alpha = alpha
@@ -305,33 +269,20 @@ class HybridRetriever(IRetrieverRunner):
         prefix = self.prefix if prefix is None else prefix
         single_query = isinstance(queries, str)
         queries = [queries] if single_query else queries
-        js_queries = [
-            (
-                {"content": q}
-                if prefix is None
-                else {"content": q, "meta": {"prefix": prefix}}
-            )
-            for q in queries
-        ]
+        js_queries = [({"content": q} if prefix is None else {"content": q, "meta": {"prefix": prefix}}) for q in queries]
         dataset, tensor_names = igniset(
             js_queries,
             processor=self.processor,
             batch_size=batch_size,
             streaming=streaming_preprocessing,
         )
-        loader = NamedDataLoader(
-            dataset, tensor_names=tensor_names, batch_size=batch_size
-        )
+        loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=batch_size)
         answer = []
 
-        for _queries, _batches in zip(
-            chunked(queries, n=batch_size), loader, strict=False
-        ):
+        for _queries, _batches in zip(chunked(queries, n=batch_size), loader, strict=False):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
             with torch.no_grad():
-                vectors = (
-                    self.runner(batch=batches)[0].cpu().numpy().tolist()
-                )  # batch_size x vector_dim
+                vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
             answer_per_batch = await self.store.search(
                 queries=_queries,
                 queries_embeddings=vectors,
@@ -363,9 +314,7 @@ class EmbeddingRetriever(IRetrieverRunner):
         self.processor = processor
         self.device = device
         if runner.device != device:
-            logger.info(
-                f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}"
-            )
+            logger.info(f"Moving [{runner.__class__.__name__}] to the new device = {device}. Old device = {runner.device}")
             runner.to(device)
         self.runner = runner.eval()
         self.prefix = prefix
@@ -387,32 +336,19 @@ class EmbeddingRetriever(IRetrieverRunner):
         prefix = self.prefix if prefix is None else prefix
         single_query = isinstance(queries, str)
         queries = [queries] if single_query else queries
-        js_queries = [
-            (
-                {"content": q}
-                if prefix is None
-                else {"content": q, "meta": {"prefix": prefix}}
-            )
-            for q in queries
-        ]
+        js_queries = [({"content": q} if prefix is None else {"content": q, "meta": {"prefix": prefix}}) for q in queries]
         dataset, tensor_names = igniset(
             js_queries,
             processor=self.processor,
             batch_size=batch_size,
             streaming=streaming_preprocessing,
         )
-        loader = NamedDataLoader(
-            dataset, tensor_names=tensor_names, batch_size=batch_size
-        )
+        loader = NamedDataLoader(dataset, tensor_names=tensor_names, batch_size=batch_size)
         answer = []
-        for _queries, _batches in zip(
-            chunked(queries, n=batch_size), loader, strict=False
-        ):
+        for _queries, _batches in zip(chunked(queries, n=batch_size), loader, strict=False):
             batches = {k: v.to(self.device) for k, v in _batches.items()}
             with torch.no_grad():
-                vectors = (
-                    self.runner(batch=batches)[0].cpu().numpy().tolist()
-                )  # batch_size x vector_dim
+                vectors = self.runner(batch=batches)[0].cpu().numpy().tolist()  # batch_size x vector_dim
             answer_per_batch = await self.store.search_by_embedding(
                 queries_embeddings=vectors,
                 top_k=top_k,
@@ -443,9 +379,7 @@ class KeywordsRetriever(IRetrieverRunner):
     ):
         single_query = isinstance(queries, str)
         queries = [queries] if single_query else queries
-        answer = self.store.search_by_keywords_sync(
-            queries=queries, top_k=top_k, filters=filters, keywords=keywords
-        )
+        answer = self.store.search_by_keywords_sync(queries=queries, top_k=top_k, filters=filters, keywords=keywords)
         answer = _coerce_results_per_query(answer, n_queries=len(queries))
         return answer[0] if single_query else answer
 
@@ -460,9 +394,7 @@ class KeywordsRetriever(IRetrieverRunner):
     ):
         single_query = isinstance(queries, str)
         queries = [queries] if single_query else queries
-        answer = await self.store.search_by_keywords(
-            queries=queries, top_k=top_k, filters=filters, keywords=keywords
-        )
+        answer = await self.store.search_by_keywords(queries=queries, top_k=top_k, filters=filters, keywords=keywords)
         answer = _coerce_results_per_query(answer, n_queries=len(queries))
         return answer[0] if single_query else answer
 
@@ -481,10 +413,7 @@ class ByName:
         elif name == "gamma-hybrid":
             klass = GammaHybridRetriever
         else:
-            msg = (
-                f"Unknown name=[{name}] to init IRetrieverRunner instance. "
-                f"Use one of {','.join(self.OPS)}"
-            )
+            msg = f"Unknown name=[{name}] to init IRetrieverRunner instance. " f"Use one of {','.join(self.OPS)}"
             logger.error(msg)
             raise ValueError(msg)
 

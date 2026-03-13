@@ -10,9 +10,7 @@ from justatom.etc.schema import Document
 try:
     from numba import njit  # pylint: disable=import-error
 except (ImportError, ModuleNotFoundError):
-    logger.debug(
-        "Numba not found, replacing njit() with no-op implementation. Enable it with 'pip install numba'."
-    )
+    logger.debug("Numba not found, replacing njit() with no-op implementation. Enable it with 'pip install numba'.")
 
     def njit(f):
         return f
@@ -93,9 +91,7 @@ class INNDocStore(abc.ABC):
         pass
 
     @abc.abstractclassmethod
-    def get_document_by_id(
-        self, id: str, headers: dict[str, str] | None = None
-    ) -> Document | None:
+    def get_document_by_id(self, id: str, headers: dict[str, str] | None = None) -> Document | None:
         pass
 
     @abc.abstractmethod
@@ -142,9 +138,7 @@ class INNDocStore(abc.ABC):
         self.ids_iterator = self.ids_iterator[1:]
         return ret
 
-    def _drop_duplicate_documents(
-        self, documents: list[Document], index: str | None = None
-    ) -> list[Document]:
+    def _drop_duplicate_documents(self, documents: list[Document], index: str | None = None) -> list[Document]:
         """
         Drop duplicates documents based on same hash ID
         :param documents: A list of Document objects.
@@ -192,9 +186,7 @@ class INNDocStore(abc.ABC):
         index = index or self.index
         if duplicate_documents in ("skip", "fail"):
             documents = self._drop_duplicate_documents(documents, index)
-            documents_found = self.get_documents_by_id(
-                ids=[doc.id for doc in documents], index=index, headers=headers
-            )
+            documents_found = self.get_documents_by_id(ids=[doc.id for doc in documents], index=index, headers=headers)
             ids_exist_in_db: list[str] = [doc.id for doc in documents_found]
 
             if len(ids_exist_in_db) > 0 and duplicate_documents == "fail":
@@ -202,9 +194,7 @@ class INNDocStore(abc.ABC):
                     f"Document with ids '{', '.join(ids_exist_in_db)} already exists in index = '{index}'."
                 )
 
-            documents = list(
-                filter(lambda doc: doc.id not in ids_exist_in_db, documents)
-            )
+            documents = list(filter(lambda doc: doc.id not in ids_exist_in_db, documents))
 
         return documents
 

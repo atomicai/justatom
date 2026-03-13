@@ -108,9 +108,7 @@ def test_prepare_training_data_streams_and_bounds_sample_size():
     assert pl_data.height == 3
     assert len(js_data) == 3
     assert all(row["content"] in lexical_by_content for row in js_data)
-    assert all(
-        row["lexical_text"] == lexical_by_content[row["content"]] for row in js_data
-    )
+    assert all(row["lexical_text"] == lexical_by_content[row["content"]] for row in js_data)
 
 
 def test_iterate_training_rows_applies_limit_after_query_expansion():
