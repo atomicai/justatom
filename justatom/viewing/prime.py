@@ -39,12 +39,8 @@ class ILineChart(IChart):
     ) -> Self:
         columns = df.columns
         x_axis = x_axis or "row_nr"
-        if not self._check_column(x_axis, columns, "x_axis") or not self._check_column(
-            y_axis, columns, "y_axis"
-        ):
-            raise ValueError(
-                f"One or multiple columns is missing in {','.join(columns)}"
-            )
+        if not self._check_column(x_axis, columns, "x_axis") or not self._check_column(y_axis, columns, "y_axis"):
+            raise ValueError(f"One or multiple columns is missing in {','.join(columns)}")
         chart_view = None
         if overlay_mark:
             self.chart = (
@@ -56,17 +52,15 @@ class ILineChart(IChart):
                 )
             )
         else:
-            self.chart = alt.Chart(df).encode(
-                x=alt.X(x_axis).title(x_title), y=alt.Y(y_axis).title(y_title)
-            )
+            self.chart = alt.Chart(df).encode(x=alt.X(x_axis).title(x_title), y=alt.Y(y_axis).title(y_title))
         if smooth_choice == "poly":
             chart_view = self.chart.transform_regression(
                 x_axis, y_axis, method="poly", order=smooth, as_=[x_axis, y_axis]
             ).mark_line(color=smooth_color)
         elif smooth_choice == "loess":
-            chart_view = self.chart.transform_loess(
-                x_axis, y_axis, bandwidth=smooth, as_=[x_axis, y_axis]
-            ).mark_line(color=smooth_color)
+            chart_view = self.chart.transform_loess(x_axis, y_axis, bandwidth=smooth, as_=[x_axis, y_axis]).mark_line(
+                color=smooth_color
+            )
         elif smooth_choice == "moving_average":
             window_size = max(1, smooth)
             chart_view = self.chart.transform_window(
@@ -93,11 +87,7 @@ class PlotlyScatterChart(IChart):
     ) -> Any:
         pl_data = data.rename({"label": label_to_view})
         pl_data = pl_data.with_columns(
-            pl.col(label_to_view).map_elements(
-                lambda x: (
-                    (x[:max_label_length] + "...") if len(x) > max_label_length else x
-                )
-            )
+            pl.col(label_to_view).map_elements(lambda x: ((x[:max_label_length] + "...") if len(x) > max_label_length else x))
         )
         pd_data = pl_data.to_pandas()
         fig = px.scatter(
@@ -107,19 +97,13 @@ class PlotlyScatterChart(IChart):
             color=label_to_view,
             hover_data={label_to_view: True, "text": False},
         )
-        fig.update_layout(
-            plot_bgcolor="black", paper_bgcolor="black", font=dict(color="white")
-        )
+        fig.update_layout(plot_bgcolor="black", paper_bgcolor="black", font=dict(color="white"))
         self.chart = fig
 
         if logo_path is not None:
             fig.add_layout_image(
                 dict(
-                    source=str(
-                        Path(logo_path)
-                        if logo_path
-                        else Path(os.getcwd()) / ".data" / "polaroids.ai.logo.png"
-                    ),
+                    source=str(Path(logo_path) if logo_path else Path(os.getcwd()) / ".data" / "polaroids.ai.logo.png"),
                     xref="paper",
                     yref="paper",
                     x=1,
@@ -187,18 +171,14 @@ class PlotlyGroupedBarChart(IChart):
         self.font_size = font_size
         self.max_len_for_name = max_len_for_name
 
-    def _prepare_group_inter_dataframe(
-        self, data: pl.DataFrame, group_val_a: str, group_val_b: str
-    ) -> pl.DataFrame:
+    def _prepare_group_inter_dataframe(self, data: pl.DataFrame, group_val_a: str, group_val_b: str) -> pl.DataFrame:
         sub_df = data.filter(
             pl.col(self.group_col_a) == group_val_a,
             pl.col(self.group_col_b) == group_val_b,
         )
 
         sub_df = sub_df.with_columns(
-            (pl.col(self.distance_col) >= self.dist_threshold)
-            .map_dict({True: ">=", False: "<"})
-            .alias("thresholded")
+            (pl.col(self.distance_col) >= self.dist_threshold).map_dict({True: ">=", False: "<"}).alias("thresholded")
         )
 
         sub_df = sub_df.sort(pl.col(self.distance_col))
@@ -215,14 +195,8 @@ class PlotlyGroupedBarChart(IChart):
         if isinstance(data, pd.DataFrame):
             raise NotImplementedError("not implemented for pandas.DataFrame")
 
-        if (
-            self.group_col_a not in data.schema
-            or self.group_col_b not in data.schema
-            or self.distance_col not in data.schema
-        ):
-            raise KeyError(
-                f"one of columns ({self.group_col_a}, {self.group_col_b}, {self.distance_col}) is not found in data"
-            )
+        if self.group_col_a not in data.schema or self.group_col_b not in data.schema or self.distance_col not in data.schema:
+            raise KeyError(f"one of columns ({self.group_col_a}, {self.group_col_b}, {self.distance_col}) is not found in data")
 
         figs = []
         subplot_titles = []
@@ -234,9 +208,7 @@ class PlotlyGroupedBarChart(IChart):
 
         for pos_a in range(n):
             for pos_b in range(m):
-                sub_df = self._prepare_group_inter_dataframe(
-                    data, cuts_group_a[pos_a], cuts_group_b[pos_b]
-                )
+                sub_df = self._prepare_group_inter_dataframe(data, cuts_group_a[pos_a], cuts_group_b[pos_b])
 
                 sub_size = len(sub_df)
                 sub_ratio = len(sub_df) / len(data)
@@ -247,17 +219,9 @@ class PlotlyGroupedBarChart(IChart):
                     subplot_titles.append("")
                     continue
 
-                cur_short_name_group_a = (
-                    sub_df.select(self.group_col_a)
-                    .to_series()
-                    .item(0)[: self.max_len_for_name]
-                )
+                cur_short_name_group_a = sub_df.select(self.group_col_a).to_series().item(0)[: self.max_len_for_name]
 
-                cur_short_name_group_b = (
-                    sub_df.select(self.group_col_b)
-                    .to_series()
-                    .item(0)[: self.max_len_for_name]
-                )
+                cur_short_name_group_b = sub_df.select(self.group_col_b).to_series().item(0)[: self.max_len_for_name]
 
                 sub_fig = go.Histogram(
                     histfunc=histfunc,

@@ -171,9 +171,7 @@ Forgiving what I've done
 
     @classmethod
     def setUpClass(cls):
-        cls.model_name_or_path = os.environ.get(
-            "JUSTATOM_TEST_MODEL", "intfloat/multilingual-e5-small"
-        )
+        cls.model_name_or_path = os.environ.get("JUSTATOM_TEST_MODEL", "intfloat/multilingual-e5-small")
         cls.tokenizer = ITokenizer.from_pretrained(cls.model_name_or_path)
         cls.processor = RuntimeProcessor(cls.tokenizer)
         cls.lm_model = ILanguageModel.load(cls.model_name_or_path)
@@ -195,9 +193,7 @@ Forgiving what I've done
                 [{"content": content} for content in self.TEXTS]
             )
         )
-        loader = NamedDataLoader(
-            dataset=dataset, tensor_names=tensor_names, batch_size=2
-        )
+        loader = NamedDataLoader(dataset=dataset, tensor_names=tensor_names, batch_size=2)
         vectors = []
         for batch in tqdm(loader):  # Each batch comes with bs=2 samples
             with torch.no_grad():
@@ -210,9 +206,7 @@ Forgiving what I've done
             dot_product_negative = vectors[i] @ vectors[(i + 1) % len(vectors)]
             positives.append(dot_product_positive)
             negatives.append(dot_product_negative)
-            logger.info(
-                f"i={i} | dot_product_positive={dot_product_positive} | dot_product_negative={dot_product_negative}"
-            )
+            logger.info(f"i={i} | dot_product_positive={dot_product_positive} | dot_product_negative={dot_product_negative}")
         positive_mean = torch.stack(positives).mean()
         negative_mean = torch.stack(negatives).mean()
         self.assertGreater(positive_mean, negative_mean)

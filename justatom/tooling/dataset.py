@@ -1,5 +1,5 @@
-import json
 import inspect
+import json
 from collections.abc import Generator, Iterable
 from itertools import islice
 from pathlib import Path
@@ -11,8 +11,8 @@ from json_repair import loads as json_repair_loads
 from loguru import logger
 
 from justatom.etc.schema import Document
-from justatom.tooling.profiler import MemoryProfiler
 from justatom.storing.dataset import API as DatasetApi
+from justatom.tooling.profiler import MemoryProfiler
 
 
 class DatasetRecordAdapter:
@@ -47,24 +47,12 @@ class DatasetRecordAdapter:
         lazy: bool = False,
         **kwargs,
     ) -> "DatasetRecordAdapter":
-        adapter_param_names = {
-            name
-            for name in inspect.signature(cls.__init__).parameters
-            if name not in {"self", "records"}
-        }
-        adapter_kwargs = {
-            key: value for key, value in kwargs.items() if key in adapter_param_names
-        }
-        dataset_kwargs = {
-            key: value
-            for key, value in kwargs.items()
-            if key not in adapter_param_names
-        }
+        adapter_param_names = {name for name in inspect.signature(cls.__init__).parameters if name not in {"self", "records"}}
+        adapter_kwargs = {key: value for key, value in kwargs.items() if key in adapter_param_names}
+        dataset_kwargs = {key: value for key, value in kwargs.items() if key not in adapter_param_names}
         limit = dataset_kwargs.pop("limit", None)
 
-        maybe_df_or_iter = DatasetApi.named(str(dataset_name_or_path)).iterator(
-            lazy=lazy, **dataset_kwargs
-        )
+        maybe_df_or_iter = DatasetApi.named(str(dataset_name_or_path)).iterator(lazy=lazy, **dataset_kwargs)
         records = cls._to_records(maybe_df_or_iter, lazy=lazy, limit=limit)
 
         return cls(records=records, **adapter_kwargs)
@@ -82,11 +70,7 @@ class DatasetRecordAdapter:
         if isinstance(maybe_df_or_iter, pl.DataFrame):
             if normalized_limit is not None:
                 maybe_df_or_iter = maybe_df_or_iter.head(normalized_limit)
-            return (
-                maybe_df_or_iter.iter_rows(named=True)
-                if lazy
-                else maybe_df_or_iter.to_dicts()
-            )
+            return maybe_df_or_iter.iter_rows(named=True) if lazy else maybe_df_or_iter.to_dicts()
         if isinstance(maybe_df_or_iter, pl.LazyFrame):
             if normalized_limit is not None:
                 maybe_df_or_iter = maybe_df_or_iter.limit(normalized_limit)
@@ -157,9 +141,7 @@ class DatasetRecordAdapter:
         if isinstance(raw, str):
             return [raw] if raw.strip() else []
         if isinstance(raw, Iterable):
-            return [
-                str(x).strip() for x in raw if not cls._is_missing(x) and str(x).strip()
-            ]
+            return [str(x).strip() for x in raw if not cls._is_missing(x) and str(x).strip()]
         return [str(raw).strip()] if str(raw).strip() else []
 
     @classmethod
@@ -200,9 +182,7 @@ class DatasetRecordAdapter:
 
             key_candidates = []
             if keywords_nested_col:
-                key_candidates.extend(
-                    [keywords_nested_col, "keyword_or_phrase", "keywords_or_phrase"]
-                )
+                key_candidates.extend([keywords_nested_col, "keyword_or_phrase", "keywords_or_phrase"])
             exp_candidates = []
             if explanation_nested_col:
                 exp_candidates.extend([explanation_nested_col, "explanation"])
@@ -234,11 +214,7 @@ class DatasetRecordAdapter:
         preserve_all_fields: bool | None = None,
     ) -> Generator[dict[str, Any] | Document, None, None]:
         active_profiler = profiler or MemoryProfiler(enabled=False)
-        preserve_fields = (
-            self.preserve_all_fields
-            if preserve_all_fields is None
-            else preserve_all_fields
-        )
+        preserve_fields = self.preserve_all_fields if preserve_all_fields is None else preserve_all_fields
         seen_chunk_ids: set[str] = set()
 
         with active_profiler.span(
@@ -249,9 +225,7 @@ class DatasetRecordAdapter:
             for row in self.records:
                 if not isinstance(row, dict):
                     continue
-                if any(
-                    self._is_missing(row.get(field)) for field in self.filter_fields
-                ):
+                if any(self._is_missing(row.get(field)) for field in self.filter_fields):
                     continue
                 if self._is_missing(row.get(self.content_col)):
                     continue
@@ -265,11 +239,7 @@ class DatasetRecordAdapter:
                             raw_labels = maybe_meta.get(self.queries_col)
                         if self._is_missing(raw_labels):
                             raw_labels = maybe_meta.get("labels")
-                labels = (
-                    self.normalize_labels(raw_labels)
-                    if self.queries_col is not None
-                    else []
-                )
+                labels = self.normalize_labels(raw_labels) if self.queries_col is not None else []
 
                 field_map: dict[str, str] = {}
                 if self.content_col and self.content_col != "content":
@@ -307,9 +277,7 @@ class DatasetRecordAdapter:
                     if not self._is_missing(chunk_id):
                         normalized_chunk_id = str(chunk_id)
                         if normalized_chunk_id in seen_chunk_ids:
-                            msg = (
-                                f"Duplicate chunk_id detected: '{normalized_chunk_id}'"
-                            )
+                            msg = f"Duplicate chunk_id detected: '{normalized_chunk_id}'"
                             raise ValueError(msg)
                         seen_chunk_ids.add(normalized_chunk_id)
                         doc.id = normalized_chunk_id
@@ -344,9 +312,7 @@ class DatasetRecordAdapter:
         active_profiler = profiler or MemoryProfiler(enabled=False)
         documents: list[dict[str, Any] | Document] = []
         with active_profiler.span("DatasetRecordAdapter.dataset") as span:
-            for row in self.iterator(
-                as_json=as_json, preserve_all_fields=preserve_all_fields
-            ):
+            for row in self.iterator(as_json=as_json, preserve_all_fields=preserve_all_fields):
                 documents.append(row)
                 span.tick()
         return documents
@@ -362,9 +328,7 @@ class DatasetRecordAdapter:
             if isinstance(labels, str):
                 labels = [labels]
             if isinstance(labels, Iterable):
-                labels_out.extend(
-                    [q for q in labels if isinstance(q, str) and q.strip()]
-                )
+                labels_out.extend([q for q in labels if isinstance(q, str) and q.strip()])
         return labels_out
 
     @staticmethod

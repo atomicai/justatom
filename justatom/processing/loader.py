@@ -55,9 +55,7 @@ class NamedDataLoader(DataLoader):
                     f" supplied: {_tensor_names}"
                 )
 
-            max_num_labels = self._compute_max_number_of_labels(
-                batch=batch, tensor_names=_tensor_names
-            )
+            max_num_labels = self._compute_max_number_of_labels(batch=batch, tensor_names=_tensor_names)
 
             ret = {name: [] for name in _tensor_names}
             for example in batch:

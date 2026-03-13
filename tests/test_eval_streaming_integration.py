@@ -14,7 +14,6 @@ from justatom.running.service import RunningService
 from justatom.storing.weaviate import Finder as WeaviateApi
 from justatom.tooling.dataset import DatasetRecordAdapter
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -50,9 +49,7 @@ class EvalStreamingIntegrationTest(unittest.TestCase):
             text=True,
         )
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"Failed to start Weaviate via docker compose: {proc.stdout}\n{proc.stderr}"
-            )
+            raise RuntimeError(f"Failed to start Weaviate via docker compose: {proc.stdout}\n{proc.stderr}")
 
         deadline = time.time() + 60
         while time.time() < deadline:
@@ -86,6 +83,7 @@ class EvalStreamingIntegrationTest(unittest.TestCase):
         collection_name = self._random_collection_name()
         dataset_path = self._dummy_iterative_dataset(n_docs=100)
         try:
+
             async def _run_pipeline() -> tuple[int, int, int]:
                 docs_adapter = DatasetRecordAdapter.from_source(
                     dataset_name_or_path=dataset_path,
@@ -129,6 +127,7 @@ class EvalStreamingIntegrationTest(unittest.TestCase):
             self.assertGreater(n_hit, 0)
         finally:
             try:
+
                 async def _cleanup() -> None:
                     store = await WeaviateApi.find(
                         collection_name,

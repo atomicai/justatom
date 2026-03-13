@@ -14,20 +14,16 @@ from loguru import logger
 from torch.utils.data import ConcatDataset
 from tqdm.auto import tqdm
 
-from justatom.configuring.scenarios import deep_merge
-from justatom.configuring.scenarios import load_scenario_config
-from justatom.configuring.scenarios import parse_unknown_overrides
+from justatom.configuring.scenarios import deep_merge, load_scenario_config, parse_unknown_overrides
 from justatom.running.evaluator import EvaluatorRunner
 from justatom.running.mask import IEvaluatorRunner
 from justatom.running.service import RunningService
-from justatom.tooling.dataset import DatasetRecordAdapter
 from justatom.tooling import stl
+from justatom.tooling.dataset import DatasetRecordAdapter
 
 dotenv.load_dotenv()
 
-logger.info(
-    f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', -1)}"
-)
+logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', -1)}")
 
 
 def _legacy_cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
@@ -73,9 +69,7 @@ def _legacy_cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
     if args.keywords_nested_col is not None:
         cfg.setdefault("dataset", {})["keywords_nested_col"] = args.keywords_nested_col
     if args.explanation_nested_col is not None:
-        cfg.setdefault("dataset", {})[
-            "explanation_nested_col"
-        ] = args.explanation_nested_col
+        cfg.setdefault("dataset", {})["explanation_nested_col"] = args.explanation_nested_col
 
     if args.metrics is not None:
         cfg.setdefault("metrics", {})["names"] = args.metrics
@@ -194,12 +188,8 @@ def _parse_args(argv: list[str] | None = None) -> dict:
     parser.add_argument("--query-prefix")
     parser.add_argument("--content-prefix")
     flush_group = parser.add_mutually_exclusive_group()
-    flush_group.add_argument(
-        "--flush-collection", dest="flush_collection", action="store_true"
-    )
-    flush_group.add_argument(
-        "--no-flush-collection", dest="flush_collection", action="store_false"
-    )
+    flush_group.add_argument("--flush-collection", dest="flush_collection", action="store_true")
+    flush_group.add_argument("--no-flush-collection", dest="flush_collection", action="store_false")
     parser.set_defaults(flush_collection=None)
 
     parser.add_argument("--top-k", type=int)
@@ -245,9 +235,7 @@ def to_numpy(container):
 
 def random_split(ds: ConcatDataset, lengths: list[int]):
     if sum(lengths) != len(ds):
-        raise ValueError(
-            "Sum of input lengths does not equal the length of the input dataset!"
-        )
+        raise ValueError("Sum of input lengths does not equal the length of the input dataset!")
 
     try:
         idx_dataset = np.where(np.array(ds.cumulative_sizes) > lengths[0])[0][0]
@@ -259,9 +247,7 @@ def random_split(ds: ConcatDataset, lengths: list[int]):
             f"train/dev split: {lengths}"
         ) from ex
 
-    assert (
-        idx_dataset >= 1
-    ), "Dev_split ratio is too large, there is no data in train set."
+    assert idx_dataset >= 1, "Dev_split ratio is too large, there is no data in train set."
     train = ConcatDataset(ds.datasets[:idx_dataset])
     test = ConcatDataset(ds.datasets[idx_dataset:])
     return train, test
@@ -304,11 +290,7 @@ async def main(
             resolved_dataset_name_or_path = raw_dataset_name_or_path
         else:
             resolved_dataset_name_or_path = Path(raw_dataset_name_or_path)
-    save_results_to_dir = (
-        Path(os.getcwd()) / "evals"
-        if save_results_to_dir is None
-        else Path(save_results_to_dir)
-    )
+    save_results_to_dir = Path(os.getcwd()) / "evals" if save_results_to_dir is None else Path(save_results_to_dir)
 
     docs_iter: Iterable[dict] = []
     if resolved_dataset_name_or_path is not None:
@@ -347,19 +329,13 @@ async def main(
 
     if labels_field is None:
         if n_total_docs == 0:
-            logger.warning(
-                "labels-col is not provided and index is empty. Nothing to retrieve; stopping."
-            )
+            logger.warning("labels-col is not provided and index is empty. Nothing to retrieve; stopping.")
             return
-        logger.info(
-            "labels-col is not provided. Retrieval-only mode is selected; evaluation is skipped."
-        )
+        logger.info("labels-col is not provided. Retrieval-only mode is selected; evaluation is skipped.")
         return
 
     if resolved_dataset_name_or_path is None:
-        logger.warning(
-            "labels-col is provided but dataset-name-or-path is missing. Evaluation is skipped."
-        )
+        logger.warning("labels-col is provided but dataset-name-or-path is missing. Evaluation is skipped.")
         return
 
     labels_adapter = DatasetRecordAdapter.from_source(
@@ -376,9 +352,7 @@ async def main(
     )
     queries = DatasetRecordAdapter.extract_labels(labels_adapter.iterator())
     if len(queries) == 0:
-        logger.warning(
-            "labels-col is provided, but no labels were found in dataset. Evaluation is skipped."
-        )
+        logger.warning("labels-col is provided, but no labels were found in dataset. Evaluation is skipped.")
         return
 
     el: IEvaluatorRunner = EvaluatorRunner(ir=ir_runner)
@@ -405,19 +379,13 @@ async def main(
     pl_metrics = pl.from_dicts(comp_eval_metrics)
 
     snap_eval_metrics = [] if eval_metrics is None else eval_metrics
-    model_name = (
-        "keywords" if model_name_or_path is None else Path(model_name_or_path).stem
-    )
-    snap_name = stl.snapshot(
-        {"Evaluation": " ".join(snap_eval_metrics), "Model": model_name}, sep="|"
-    )
+    model_name = "keywords" if model_name_or_path is None else Path(model_name_or_path).stem
+    snap_name = stl.snapshot({"Evaluation": " ".join(snap_eval_metrics), "Model": model_name}, sep="|")
     snap_props = stl.snapshot(props, sep="|")
     snap_props = "|" if snap_props == "" else f"|{snap_props}|"
 
     save_results_to_dir.mkdir(exist_ok=True, parents=True)
-    save_final_path = (
-        save_results_to_dir / f"{search_pipeline}{snap_props}{snap_name}.csv"
-    ).resolve()
+    save_final_path = (save_results_to_dir / f"{search_pipeline}{snap_props}{snap_name}.csv").resolve()
     pl_metrics.write_csv(str(save_final_path))
     logger.info(
         "Evaluation metrics were saved to [{}]",

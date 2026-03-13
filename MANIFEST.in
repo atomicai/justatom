@@ -1,1 +1,1 @@
-include justatom/builtins/*.txt
+recursive-include justatom/builtins *.txt *.yaml *.jsonl

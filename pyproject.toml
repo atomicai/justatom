@@ -40,3 +40,13 @@ profile = "black"
 line_length = 132
 py_version = 310
 src_paths = ["justatom", "tests", "scripts"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+implicit_optional = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["justatom", "justatom.*"]
+ignore_errors = true

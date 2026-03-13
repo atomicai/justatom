@@ -14,21 +14,14 @@ import polars as pl
 from loguru import logger
 
 from justatom.configuring.scenarios import load_scenario_config, parse_unknown_overrides
-from justatom.running.trainer_jobs import (
-    BaseTrainingJob,
-    EncoderGammaTrainingJob,
-    EncoderOnlyTrainingJob,
-    GammaOnlyTrainingJob,
-    create_training_job as _create_training_job,
-)
+from justatom.running.trainer_jobs import BaseTrainingJob, EncoderGammaTrainingJob, EncoderOnlyTrainingJob, GammaOnlyTrainingJob
+from justatom.running.trainer_jobs import create_training_job as _create_training_job
 from justatom.storing.dataset import API as DatasetApi
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 dotenv.load_dotenv()
 
-logger.info(
-    f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', -1)}"
-)
+logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', -1)}")
 
 
 def load_train_config(
@@ -77,9 +70,7 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "keywords_or_phrases_field": dataset.get("keywords_col"),
         "keywords_nested_col": dataset.get("keywords_nested_col"),
         "explanation_nested_col": dataset.get("explanation_nested_col"),
-        "filters": (
-            {"fields": filters_cfg.get("fields")} if filters_cfg.get("fields") else None
-        ),
+        "filters": ({"fields": filters_cfg.get("fields")} if filters_cfg.get("fields") else None),
         "lr_gamma": float(training.get("lr_gamma", 1e-2)),
         "lr_encoder": float(training.get("lr_encoder", 2e-5)),
         "weight_decay": float(training.get("weight_decay", 0.01)),
@@ -129,9 +120,7 @@ def create_training_job(**kwargs) -> BaseTrainingJob:
 
 def _row_passes_filters(row: dict[str, Any], filters: dict | None) -> bool:
     filter_fields = (filters or {}).get("fields") or []
-    return not any(
-        DatasetRecordAdapter._is_missing(row.get(field)) for field in filter_fields
-    )
+    return not any(DatasetRecordAdapter._is_missing(row.get(field)) for field in filter_fields)
 
 
 def _normalize_lexical_text(
@@ -316,9 +305,7 @@ def iterate_training_rows(
     return rows_iter if limit is None else islice(rows_iter, int(limit))
 
 
-def _reservoir_sample_rows(
-    rows: Iterable[dict[str, Any]], num_samples: int
-) -> list[dict[str, Any]]:
+def _reservoir_sample_rows(rows: Iterable[dict[str, Any]], num_samples: int) -> list[dict[str, Any]]:
     if num_samples <= 0:
         return []
 
@@ -365,11 +352,7 @@ def sample_training_rows(
     )
     # `sampled_rows` is the bounded in-memory subset used by training.
     sampled_rows = _reservoir_sample_rows(rows_iter, int(num_samples))
-    lexical_text_by_content = {
-        row["content"]: row["lexical_text"]
-        for row in sampled_rows
-        if row.get("content")
-    }
+    lexical_text_by_content = {row["content"]: row["lexical_text"] for row in sampled_rows if row.get("content")}
     return sampled_rows, lexical_text_by_content
 
 

@@ -44,14 +44,8 @@ class LightningTrainer(L.LightningModule):
         return [optimizer], [lr_scheduler]
 
     def training_step(self, batch, batch_idx):
-        xs = {
-            k: batch[k].to(self.device)
-            for k in batch
-            if not k.endswith(self.label_suffix)
-        }
-        ys = {
-            k: batch[k].to(self.device) for k in batch if k.endswith(self.label_suffix)
-        }
+        xs = {k: batch[k].to(self.device) for k in batch if not k.endswith(self.label_suffix)}
+        ys = {k: batch[k].to(self.device) for k in batch if k.endswith(self.label_suffix)}
         output = self.runner(xs, average=True)
 
         all_losses = []
@@ -66,20 +60,14 @@ class LightningTrainer(L.LightningModule):
                 loss = head.loss(*output)
                 self.log("TrainingLoss", loss, logger=True)
             else:
-                raise ValueError(
-                    f"Unexpected LOSS {self.loss} of UNKNOWN type for ANN tuning"
-                )
+                raise ValueError(f"Unexpected LOSS {self.loss} of UNKNOWN type for ANN tuning")
             all_losses.append(loss)
         per_sample_loss = self.runner.loss_aggregation_fn(all_losses)
         return self.adjust_loss(per_sample_loss)
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
-        xs = {
-            k: batch[k].to(self.device)
-            for k in batch
-            if not k.endswith(self.label_suffix)
-        }
+        xs = {k: batch[k].to(self.device) for k in batch if not k.endswith(self.label_suffix)}
         self.runner(xs, average=True)
 
     @torch.no_grad()
@@ -121,9 +109,7 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         self.lexical_text_by_content = lexical_text_by_content or {}
         self.save_dir = Path(save_dir) if save_dir is not None else None
         self.metrics_path = Path(metrics_path) if metrics_path is not None else None
-        self.metrics_logger = (
-            CSVLogger(self.metrics_path) if self.metrics_path is not None else None
-        )
+        self.metrics_logger = CSVLogger(self.metrics_path) if self.metrics_path is not None else None
         self.stopsyms = "«»:\"'" if stopsyms is None else stopsyms
         self.loss_fn = self._build_loss_fn()
         self.automatic_optimization = False
@@ -134,9 +120,7 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             return torch.nn.functional.cross_entropy
         if self.loss_name == "focal-contrastive":
             return FocalLoss(gamma=self.focal_gamma, reduction="mean")
-        raise ValueError(
-            f"Unsupported loss={self.loss_name}. Use one of contrastive,focal-contrastive"
-        )
+        raise ValueError(f"Unsupported loss={self.loss_name}. Use one of contrastive,focal-contrastive")
 
     def _configure_encoder(self):
         model_parameters = self.runner.model.parameters()
@@ -156,39 +140,21 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         stopsyms: str | None = None,
     ) -> float:
         stopsyms = stopsyms or self.stopsyms
-        stopsyms = (
-            string.punctuation if stopsyms is None else stopsyms + string.punctuation
-        )
+        stopsyms = string.punctuation if stopsyms is None else stopsyms + string.punctuation
 
         if isinstance(doc_text, list):
             k_words = Counter(
-                stl.flatten_list(
-                    [
-                        "".join(
-                            [w for w in txt.lower().strip() if w not in stopsyms]
-                        ).split()
-                        for txt in doc_text
-                    ]
-                )
+                stl.flatten_list(["".join([w for w in txt.lower().strip() if w not in stopsyms]).split() for txt in doc_text])
             )
         else:
-            k_words = Counter(
-                [
-                    "".join([ch for ch in w.lower().strip() if ch not in stopsyms])
-                    for w in doc_text.split()
-                ]
-            )
+            k_words = Counter(["".join([ch for ch in w.lower().strip() if ch not in stopsyms]) for w in doc_text.split()])
 
         q_words = "".join(w for w in query if w not in stopsyms).lower().strip().split()
-        numerator = sum(
-            [1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words if w in k_words]
-        )
+        numerator = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words if w in k_words])
         denominator = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words])
         return numerator / denominator if denominator > 0 else 0.0
 
-    def _build_rank_matrix(
-        self, batch: dict[str, torch.Tensor], shape: tuple[int, int]
-    ) -> torch.Tensor:
+    def _build_rank_matrix(self, batch: dict[str, torch.Tensor], shape: tuple[int, int]) -> torch.Tensor:
         rank_matrix = torch.zeros(shape, device=self.device, requires_grad=False)
         with torch.no_grad():
             for i, q_tokens in enumerate(batch["input_ids"]):
@@ -204,16 +170,12 @@ class _BaseGammaLightningTrainer(L.LightningModule):
                         clean_up_tokenization_spaces=True,
                     )[len(self.runner.processor.pos_queries_prefix) :].strip()
                     lexical_text = self.lexical_text_by_content.get(content, content)
-                    rank_matrix[i, j] = self._fn_inverse_idf_recall(
-                        queries, lexical_text
-                    )
+                    rank_matrix[i, j] = self._fn_inverse_idf_recall(queries, lexical_text)
         return rank_matrix
 
     @staticmethod
     def _grad_norm(parameters) -> float:
-        grads = [
-            p.grad.detach().float().norm(2) for p in parameters if p.grad is not None
-        ]
+        grads = [p.grad.detach().float().norm(2) for p in parameters if p.grad is not None]
         if not grads:
             return 0.0
         return torch.stack(grads).norm(2).item()
@@ -224,16 +186,8 @@ class _BaseGammaLightningTrainer(L.LightningModule):
 
     def _gamma_grad_metrics(self) -> dict[str, float]:
         return {
-            "Grad_norm_gamma1": (
-                self._grad_norm([self.runner.gamma1])
-                if self.runner.include_semantic_gamma
-                else 0.0
-            ),
-            "Grad_norm_gamma2": (
-                self._grad_norm([self.runner.gamma2])
-                if self.runner.include_keywords_gamma
-                else 0.0
-            ),
+            "Grad_norm_gamma1": (self._grad_norm([self.runner.gamma1]) if self.runner.include_semantic_gamma else 0.0),
+            "Grad_norm_gamma2": (self._grad_norm([self.runner.gamma2]) if self.runner.include_keywords_gamma else 0.0),
         }
 
     def _batch_retrieval_metrics(self, scores: torch.Tensor) -> dict[str, float]:
@@ -241,9 +195,7 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             batch_size = int(scores.shape[0])
             sorted_indices = torch.argsort(scores, dim=1, descending=True)
             target_indices = torch.arange(batch_size, device=scores.device).unsqueeze(1)
-            rank_positions = (sorted_indices == target_indices).nonzero(as_tuple=False)[
-                :, 1
-            ] + 1
+            rank_positions = (sorted_indices == target_indices).nonzero(as_tuple=False)[:, 1] + 1
 
             rank_positions_f = rank_positions.float()
             reciprocal_ranks = 1.0 / rank_positions_f
@@ -267,17 +219,11 @@ class _BaseGammaLightningTrainer(L.LightningModule):
 
     def configure_optimizers(self):
         gamma_params = [p for p in self.runner.gamma_parameters() if p.requires_grad]
-        param_groups = [
-            {"params": gamma_params, "lr": self.lr_gamma, "weight_decay": 0.0}
-        ]
+        param_groups = [{"params": gamma_params, "lr": self.lr_gamma, "weight_decay": 0.0}]
 
         if not self.freeze_encoder:
             gamma_param_ids = {id(p) for p in gamma_params}
-            encoder_params = [
-                p
-                for p in self.runner.parameters()
-                if p.requires_grad and id(p) not in gamma_param_ids
-            ]
+            encoder_params = [p for p in self.runner.parameters() if p.requires_grad and id(p) not in gamma_param_ids]
             if encoder_params:
                 param_groups.append(
                     {
@@ -309,9 +255,7 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         self.manual_backward(loss)
 
         grad_metrics = self._gamma_grad_metrics()
-        grad_metrics["Grad_Norm_model"] = self._grad_norm(
-            self.runner.model.parameters()
-        )
+        grad_metrics["Grad_Norm_model"] = self._grad_norm(self.runner.model.parameters())
         batch_metrics = self._batch_retrieval_metrics(output.detach())
         optimizer.step()
 
@@ -326,9 +270,7 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         for key, value in payload.items():
             if isinstance(value, str):
                 continue
-            self.log(
-                key, value, on_step=True, on_epoch=False, prog_bar=False, logger=True
-            )
+            self.log(key, value, on_step=True, on_epoch=False, prog_bar=False, logger=True)
 
         if self.metrics_logger is not None:
             self.metrics_logger.log_metrics(payload)
@@ -338,9 +280,7 @@ class _BaseGammaLightningTrainer(L.LightningModule):
     def on_train_epoch_end(self):
         if self.save_dir is None:
             return
-        save_path = (
-            self.save_dir / self.save_subdir / f"epoch{str(self.current_epoch + 1)}"
-        )
+        save_path = self.save_dir / self.save_subdir / f"epoch{str(self.current_epoch + 1)}"
         self.runner.save(str(save_path))
 
     def on_train_end(self):
@@ -353,13 +293,9 @@ class UniGammaLightningTrainer(_BaseGammaLightningTrainer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        enabled_count = int(self.runner.include_semantic_gamma) + int(
-            self.runner.include_keywords_gamma
-        )
+        enabled_count = int(self.runner.include_semantic_gamma) + int(self.runner.include_keywords_gamma)
         if enabled_count != 1:
-            raise ValueError(
-                "UniGammaLightningTrainer requires exactly one enabled gamma."
-            )
+            raise ValueError("UniGammaLightningTrainer requires exactly one enabled gamma.")
 
 
 class BiGammaLightningTrainer(_BaseGammaLightningTrainer):
@@ -367,13 +303,8 @@ class BiGammaLightningTrainer(_BaseGammaLightningTrainer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if (
-            not self.runner.include_semantic_gamma
-            or not self.runner.include_keywords_gamma
-        ):
-            raise ValueError(
-                "BiGammaLightningTrainer requires both semantic and keywords gamma to be enabled."
-            )
+        if not self.runner.include_semantic_gamma or not self.runner.include_keywords_gamma:
+            raise ValueError("BiGammaLightningTrainer requires both semantic and keywords gamma to be enabled.")
 
 
 class EncoderOnlyLightningTrainer(L.LightningModule):
@@ -397,9 +328,7 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
         self.weight_decay = weight_decay
         self.save_dir = Path(save_dir) if save_dir is not None else None
         self.metrics_path = Path(metrics_path) if metrics_path is not None else None
-        self.metrics_logger = (
-            CSVLogger(self.metrics_path) if self.metrics_path is not None else None
-        )
+        self.metrics_logger = CSVLogger(self.metrics_path) if self.metrics_path is not None else None
         self.loss_fn = self._build_loss_fn()
         self.automatic_optimization = False
         self.runner.train()
@@ -411,15 +340,11 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
             return torch.nn.functional.cross_entropy
         if self.loss_name == "focal-contrastive":
             return FocalLoss(gamma=self.focal_gamma, reduction="mean")
-        raise ValueError(
-            f"Unsupported loss={self.loss_name}. Use one of contrastive,focal-contrastive"
-        )
+        raise ValueError(f"Unsupported loss={self.loss_name}. Use one of contrastive,focal-contrastive")
 
     @staticmethod
     def _grad_norm(parameters) -> float:
-        grads = [
-            p.grad.detach().float().norm(2) for p in parameters if p.grad is not None
-        ]
+        grads = [p.grad.detach().float().norm(2) for p in parameters if p.grad is not None]
         if not grads:
             return 0.0
         return torch.stack(grads).norm(2).item()
@@ -430,9 +355,7 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
             batch_size = int(scores.shape[0])
             sorted_indices = torch.argsort(scores, dim=1, descending=True)
             target_indices = torch.arange(batch_size, device=scores.device).unsqueeze(1)
-            rank_positions = (sorted_indices == target_indices).nonzero(as_tuple=False)[
-                :, 1
-            ] + 1
+            rank_positions = (sorted_indices == target_indices).nonzero(as_tuple=False)[:, 1] + 1
 
             rank_positions_f = rank_positions.float()
             reciprocal_ranks = 1.0 / rank_positions_f
@@ -493,9 +416,7 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
         for key, value in payload.items():
             if isinstance(value, str):
                 continue
-            self.log(
-                key, value, on_step=True, on_epoch=False, prog_bar=False, logger=True
-            )
+            self.log(key, value, on_step=True, on_epoch=False, prog_bar=False, logger=True)
 
         if self.metrics_logger is not None:
             self.metrics_logger.log_metrics(payload)
@@ -505,9 +426,7 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
     def on_train_epoch_end(self):
         if self.save_dir is None:
             return
-        save_path = (
-            self.save_dir / self.save_subdir / f"epoch{str(self.current_epoch + 1)}"
-        )
+        save_path = self.save_dir / self.save_subdir / f"epoch{str(self.current_epoch + 1)}"
         self.runner.save(str(save_path))
 
     def on_train_end(self):
