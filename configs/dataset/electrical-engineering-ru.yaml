@@ -1,0 +1,9 @@
+name_or_path: hf://d0rj/Electrical-engineering-ru
+labels_field: input
+content_field: output
+split: train
+limit: null
+chunk_id_col: null
+keywords_col: null
+keywords_nested_col: null
+explanation_nested_col: null
