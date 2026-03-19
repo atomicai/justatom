@@ -1,0 +1,16 @@
+name: Deploy docs
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  deploy-docs:
+    name: Deploy documentation
+    uses: ./.github/workflows/docs-reusable.yaml
+    with:
+      deploy: true
+      external-repository: justatom/cayleypy-docs
+      publish-branch: gh-pages
+    secrets:
+      docs-deploy-key: ${{ secrets.DOCS_DEPLOY_KEY }}

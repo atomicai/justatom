@@ -1,0 +1,56 @@
+name: Docs reusable
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version for docs build
+        required: false
+        type: string
+        default: '3.11'
+      deploy:
+        description: Whether to deploy docs to GitHub Pages
+        required: false
+        type: boolean
+        default: false
+      external-repository:
+        description: Target repository for GitHub Pages publish
+        required: false
+        type: string
+        default: ''
+      publish-branch:
+        description: Target branch for GitHub Pages publish
+        required: false
+        type: string
+        default: 'gh-pages'
+    secrets:
+      docs-deploy-key:
+        description: Deploy key for pushing docs to external repository
+        required: false
+
+jobs:
+  docs:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        architecture: x64
+    - name: Install docs dependencies
+      run: |
+        python -m pip install --upgrade pip
+        sudo apt-get update
+        sudo apt-get install -y pandoc
+        python -m pip install -r docs/requirements.txt
+    - name: Build docs
+      run: bash docs/build_docs.sh
+    - name: Push documentation to GitHub Pages
+      if: ${{ inputs.deploy && inputs.external-repository != '' }}
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        publish_dir: ./docs/_build/html
+        external_repository: ${{ inputs.external-repository }}
+        publish_branch: ${{ inputs.publish-branch }}
+        deploy_key: ${{ secrets.docs-deploy-key }}
