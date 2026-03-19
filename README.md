@@ -78,6 +78,10 @@ Supported input formats (via `justatom.storing.dataset.API`):
 - `csv`
 - `xlsx`
 
+Notes about lazy loading:
+- `jsonl`, `parquet` and `csv` are the best options for large lazy/streaming workflows.
+- `json` is still supported, but `lazy=True` currently falls back to eager load with a warning. For truly large corpora prefer `jsonl` or `parquet`.
+
 `DatasetRecordAdapter` maps your source columns to canonical `Document` fields:
 - `content_col` -> `content`
 - `queries_col` -> `meta.labels`
@@ -105,6 +109,171 @@ print(first_doc["meta"]["instruction"])     # extra source field moved to meta
 ```
 
 > See practical notebook example: `notebook/datasets-tutorials/pipeline-large-datasets.ipynb`
+
+### Scenario Configs
+
+`justatom` now treats scenario configs as the primary interface for training and evaluation:
+
+See `LAUNCH.md` for a step-by-step tutorial covering `dataset.id`, direct dataset URIs, and ready-to-run `train` / `eval` commands.
+
+- `configs/evaluate.yaml`
+- `configs/train.yaml`
+- optional dataset presets in `configs/dataset/<id>.yaml`
+- repo-local preset in `configs/dataset/justatom.yaml`
+- packaged demo presets in `justatom/builtins/configs/dataset/demo-eval.yaml` and `justatom/builtins/configs/dataset/demo-train.yaml`
+- packaged HF preset in `justatom/builtins/configs/dataset/mlnavigator-russian-retrieval.yaml`
+
+Packaged builtins inside `justatom/builtins/configs/*.default.yaml` are used as fallbacks, and legacy runtime defaults now come directly from builtin scenario/default config files.
+
+Evaluation config example:
+
+```yaml
+collection:
+  name: Document
+
+dataset:
+  id: null
+  name_or_path: data/eval.jsonl
+  labels_field: labels
+  content_field: content
+
+search:
+  pipeline: embedding
+  top_k: 20
+
+model:
+  name: intfloat/multilingual-e5-small
+```
+
+Training config example:
+
+```yaml
+dataset:
+  id: null
+  name_or_path: data/train.jsonl
+  labels_field: queries
+  content_field: content
+
+model:
+  name: intfloat/multilingual-e5-small
+
+training:
+  batch_size: 8
+  n_epochs: 3
+  freeze_encoder: true
+```
+
+If `dataset.id` is set, `justatom` will try to resolve a preset from `configs/dataset/<id>.yaml` and then apply explicit scenario-level overrides on top.
+
+Built-in datasets can also be referenced directly through `builtin://...` URIs. For example, `builtin://datasets/demo_retrieval.jsonl` points to a tiny packaged JSONL dataset that is safe to use in tests and smoke runs.
+
+The repository-local `justatom` dataset can be referenced through the named source `justatom`. It resolves to `.data/polaroids.ai.data.json` when you run from the repo root.
+
+Hugging Face datasets can be referenced through `hf://...` URIs. For example, `hf://MLNavigator/russian-retrieval` with `dataset.split=train` loads the `train` split through the `datasets` package. You can also use split fallback chains like `dataset.split=dev|test` to try the first available split.
+
+Smoke-ready examples with the packaged demo dataset:
+
+```yaml
+# evaluate
+dataset:
+  id: demo-eval
+```
+
+```yaml
+# train
+dataset:
+  id: demo-train
+```
+
+```yaml
+# eval or train with HF preset
+dataset:
+  id: mlnavigator-russian-retrieval
+```
+
+```yaml
+# eval or train with the repo-local justatom dataset
+dataset:
+  id: justatom
+```
+
+Equivalent direct-path usage:
+
+```python
+from justatom.tooling.dataset import DatasetRecordAdapter
+
+adapter = DatasetRecordAdapter.from_source(
+    "builtin://datasets/demo_retrieval.jsonl",
+    content_col="content",
+    queries_col="labels",
+    chunk_id_col="chunk_id",
+    lazy=True,
+)
+
+hf_adapter = DatasetRecordAdapter.from_source(
+  "hf://MLNavigator/russian-retrieval",
+  content_col="text",
+  queries_col="q",
+  split="train",
+  lazy=True,
+)
+
+repo_adapter = DatasetRecordAdapter.from_source(
+    "justatom",
+    content_col="content",
+    queries_col="queries",
+    chunk_id_col="chunk_id",
+    lazy=True,
+)
+```
+
+CLI examples:
+
+```bash
+python -m justatom.api.eval --config configs/evaluate.yaml
+python -m justatom.api.eval --config configs/evaluate.yaml --search.top_k 50 --weaviate.host localhost
+
+python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id demo-eval
+python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id justatom
+
+python -m justatom.api.train --config configs/train.yaml
+python -m justatom.api.train --config configs/train.yaml --training.batch_size 16 --training.n_epochs 5
+python -m justatom.api.train --config configs/train.yaml --dataset.id demo-train
+python -m justatom.api.train --config configs/train.yaml --dataset.id justatom
+```
+
+Programmatic usage with direct dictionaries is also supported:
+
+```python
+from justatom.api.eval import run as eval_run
+from justatom.api.train import run as train_run
+
+await eval_run(
+    config={
+        "dataset": {"name_or_path": "data/eval.jsonl", "labels_field": "labels"},
+        "search": {"pipeline": "keywords", "top_k": 10},
+    }
+)
+
+train_run(
+    config={
+        "dataset": {"name_or_path": "data/train.jsonl"},
+        "training": {"batch_size": 16, "n_epochs": 3},
+    }
+)
+```
+
+### Formatting
+
+Pull requests are checked automatically with `black` and `isort` in GitHub Actions. The PR will fail if any tracked Python file needs reformatting.
+
+Run the same check locally before opening a PR:
+
+```bash
+make format-check
+```
+
+The shared formatter configuration lives in `pyproject.toml` under `[tool.black]` and `[tool.isort]`.
 
 ### Encoders
 

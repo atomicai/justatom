@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,6 @@ from torch.functional import F  # pyright: ignore[reportPrivateImportUsage]
 from transformers import AutoModel
 
 from justatom.etc.pattern import cached_call, singleton
-import threading
 from justatom.modeling.div import IAttention, IEmbedding, MLAttention
 from justatom.modeling.mask import ILanguageModel, IModel
 

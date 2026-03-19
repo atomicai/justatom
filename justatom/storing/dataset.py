@@ -39,7 +39,7 @@ class JUSTATOMDataset(IDataset):
     def iterator(self, lazy: bool = False, **kwargs):
         kwargs.pop("split", None)
         kwargs.pop("limit", None)
-        dataset_path = resolve_builtin_path("justatom")
+        dataset_path = Path(os.getcwd()) / ".data" / "polaroids.ai.data.json"
         return JSONDataset(fp=str(dataset_path)).iterator(lazy=lazy, **kwargs)
 
 

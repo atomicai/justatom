@@ -109,15 +109,9 @@ def _normalize_legacy_config(data: dict[str, Any]) -> dict[str, Any]:
     if isinstance(api_cfg, dict):
         embedder_cfg = api_cfg.get("embedder")
         if isinstance(embedder_cfg, dict):
-            api_cfg.setdefault(
-                "model_name_or_path", embedder_cfg.get("model_name_or_path")
-            )
-            api_cfg.setdefault(
-                "prefix_for_queries", embedder_cfg.get("prefix_for_queries")
-            )
-            api_cfg.setdefault(
-                "prefix_for_passages", embedder_cfg.get("prefix_for_passages")
-            )
+            api_cfg.setdefault("model_name_or_path", embedder_cfg.get("model_name_or_path"))
+            api_cfg.setdefault("prefix_for_queries", embedder_cfg.get("prefix_for_queries"))
+            api_cfg.setdefault("prefix_for_passages", embedder_cfg.get("prefix_for_passages"))
             api_cfg.setdefault("max_seq_len", embedder_cfg.get("max_seq_len"))
 
         gpu_props = api_cfg.get("gpu_props")

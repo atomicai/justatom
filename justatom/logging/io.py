@@ -1,7 +1,7 @@
-from datetime import datetime
-
-from pathlib import Path
 import csv
+from datetime import datetime
+from pathlib import Path
+
 
 class CSVLogger:
     def __init__(self, file_path: str | Path):

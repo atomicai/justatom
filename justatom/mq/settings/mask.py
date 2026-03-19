@@ -1,10 +1,7 @@
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
-from pydantic_settings.sources import (
-    PydanticBaseSettingsSource,
-    YamlConfigSettingsSource,
-)
+from pydantic_settings.sources import PydanticBaseSettingsSource, YamlConfigSettingsSource
 
 
 class YAMLSettings(BaseSettings):
