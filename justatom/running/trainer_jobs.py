@@ -26,9 +26,7 @@ def _resolve_training_mode(
     enabled_count = int(include_semantic_gamma) + int(include_keywords_gamma)
     if enabled_count == 0:
         if freeze_encoder:
-            raise ValueError(
-                "encoder-only training requires freeze_encoder=False because otherwise nothing is trainable"
-            )
+            raise ValueError("encoder-only training requires freeze_encoder=False because otherwise nothing is trainable")
         return "encoder-only"
     if freeze_encoder:
         return "gamma-only"
@@ -46,8 +44,12 @@ class BaseTrainingJob:
     batch_size: int = 4
     max_seq_len: int = 512
     freeze_encoder: bool = True
+    gamma_joint: bool = False
     include_semantic_gamma: bool = True
     include_keywords_gamma: bool = True
+    alpha_entropy_weight: float = 0.0
+    alpha_train_only: bool = False
+    alpha_mix_weight: float = 0.3
     activation_fn: str = "sigmoid"
     focal_gamma: float = 2.0
     log_backend: str = "csv"
@@ -160,8 +162,12 @@ class BaseTrainingJob:
             "max_seq_len": self.max_seq_len,
             "n_epochs": self.n_epochs,
             "freeze_encoder": self.freeze_encoder,
+            "gamma_joint": self.gamma_joint,
             "include_semantic_gamma": self.include_semantic_gamma,
             "include_keywords_gamma": self.include_keywords_gamma,
+            "alpha_entropy_weight": self.alpha_entropy_weight,
+            "alpha_train_only": self.alpha_train_only,
+            "alpha_mix_weight": self.alpha_mix_weight,
             "activation_fn": self.activation_fn,
             "focal_gamma": self.focal_gamma,
             "lr_gamma": self.lr_gamma,
@@ -242,14 +248,11 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
             device=device,
             include_semantic_gamma=self.include_semantic_gamma,
             include_keywords_gamma=self.include_keywords_gamma,
+            gamma_joint=self.gamma_joint,
             activation_fn=self.activation_fn,
         )
-        enabled_count = int(self.include_semantic_gamma) + int(
-            self.include_keywords_gamma
-        )
-        trainer_cls = (
-            BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
-        )
+        enabled_count = int(self.include_semantic_gamma) + int(self.include_keywords_gamma)
+        trainer_cls = BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
         return trainer_cls(
             runner=runner,
             freeze_encoder=True,
@@ -258,6 +261,9 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
             lr_gamma=self.lr_gamma,
             lr_encoder=self.lr_encoder,
             weight_decay=self.weight_decay,
+            alpha_entropy_weight=self.alpha_entropy_weight,
+            alpha_train_only=self.alpha_train_only,
+            alpha_mix_weight=self.alpha_mix_weight,
             lexical_text_by_content=lexical_text_by_content,
             save_dir=save_dir,
             metrics_path=metrics_path,
@@ -293,14 +299,11 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             device=device,
             include_semantic_gamma=self.include_semantic_gamma,
             include_keywords_gamma=self.include_keywords_gamma,
+            gamma_joint=self.gamma_joint,
             activation_fn=self.activation_fn,
         )
-        enabled_count = int(self.include_semantic_gamma) + int(
-            self.include_keywords_gamma
-        )
-        trainer_cls = (
-            BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
-        )
+        enabled_count = int(self.include_semantic_gamma) + int(self.include_keywords_gamma)
+        trainer_cls = BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
         return trainer_cls(
             runner=runner,
             freeze_encoder=False,
@@ -309,6 +312,9 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             lr_gamma=self.lr_gamma,
             lr_encoder=self.lr_encoder,
             weight_decay=self.weight_decay,
+            alpha_entropy_weight=self.alpha_entropy_weight,
+            alpha_train_only=self.alpha_train_only,
+            alpha_mix_weight=self.alpha_mix_weight,
             lexical_text_by_content=lexical_text_by_content,
             save_dir=save_dir,
             metrics_path=metrics_path,

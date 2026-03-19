@@ -108,9 +108,7 @@ def test_prepare_training_data_streams_and_bounds_sample_size():
     assert pl_data.height == 3
     assert len(js_data) == 3
     assert all(row["content"] in lexical_by_content for row in js_data)
-    assert all(
-        row["lexical_text"] == lexical_by_content[row["content"]] for row in js_data
-    )
+    assert all(row["lexical_text"] == lexical_by_content[row["content"]] for row in js_data)
 
 
 def test_iterate_training_rows_applies_limit_after_query_expansion():
@@ -141,12 +139,14 @@ def test_create_training_job_selects_gamma_only_mode():
     job = train_api.create_training_job(
         dataset_name_or_path="dummy",
         freeze_encoder=True,
+        gamma_joint=True,
         include_semantic_gamma=True,
-        include_keywords_gamma=False,
+        include_keywords_gamma=True,
     )
 
     assert isinstance(job, train_api.GammaOnlyTrainingJob)
     assert job.training_mode == "gamma-only"
+    assert job.gamma_joint is True
 
 
 def test_create_training_job_selects_encoder_gamma_mode():

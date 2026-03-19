@@ -1,40 +1,50 @@
 import os
-from collections.abc import Generator
+import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import polars as pl
 import simplejson as json
-from datasets import load_dataset
 from loguru import logger
+
+try:
+    from datasets import load_dataset
+except Exception:
+    load_dataset = None  # type: ignore
 
 from justatom.configuring.builtins import resolve_builtin_path
 from justatom.etc.pattern import singleton
 from justatom.storing.mask import IDataset
 
 
+_HF_REPO_DATASET_RE = re.compile(r"^[^/\s]+/[^/\s]+(?:\?.*)?$")
+
+
+def _looks_like_hf_repo_dataset(value: str) -> bool:
+    if value.startswith(("hf://", "builtin://", "http://", "https://")):
+        return False
+    if ":" in value:
+        return False
+    return bool(_HF_REPO_DATASET_RE.match(value))
+
+
 class URLInJSONDataset(IDataset):
     """Dataset to fetch via url in json format"""
 
-    def iterator(self, **kwargs) -> Generator:
+    def iterator(self, **kwargs):
         pass
 
 
 class JUSTATOMDataset(IDataset):
-    def iterator(self, **kwargs) -> Generator:
+    def iterator(self, lazy: bool = False, **kwargs):
         kwargs.pop("split", None)
         kwargs.pop("limit", None)
-        dataset_path = Path(os.getcwd()) / ".data" / "polaroids.ai.data.json"
-        if kwargs.get("lazy"):
-            return JSONDataset(fp=dataset_path).iterator(lazy=True)
-
-        with open(dataset_path, encoding="utf-8") as fp:
-            docs = json.load(fp)
-        return [doc for doc in docs if doc is not None]
+        dataset_path = resolve_builtin_path("justatom")
+        return JSONDataset(fp=str(dataset_path)).iterator(lazy=lazy, **kwargs)
 
 
 class JSONDataset(IDataset):
-    def __init__(self, fp):
+    def __init__(self, fp: str):
         self.fp = fp
 
     def iterator(self, lazy: bool = False, **kwargs) -> pl.LazyFrame | pl.DataFrame:
@@ -42,29 +52,25 @@ class JSONDataset(IDataset):
         kwargs.pop("limit", None)
         if lazy:
             logger.warning(
-                "lazy=True for .json is unsupported; falling back to eager JSON loading "
-                f"for file [{self.fp}]. Use .jsonl or .parquet for large datasets."
+                "lazy=True for .json is unsupported; using eager read for [{}]. " "Prefer .jsonl/.parquet for large datasets.",
+                self.fp,
             )
 
         with open(self.fp, encoding="utf-8") as f:
             data = json.load(f)
 
         if isinstance(data, list):
-            frame = pl.from_dicts([row for row in data if row is not None])
-        elif isinstance(data, dict):
+            return pl.from_dicts([row for row in data if row is not None])
+        if isinstance(data, dict):
             maybe_rows = data.get("data")
             if isinstance(maybe_rows, list):
-                frame = pl.from_dicts([row for row in maybe_rows if row is not None])
-            else:
-                frame = pl.from_dicts([data])
-        else:
-            frame = pl.from_dicts([])
-
-        return frame
+                return pl.from_dicts([row for row in maybe_rows if row is not None])
+            return pl.from_dicts([data])
+        return pl.from_dicts([])
 
 
 class JSONLinesDataset(IDataset):
-    def __init__(self, fp):
+    def __init__(self, fp: str):
         self.fp = fp
 
     def iterator(self, lazy: bool = False, **kwargs) -> pl.LazyFrame | pl.DataFrame:
@@ -74,9 +80,7 @@ class JSONLinesDataset(IDataset):
             try:
                 return pl.scan_ndjson(self.fp, **kwargs)
             except Exception:
-                logger.warning(
-                    f"Falling back to eager NDJSON loading for file [{self.fp}]."
-                )
+                logger.warning("Falling back to eager NDJSON loading for file [{}].", self.fp)
 
         try:
             import jsonlines
@@ -92,7 +96,7 @@ class JSONLinesDataset(IDataset):
 
 
 class PARQUETDataset(IDataset):
-    def __init__(self, fp):
+    def __init__(self, fp: str):
         self.fp = fp
 
     def iterator(self, lazy: bool = False, **kwargs) -> pl.LazyFrame | pl.DataFrame:
@@ -102,22 +106,16 @@ class PARQUETDataset(IDataset):
             try:
                 return pl.scan_parquet(self.fp, **kwargs)
             except Exception:
-                logger.warning(
-                    f"Falling back to eager Parquet loading for file [{self.fp}]."
-                )
+                logger.warning("Falling back to eager Parquet loading for file [{}].", self.fp)
         try:
-            return (
-                pl.scan_parquet(self.fp, **kwargs)
-                if lazy
-                else pl.read_parquet(self.fp, **kwargs)
-            )
+            return pl.scan_parquet(self.fp, **kwargs) if lazy else pl.read_parquet(self.fp, **kwargs)
         except Exception as ex:
-            logger.error(f"Failed to load Parquet file [{self.fp}]: {ex}")
+            logger.error("Failed to load Parquet file [{}]: {}", self.fp, ex)
             raise ex
 
 
 class CSVDataset(IDataset):
-    def __init__(self, fp):
+    def __init__(self, fp: str):
         self.fp = fp
 
     def iterator(self, lazy: bool = False, **kwargs) -> pl.LazyFrame | pl.DataFrame:
@@ -129,18 +127,16 @@ class CSVDataset(IDataset):
 
 
 class XLSXDataset(IDataset):
-    def __init__(self, fp):
+    def __init__(self, fp: str):
         self.fp = fp
 
     def iterator(self, **kwargs) -> pl.DataFrame:
         kwargs.pop("split", None)
         kwargs.pop("limit", None)
         if "lazy" in kwargs:
-            logger.warning(
-                "Lazy loading is not supported for XLSXDataset, ignoring the 'lazy' argument."
-            )
-        pl_view = pl.read_excel(self.fp, **kwargs)
-        return pl_view
+            logger.warning("Lazy loading is not supported for XLSXDataset, ignoring the `lazy` argument.")
+            kwargs.pop("lazy", None)
+        return pl.read_excel(self.fp, **kwargs)
 
 
 class HFDataset(IDataset):
@@ -167,35 +163,51 @@ class HFDataset(IDataset):
         return candidates or ["train"]
 
     @staticmethod
-    def _format_split_error(
-        dataset_name: str,
-        split: str,
-        exc: Exception,
-    ) -> ValueError:
+    def _format_split_error(dataset_name: str, split: str, exc: Exception) -> ValueError:
         return ValueError(
             "Failed to load HF dataset "
             f"{dataset_name!r} with split {split!r}. {exc} "
-            "If the dataset may expose different split names, use a fallback chain "
-            "such as `train|test` or `dev|test`."
+            "If split names differ, pass fallback chain like `train|test` or `dev|test`."
         )
 
     def iterator(self, lazy: bool = False, **kwargs):
+        if load_dataset is None:
+            msg = "To read Hugging Face datasets please install `datasets` package. " "Example: pip install datasets"
+            logger.error(msg)
+            raise ImportError(msg)
+
         split_override = kwargs.pop("split", None)
         kwargs.pop("limit", None)
+        drop_columns_raw = kwargs.pop("drop_columns", None)
+        drop_columns: list[str] = []
+        if isinstance(drop_columns_raw, str):
+            drop_columns = [drop_columns_raw]
+        elif isinstance(drop_columns_raw, (list, tuple, set)):
+            drop_columns = [str(col) for col in drop_columns_raw if str(col).strip()]
         dataset_name, config_name, split, streaming = self._parse_ref(self.ref)
-        effective_streaming = lazy if streaming is None else streaming
+        if streaming is not None:
+            logger.warning(
+                "HF query param `streaming` is ignored by design. "
+                "Dataset is always loaded with streaming=False (local cache semantics)."
+            )
+        effective_streaming = False
         split_candidates = self._split_candidates(split_override or split)
 
         last_error: Exception | None = None
         for candidate in split_candidates:
             try:
-                return load_dataset(
+                ds = load_dataset(
                     dataset_name,
                     name=config_name,
                     split=candidate,
                     streaming=effective_streaming,
                     **kwargs,
                 )
+                if drop_columns:
+                    existing_to_drop = [col for col in drop_columns if col in getattr(ds, "column_names", [])]
+                    if existing_to_drop:
+                        ds = ds.remove_columns(existing_to_drop)
+                return ds
             except ValueError as ex:
                 last_error = ex
                 if len(split_candidates) == 1:
@@ -213,37 +225,40 @@ class HFDataset(IDataset):
 @singleton
 class ByName:
     def named(self, name: str, **kwargs):
-        OPS = ["url", "justatom", "hf://<dataset>?split=train"]
+        ops = ["url", "justatom", "hf://<dataset>?split=train", "<owner>/<dataset>"]
 
         if name == "justatom":
-            klass = JUSTATOMDataset
-        elif name == "url":
-            klass = URLInJSONDataset
-        elif str(name).startswith("hf://"):
-            klass = HFDataset
-        else:
-            fp = resolve_builtin_path(name)
-            if not fp.exists():
-                msg = f"Unknown dataset_name_or_path=[{name}] to init IDataset instance. Use one of {','.join(OPS)} or provide valid dataset path"  # noqa: E501
-                logger.error(msg)
-                raise ValueError(msg)
-            if fp.suffix in [".csv"]:
-                return CSVDataset(fp=str(fp))
-            elif fp.suffix in [".xlsx"]:
-                return XLSXDataset(fp=str(fp))
-            elif fp.suffix in [".json"]:
-                return JSONDataset(fp=str(fp))
-            elif fp.suffix in [".jsonl"]:
-                return JSONLinesDataset(fp=str(fp))
-            elif fp.suffix in [".parquet"]:
-                return PARQUETDataset(fp=str(fp))
-            else:
-                msg = f"File exists however loading from the [{fp.suffix}] file is not supported"
-                logger.error(msg)
-                raise ValueError(msg)
-        if klass is HFDataset:
-            return klass(ref=str(name))
-        return klass(**kwargs)
+            return JUSTATOMDataset(**kwargs)
+        if name == "url":
+            return URLInJSONDataset(**kwargs)
+        if str(name).startswith("hf://"):
+            return HFDataset(ref=str(name))
+
+        fp = resolve_builtin_path(name)
+        if not fp.exists() and _looks_like_hf_repo_dataset(str(name)):
+            return HFDataset(ref=f"hf://{name}")
+        if not fp.exists():
+            msg = (
+                f"Unknown dataset_name_or_path=[{name}] to init IDataset instance. "
+                f"Use one of {','.join(ops)} or provide valid dataset path"
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        if fp.suffix in [".csv"]:
+            return CSVDataset(fp=str(fp))
+        if fp.suffix in [".xlsx"]:
+            return XLSXDataset(fp=str(fp))
+        if fp.suffix in [".json"]:
+            return JSONDataset(fp=str(fp))
+        if fp.suffix in [".jsonl"]:
+            return JSONLinesDataset(fp=str(fp))
+        if fp.suffix in [".parquet"]:
+            return PARQUETDataset(fp=str(fp))
+
+        msg = f"File exists however loading from the [{fp.suffix}] file is not supported"
+        logger.error(msg)
+        raise ValueError(msg)
 
 
 API = ByName()

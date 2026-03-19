@@ -14,22 +14,16 @@ from justatom.modeling.div import IAttention, IEmbedding, MLAttention
 from justatom.modeling.mask import ILanguageModel, IModel
 
 
-class E5GeneralWrapper(ILanguageModel):
+class EmbeddingPoolingWrapper(ILanguageModel):
     def __init__(self):
         super().__init__()
 
-    def average_pool(
-        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(
-            ~attention_mask[..., None].bool(), 0.0
-        )
+    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
 
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
-    def maybe_norm_or_average(
-        self, xs, attention_mask: torch.Tensor, norm: bool, average: bool
-    ):
+    def maybe_norm_or_average(self, xs, attention_mask: torch.Tensor, norm: bool, average: bool):
         if average:
             result = self.average_pool(xs, attention_mask=attention_mask)
             if norm:
@@ -41,7 +35,108 @@ class E5GeneralWrapper(ILanguageModel):
         return result
 
 
-class E5Model(E5GeneralWrapper):
+class Qwen3EmbeddingModel(EmbeddingPoolingWrapper):
+    """Qwen3 embedding model with last-token pooling and optional MRL truncation."""
+
+    def __init__(
+        self,
+        model_name_or_instance: str | nn.Module = "Qwen/Qwen3-Embedding-0.6B",
+        device: str = "cpu",
+        **kwargs,
+    ):
+        super().__init__()
+        self.model = (
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
+        )
+        self.name = "Qwen/Qwen3-Embedding-0.6B"
+        self.model.to(device)
+
+    @classmethod
+    def load(cls, model_name_or_path: str, **kwargs):
+        model = AutoModel.from_pretrained(model_name_or_path)
+        return cls(model, **kwargs)
+
+    def last_token_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        left_padding = attention_mask[:, -1].sum() == attention_mask.shape[0]
+        if left_padding:
+            return last_hidden_states[:, -1]
+        sequence_lengths = attention_mask.sum(dim=1) - 1
+        batch_size = last_hidden_states.shape[0]
+        return last_hidden_states[
+            torch.arange(batch_size, device=last_hidden_states.device),
+            sequence_lengths,
+        ]
+
+    def encode(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        norm: bool = True,
+        layer_idx: int = -1,
+        target_dim: int | None = None,
+    ) -> torch.Tensor:
+        use_hidden_states = layer_idx != -1
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=use_hidden_states,
+        )
+
+        if layer_idx == -1:
+            hidden = outputs.last_hidden_state
+        else:
+            hidden = outputs.hidden_states[layer_idx]
+
+        embeddings = self.last_token_pool(hidden, attention_mask=attention_mask)
+        embeddings = self.maybe_norm_or_average(
+            embeddings,
+            attention_mask=attention_mask,
+            norm=norm,
+            average=False,
+        )
+
+        if target_dim is not None:
+            if not (32 <= target_dim <= embeddings.shape[1]):
+                raise ValueError(f"target_dim must be in [32, {embeddings.shape[1]}], got {target_dim}")
+            embeddings = embeddings[:, :target_dim]
+            if norm:
+                embeddings = F.normalize(embeddings, p=2, dim=len(embeddings.shape) - 1)
+
+        return embeddings
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        group_ids: torch.Tensor = None,
+        pos_input_ids: torch.Tensor = None,
+        pos_attention_mask: torch.Tensor = None,
+        norm: bool = True,
+        average: bool = False,
+        layer_idx: int = -1,
+        target_dim: int | None = None,
+    ):
+        response = self.encode(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            norm=norm,
+            layer_idx=layer_idx,
+            target_dim=target_dim,
+        )
+        if pos_input_ids is not None and pos_attention_mask is not None:
+            pos_response = self.encode(
+                input_ids=pos_input_ids,
+                attention_mask=pos_attention_mask,
+                norm=norm,
+                layer_idx=layer_idx,
+                target_dim=target_dim,
+            )
+            return response, pos_response
+
+        return (response,)
+
+
+class E5Model(EmbeddingPoolingWrapper):
     """Base E5 family semantic model from hugging face"""
 
     def __init__(
@@ -52,9 +147,7 @@ class E5Model(E5GeneralWrapper):
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance)
-            if isinstance(model_name_or_instance, str)
-            else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "intfloat/multilingual-e5-base"
         self.model.to(device)
@@ -82,9 +175,7 @@ class E5Model(E5GeneralWrapper):
             average=average,
         )
         if pos_input_ids is not None and pos_attention_mask is not None:
-            pos_outputs = self.model(
-                input_ids=pos_input_ids, attention_mask=pos_attention_mask
-            )
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask)
             pos_response = self.maybe_norm_or_average(
                 pos_outputs.last_hidden_state,
                 attention_mask=pos_attention_mask,
@@ -96,7 +187,7 @@ class E5Model(E5GeneralWrapper):
         return (response,)
 
 
-class E5SModel(E5GeneralWrapper):
+class E5SModel(EmbeddingPoolingWrapper):
     """Small E5 family semantic model from huggingface"""
 
     def __init__(
@@ -107,9 +198,7 @@ class E5SModel(E5GeneralWrapper):
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance)
-            if isinstance(model_name_or_instance, str)
-            else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "intfloat/multilingual-e5-small"
         self.model.to(device)
@@ -152,7 +241,7 @@ class E5SModel(E5GeneralWrapper):
         return (response,)
 
 
-class E5LModel(E5GeneralWrapper):
+class E5LModel(EmbeddingPoolingWrapper):
     """Large E5 family semantic model from huggingface"""
 
     def __init__(
@@ -163,9 +252,7 @@ class E5LModel(E5GeneralWrapper):
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance)
-            if isinstance(model_name_or_instance, str)
-            else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "intfloat/multilingual-e5-large"
         self.model.to(device)
@@ -193,9 +280,7 @@ class E5LModel(E5GeneralWrapper):
             average=average,
         )
         if pos_input_ids is not None and pos_attention_mask is not None:
-            pos_outputs = self.model(
-                input_ids=pos_input_ids, attention_mask=pos_attention_mask
-            )
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask)
             pos_response = self.maybe_norm_or_average(
                 pos_outputs.last_hidden_state,
                 attention_mask=pos_attention_mask,
@@ -207,21 +292,17 @@ class E5LModel(E5GeneralWrapper):
         return (response,)
 
 
-class E5LInstructModel(E5GeneralWrapper):
+class E5LInstructModel(EmbeddingPoolingWrapper):
 
     def __init__(
         self,
-        model_name_or_instance: (
-            str | nn.Module
-        ) = "intfloat/multilingual-e5-large-instruct",
+        model_name_or_instance: str | nn.Module = "intfloat/multilingual-e5-large-instruct",
         device="cpu",
         **kwargs,
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance)
-            if isinstance(model_name_or_instance, str)
-            else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "intfloat/multilingual-e5-large-instruct"
         self.model.to(device)
@@ -249,9 +330,7 @@ class E5LInstructModel(E5GeneralWrapper):
             average=average,
         )
         if pos_input_ids is not None and pos_attention_mask is not None:
-            pos_outputs = self.model(
-                input_ids=pos_input_ids, attention_mask=pos_attention_mask
-            )
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask)
             pos_response = self.maybe_norm_or_average(
                 pos_outputs.last_hidden_state,
                 attention_mask=pos_attention_mask,
@@ -266,17 +345,13 @@ class E5LInstructModel(E5GeneralWrapper):
 class MBERTModel(ILanguageModel):
     def __init__(
         self,
-        model_name_or_instance: (
-            str | nn.Module
-        ) = "google-bert/bert-base-multilingual-cased",
+        model_name_or_instance: str | nn.Module = "google-bert/bert-base-multilingual-cased",
         device: str = "cpu",
         **kwargs,
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance)
-            if isinstance(model_name_or_instance, str)
-            else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "google-bert/bert-base-multilingual-cased"
         self.model.to(device)
@@ -301,15 +376,11 @@ class MBERTModel(ILanguageModel):
         norm: bool = True,
         average: bool = True,
     ):
-        outputs = self.model(
-            input_ids=input_ids, attention_mask=attention_mask
-        ).pooler_output
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask).pooler_output
 
         outputs = self.maybe_norm(outputs, norm=norm)
         if pos_input_ids is not None and pos_attention_mask is not None:
-            pos_outputs = self.model(
-                input_ids=pos_input_ids, attention_mask=pos_attention_mask
-            ).pooler_output
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask).pooler_output
 
             pos_outputs = self.maybe_norm(pos_outputs, norm=norm)
 
@@ -327,9 +398,7 @@ class BGEModel(ILanguageModel):
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance)
-            if isinstance(model_name_or_instance, str)
-            else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "deepvk/USER-bge-m3"
         self.model.to(device)
@@ -355,15 +424,11 @@ class BGEModel(ILanguageModel):
         average: bool = True,
     ):
         # embedding of CLS token
-        outputs = self.model(
-            input_ids=input_ids, attention_mask=attention_mask
-        ).last_hidden_state[:, 0]
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state[:, 0]
 
         outputs = self.maybe_norm(outputs, norm=norm)
         if pos_input_ids is not None and pos_attention_mask is not None:
-            pos_outputs = self.model(
-                input_ids=pos_input_ids, attention_mask=pos_attention_mask
-            ).last_hidden_state[:, 0]
+            pos_outputs = self.model(input_ids=pos_input_ids, attention_mask=pos_attention_mask).last_hidden_state[:, 0]
 
             pos_outputs = self.maybe_norm(pos_outputs, norm=norm)
 
@@ -377,9 +442,7 @@ class PosFreeEncoderModel(IModel):
     Positional Free Bidirectional Encoder Representation from Transformers
     """
 
-    def __init__(
-        self, embedding: nn.Module = None, attention: nn.Module = None, **props
-    ):
+    def __init__(self, embedding: nn.Module = None, attention: nn.Module = None, **props):
         super(PosFreeEncoderModel, self).__init__()  # noqa: UP008
         if embedding is not None and attention is not None:
             self.embedding = embedding
@@ -433,12 +496,8 @@ class PosFreeEncoderModel(IModel):
         # (3). Generate and save the config
         self.generate_config().save_config(save_dir)
 
-    def average_pool(
-        self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        last_hidden = last_hidden_states.masked_fill(
-            ~attention_mask[..., None].bool(), 0.0
-        )
+    def average_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
 
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
@@ -481,6 +540,7 @@ HF_CLASS_MAPPING = {
     "intfloat/multilingual-e5-base": E5Model,
     "intfloat/multilingual-e5-small": E5SModel,
     "intfloat/multilingual-e5-large": E5LModel,
+    "Qwen/Qwen3-Embedding-0.6B": Qwen3EmbeddingModel,
     "google-bert/bert-base-multilingual-cased": MBERTModel,
     "deepvk/USER-bge-m3": BGEModel,
     "justatom/pfbert": PosFreeEncoderModel,
@@ -488,11 +548,16 @@ HF_CLASS_MAPPING = {
 
 COMMON_CLASS_MAPPING = {"justatom/pfbert": PosFreeEncoderModel}
 
+# Backward compatibility alias for older imports.
+E5GeneralWrapper = EmbeddingPoolingWrapper
+
 
 __all__ = [
+    "EmbeddingPoolingWrapper",
     "PosFreeEncoderModel",
     "E5SModel",
     "E5Model",
+    "Qwen3EmbeddingModel",
     "BGEModel",
     "E5LModel",
 ]

@@ -20,8 +20,8 @@ class IModelRunner:
     subclasses = {}  # type: dict
 
     config: dict = {}
-    model: ILanguageModel | None = None
-    prediction_heads: list[Any] = []
+    model: ILanguageModel | None
+    prediction_heads: list[Any]
 
     def __init__(self) -> None:
         super().__init__()
@@ -48,9 +48,7 @@ class IModelRunner:
         :return: An instance of the specified processor.
         """
         config_file = Path(data_dir) / "runner_config.json"
-        assert (
-            config_file.exists()
-        ), "The config is not found, couldn't load the processor"
+        assert config_file.exists(), "The config is not found, couldn't load the processor"
         logger.info(f"Runner config found locally at {data_dir}")
         with open(config_file) as f:
             config = json.load(f)
@@ -98,9 +96,7 @@ class IModelRunner:
             head.label_tensor_name = tasks[head.task_name]["label_tensor_name"]
             label_list = tasks[head.task_name]["label_list"]
             if not label_list and require_labels:
-                raise Exception(
-                    f"The task '{head.task_name}' is missing a valid set of labels"
-                )
+                raise Exception(f"The task '{head.task_name}' is missing a valid set of labels")
             label_list = tasks[head.task_name]["label_list"]
             head.label_list = label_list
             head.metric = tasks[head.task_name]["metric"]

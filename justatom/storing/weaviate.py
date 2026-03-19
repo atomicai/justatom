@@ -2,6 +2,7 @@ import asyncio as asio
 import base64
 import copy
 import datetime
+import inspect
 import json
 import os
 from collections.abc import Generator
@@ -133,15 +134,11 @@ class WeaviateDocStore(AsyncConstructor):
         # startup_period has been removed
         self._client = weaviate.WeaviateAsyncClient(
             connection_params=(
-                weaviate.connect.base.ConnectionParams.from_url(
-                    url=url, grpc_port=grpc_port, grpc_secure=grpc_secure
-                )
+                weaviate.connect.base.ConnectionParams.from_url(url=url, grpc_port=grpc_port, grpc_secure=grpc_secure)
                 if url
                 else None
             ),
-            auth_client_secret=(
-                auth_client_secret.resolve_value() if auth_client_secret else None
-            ),
+            auth_client_secret=(auth_client_secret.resolve_value() if auth_client_secret else None),
             additional_config=additional_config,
             additional_headers=additional_headers,
             embedded_options=embedded_options,
@@ -151,15 +148,11 @@ class WeaviateDocStore(AsyncConstructor):
 
         self._sync_client = weaviate.WeaviateClient(
             connection_params=(
-                weaviate.connect.base.ConnectionParams.from_url(
-                    url=url, grpc_port=grpc_port, grpc_secure=grpc_secure
-                )
+                weaviate.connect.base.ConnectionParams.from_url(url=url, grpc_port=grpc_port, grpc_secure=grpc_secure)
                 if url
                 else None
             ),
-            auth_client_secret=(
-                auth_client_secret.resolve_value() if auth_client_secret else None
-            ),
+            auth_client_secret=(auth_client_secret.resolve_value() if auth_client_secret else None),
             additional_config=additional_config,
             additional_headers=additional_headers,
             embedded_options=embedded_options,
@@ -196,22 +189,14 @@ class WeaviateDocStore(AsyncConstructor):
         :returns:
             Dictionary with serialized data.
         """
-        embedded_options = (
-            asdict(self._embedded_options) if self._embedded_options else None
-        )
-        additional_config = (
-            json.loads(self._additional_config.model_dump_json(by_alias=True))
-            if self._additional_config
-            else None
-        )
+        embedded_options = asdict(self._embedded_options) if self._embedded_options else None
+        additional_config = json.loads(self._additional_config.model_dump_json(by_alias=True)) if self._additional_config else None
 
         return default_to_dict(
             self,
             url=self._url,
             collection_settings=self.collection_settings,
-            auth_client_secret=(
-                self._auth_client_secret.to_dict() if self._auth_client_secret else None
-            ),
+            auth_client_secret=(self._auth_client_secret.to_dict() if self._auth_client_secret else None),
             additional_headers=self._additional_headers,
             embedded_options=embedded_options,
             additional_config=additional_config,
@@ -252,14 +237,10 @@ class WeaviateDocStore(AsyncConstructor):
         try:
             port = int(value)
         except (TypeError, ValueError) as exc:
-            raise DocumentStoreError(
-                f"Invalid {setting_name}={value!r}. Expected a positive integer port."
-            ) from exc
+            raise DocumentStoreError(f"Invalid {setting_name}={value!r}. Expected a positive integer port.") from exc
 
         if port <= 0:
-            raise DocumentStoreError(
-                f"Invalid {setting_name}={value!r}. Expected a positive integer port."
-            )
+            raise DocumentStoreError(f"Invalid {setting_name}={value!r}. Expected a positive integer port.")
 
         return port
 
@@ -286,7 +267,7 @@ class WeaviateDocStore(AsyncConstructor):
                 collection_schema_name=collection_schema_name,
                 url=url,
                 grpc_port=weaviate_grpc_port,
-            )
+            )  # type: ignore
         except Exception as exc:
             logger.warning(
                 "WEAVIATE | connection failed for url=[{}] grpc_port=[{}] collection=[{}]",
@@ -309,9 +290,7 @@ class WeaviateDocStore(AsyncConstructor):
             try:
                 await self._client.connect()
             except Exception as exc:
-                raise DocumentStoreError(
-                    "Failed to reconnect async Weaviate client"
-                ) from exc
+                raise DocumentStoreError("Failed to reconnect async Weaviate client") from exc
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WeaviateDocStore":
@@ -323,24 +302,12 @@ class WeaviateDocStore(AsyncConstructor):
         :returns:
             The deserialized component.
         """
-        if (
-            auth_client_secret := data["init_parameters"].get("auth_client_secret")
-        ) is not None:
-            data["init_parameters"]["auth_client_secret"] = AuthCredentials.from_dict(
-                auth_client_secret
-            )
-        if (
-            embedded_options := data["init_parameters"].get("embedded_options")
-        ) is not None:
-            data["init_parameters"]["embedded_options"] = EmbeddedOptions(
-                **embedded_options
-            )
-        if (
-            additional_config := data["init_parameters"].get("additional_config")
-        ) is not None:
-            data["init_parameters"]["additional_config"] = AdditionalConfig(
-                **additional_config
-            )
+        if (auth_client_secret := data["init_parameters"].get("auth_client_secret")) is not None:
+            data["init_parameters"]["auth_client_secret"] = AuthCredentials.from_dict(auth_client_secret)
+        if (embedded_options := data["init_parameters"].get("embedded_options")) is not None:
+            data["init_parameters"]["embedded_options"] = EmbeddedOptions(**embedded_options)
+        if (additional_config := data["init_parameters"].get("additional_config")) is not None:
+            data["init_parameters"]["additional_config"] = AdditionalConfig(**additional_config)
         return default_from_dict(
             cls,
             data,
@@ -390,9 +357,7 @@ class WeaviateDocStore(AsyncConstructor):
         AVAILABLE_PROPS = set([f["name"] for f in DOCUMENT_COLLECTION_PROPERTIES])
         # Delete all the rest keys
         if "meta" in data.keys() and "meta" not in AVAILABLE_PROPS:  # noqa: SIM118
-            logger.warning(
-                f"[meta={data['meta']}] is present and will be ignored since it is NOT registred in a collection."
-            )
+            logger.warning(f"[meta={data['meta']}] is present and will be ignored since it is NOT registred in a collection.")
             del data["meta"]
 
         return data
@@ -440,25 +405,19 @@ class WeaviateDocStore(AsyncConstructor):
         # TODO: Rewrite using custom handler for every single item. e.g. class Response
         response = docs
         if keywords:
-            response = [
-                doc for doc in response if any([kw in doc.keywords for kw in keywords])  # type: ignore
-            ]
+            response = [doc for doc in response if any([kw in doc.keywords for kw in keywords])]  # type: ignore
         return response
 
     async def _query(self) -> list[dict[str, Any]]:
         # properties = [p.name for p in self._collection.config.get().properties]
         try:
-            result = await self.__collection.iterator(
-                include_vector=True, return_properties=None
-            )  # type: ignore
+            result = await self.__collection.iterator(include_vector=True, return_properties=None)  # type: ignore
         except weaviate.exceptions.WeaviateQueryError as e:
             msg = f"Failed to query documents in Weaviate. Error: {e.message}"
             raise DocumentStoreError(msg) from e
         return result
 
-    async def _query_with_filters(
-        self, filters: dict[str, Any]
-    ) -> list[dict[str, Any]]:
+    async def _query_with_filters(self, filters: dict[str, Any]) -> list[dict[str, Any]]:
         # properties = [p.name for p in self._collection.config.get().properties]
         # When querying with filters we need to paginate using limit and offset as using
         # a cursor with after is not possible. See the official docs:
@@ -474,9 +433,7 @@ class WeaviateDocStore(AsyncConstructor):
         partial_result = None
         result = []
         # Keep querying until we get all documents matching the filters
-        while (
-            partial_result is None or len(partial_result.objects) == DEFAULT_QUERY_LIMIT
-        ):
+        while partial_result is None or len(partial_result.objects) == DEFAULT_QUERY_LIMIT:
             try:
                 partial_result = await self.__collection.query.fetch_objects(
                     filters=convert_filters(filters),
@@ -492,9 +449,7 @@ class WeaviateDocStore(AsyncConstructor):
             offset += DEFAULT_QUERY_LIMIT
         return result
 
-    async def filter_documents(
-        self, filters: dict[str, Any] | None = None
-    ) -> list[Document]:
+    async def filter_documents(self, filters: dict[str, Any] | None = None) -> list[Document]:
         """
         Returns the documents that match the filters provided.
 
@@ -511,9 +466,7 @@ class WeaviateDocStore(AsyncConstructor):
             result = await self._query()
         return [self._to_document(doc) for doc in result]  # type: ignore
 
-    async def _batch_write(
-        self, documents: list[Document], policy: DuplicatePolicy, batch_size: int = 64
-    ) -> int:
+    async def _batch_write(self, documents: list[Document], policy: DuplicatePolicy, batch_size: int = 64) -> int:
         """
         Writes document to Weaviate in batches.
         Documents with the same id will be overwritten.
@@ -554,9 +507,7 @@ class WeaviateDocStore(AsyncConstructor):
                 msg = f"Expected a Document, got '{type(doc)}' instead."
                 raise ValueError(msg)
 
-            does_exist = await self.__collection.data.exists(
-                uuid=generate_uuid5(doc.id)
-            )
+            does_exist = await self.__collection.data.exists(uuid=generate_uuid5(doc.id))
             if policy == DuplicatePolicy.SKIP and does_exist:
                 # This Document already exists, we skip it
                 continue
@@ -592,9 +543,7 @@ class WeaviateDocStore(AsyncConstructor):
         Document when using the SKIP policy.
         """
         await self._ensure_async_connection()
-        total_written_docs = await self._batch_write(
-            documents, batch_size=batch_size, policy=policy
-        )
+        total_written_docs = await self._batch_write(documents, batch_size=batch_size, policy=policy)
         return total_written_docs
 
     async def get_all_documents(self, include_vector: bool = False) -> Generator:  # type: ignore
@@ -613,9 +562,7 @@ class WeaviateDocStore(AsyncConstructor):
         document_ids = [document_ids] if isinstance(document_ids, str) else document_ids
         for document_id in document_ids:
             js_document_id = generate_uuid5(document_id)
-            js_single_response = await self.__collection.query.fetch_object_by_id(
-                js_document_id, include_vector=include_vector
-            )
+            js_single_response = await self.__collection.query.fetch_object_by_id(js_document_id, include_vector=include_vector)
             if js_single_response is not None:
                 yield self._to_document(js_single_response)  # type: ignore
 
@@ -627,9 +574,7 @@ class WeaviateDocStore(AsyncConstructor):
         """
         await self._ensure_async_connection()
         weaviate_ids = [generate_uuid5(doc_id) for doc_id in document_ids]
-        await self.__collection.data.delete_many(
-            where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids)
-        )
+        await self.__collection.data.delete_many(where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids))
 
     async def delete_all_documents(self) -> bool:
         await self._ensure_async_connection()
@@ -646,9 +591,7 @@ class WeaviateDocStore(AsyncConstructor):
         try:
             await self.delete_documents(document_ids=ids)
         except Exception:  # noqa: BLE001
-            logger.error(
-                f"Error deleting documents for {self.collection_settings.get('class')}, see logs for more details."
-            )
+            logger.error(f"Error deleting documents for {self.collection_settings.get('class')}, see logs for more details.")
             return False
 
         return True
@@ -660,9 +603,7 @@ class WeaviateDocStore(AsyncConstructor):
             try:
                 self._sync_client.connect()
             except Exception as exc:
-                raise DocumentStoreError(
-                    "Failed to reconnect sync Weaviate client"
-                ) from exc
+                raise DocumentStoreError("Failed to reconnect sync Weaviate client") from exc
 
     def search_by_keywords_sync(
         self,
@@ -685,9 +626,7 @@ class WeaviateDocStore(AsyncConstructor):
                     limit=top_k,
                     query_properties=["content"],
                     return_properties=None,
-                    return_metadata=MetadataQuery(
-                        distance=True, score=True, explain_score=True, certainty=True
-                    ),
+                    return_metadata=MetadataQuery(distance=True, score=True, explain_score=True, certainty=True),
                 )  # type: ignore
                 response.append([self._to_document(doc) for doc in result.objects])
             else:
@@ -706,9 +645,7 @@ class WeaviateDocStore(AsyncConstructor):
         include_vector: bool | None = False,
     ) -> list[list[Document]]:
         # properties = [p.name for p in self._collection.config.get().properties]
-        logger.info(
-            f"SEARCH | algo=[BM25] | collection_name=[{self.__collection.name}]"
-        )
+        logger.info(f"SEARCH | algo=[BM25] | collection_name=[{self.__collection.name}]")
         queries = [queries] if isinstance(queries, str) else queries
         await self._ensure_async_connection()
         if policy == SearchPolicy.BM25:
@@ -720,9 +657,7 @@ class WeaviateDocStore(AsyncConstructor):
                     include_vector=include_vector,  # type: ignore
                     query_properties=["content"],
                     return_properties=None,
-                    return_metadata=MetadataQuery(
-                        distance=True, score=True, explain_score=True, certainty=True
-                    ),
+                    return_metadata=MetadataQuery(distance=True, score=True, explain_score=True, certainty=True),
                 )  # type: ignore
                 result = [result]
             else:
@@ -772,11 +707,7 @@ class WeaviateDocStore(AsyncConstructor):
             else return_metadata
         )  # type: ignore
         queries = [queries] if isinstance(queries, str) else queries
-        queries_embeddings = (
-            [queries_embeddings]
-            if isinstance(queries_embeddings[0], float)
-            else queries_embeddings
-        )
+        queries_embeddings = [queries_embeddings] if isinstance(queries_embeddings[0], float) else queries_embeddings
         assert len(queries) == len(queries_embeddings), (
             f"Mismatch in number of queries and embeddings provided. "
             f"queries=[{len(queries)}] | embeddings=[{len(queries_embeddings)}]"
@@ -807,9 +738,7 @@ class WeaviateDocStore(AsyncConstructor):
                     include_vector=include_vector,  # type: ignore
                     query_properties=["content"],
                 )
-                for query, query_embedding in zip(
-                    queries, queries_embeddings, strict=False
-                )
+                for query, query_embedding in zip(queries, queries_embeddings, strict=False)
             ]
             result = await asio.gather(*parallel_workers)
         response = _to_documents_per_query(result, self._to_document)
@@ -829,11 +758,7 @@ class WeaviateDocStore(AsyncConstructor):
         if distance is not None and certainty is not None:
             msg = "Can't use 'distance' and 'certainty' parameters together"
             raise ValueError(msg)
-        queries_embeddings = (
-            [queries_embeddings]
-            if isinstance(queries_embeddings[0], float)
-            else queries_embeddings
-        )
+        queries_embeddings = [queries_embeddings] if isinstance(queries_embeddings[0], float) else queries_embeddings
         return_metadata = ["certainty"] if return_metadata is None else return_metadata
         # properties = [p.name for p in self._collection.config.get().properties]
         await self._ensure_async_connection()
@@ -867,13 +792,32 @@ class WeaviateDocStore(AsyncConstructor):
         response = _to_documents_per_query(result, self._to_document)
         return response
 
+    async def close(self) -> None:
+        async_client = getattr(self, "_client", None)
+        if async_client is not None:
+            try:
+                maybe_result = async_client.close()
+                if inspect.isawaitable(maybe_result):
+                    await maybe_result
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("WEAVIATE | failed to close async client: {}", exc)
+            finally:
+                self._client = None
+
+        sync_client = getattr(self, "_sync_client", None)
+        if sync_client is not None:
+            try:
+                sync_client.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("WEAVIATE | failed to close sync client: {}", exc)
+            finally:
+                self._sync_client = None
+
 
 class IFinder:
     async def find(self, collection_name: str, **kwargs):
         logger.info(f"FINDER | collection_name=[{collection_name}]")
-        store = await WeaviateDocStore.connect(
-            collection_schema_name=collection_name, **kwargs
-        )
+        store = await WeaviateDocStore.connect(collection_schema_name=collection_name, **kwargs)
         assert (
             store.get_collection_name() == collection_name.lower().capitalize()
         ), f"Mismatch in collection's settings initialization.\

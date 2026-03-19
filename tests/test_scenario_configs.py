@@ -70,9 +70,7 @@ class ScenarioConfigTest(unittest.TestCase):
     def test_builtin_eval_dataset_preset_resolves_from_packaged_defaults(self):
         kwargs = resolve_eval_kwargs(config={"dataset": {"id": "demo-eval"}})
 
-        self.assertEqual(
-            kwargs["dataset_name_or_path"], "builtin://datasets/demo_retrieval.jsonl"
-        )
+        self.assertEqual(kwargs["dataset_name_or_path"], "builtin://datasets/demo_retrieval.jsonl")
         self.assertEqual(kwargs["labels_field"], "labels")
         self.assertEqual(kwargs["chunk_id_col"], "chunk_id")
 
@@ -83,13 +81,9 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(path.name, "demo_retrieval.jsonl")
 
     def test_builtin_hf_dataset_preset_resolves_from_packaged_defaults(self):
-        kwargs = resolve_eval_kwargs(
-            config={"dataset": {"id": "mlnavigator-russian-retrieval"}}
-        )
+        kwargs = resolve_eval_kwargs(config={"dataset": {"id": "mlnavigator-russian-retrieval"}})
 
-        self.assertEqual(
-            kwargs["dataset_name_or_path"], "hf://MLNavigator/russian-retrieval"
-        )
+        self.assertEqual(kwargs["dataset_name_or_path"], "hf://MLNavigator/russian-retrieval")
         self.assertEqual(kwargs["labels_field"], "q")
         self.assertEqual(kwargs["content_field"], "text")
         self.assertEqual(kwargs["split"], "train")
@@ -107,9 +101,7 @@ class ScenarioConfigTest(unittest.TestCase):
             },
         )
 
-        self.assertEqual(
-            kwargs["dataset_name_or_path"], "hf://MLNavigator/russian-retrieval"
-        )
+        self.assertEqual(kwargs["dataset_name_or_path"], "hf://MLNavigator/russian-retrieval")
         self.assertEqual(kwargs["labels_field"], "q")
         self.assertEqual(kwargs["content_field"], "text")
         self.assertEqual(kwargs["split"], "test")
@@ -126,6 +118,42 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertIsNone(kwargs["split"])
         self.assertIsNone(kwargs["limit"])
 
+    def test_repo_electrical_engineering_ru_dataset_preset_resolves_for_eval(self):
+        kwargs = resolve_eval_kwargs(config={"dataset": {"id": "electrical-engineering-ru"}})
+
+        self.assertEqual(
+            kwargs["dataset_name_or_path"],
+            "hf://d0rj/Electrical-engineering-ru",
+        )
+        self.assertEqual(kwargs["labels_field"], "input")
+        self.assertEqual(kwargs["content_field"], "output")
+        self.assertEqual(kwargs["split"], "train")
+        self.assertIsNone(kwargs["limit"])
+
+    def test_repo_boolq_ru_dataset_preset_resolves_for_eval(self):
+        kwargs = resolve_eval_kwargs(config={"dataset": {"id": "boolq-ru"}})
+
+        self.assertEqual(
+            kwargs["dataset_name_or_path"],
+            "hf://d0rj/boolq-ru",
+        )
+        self.assertEqual(kwargs["labels_field"], "question")
+        self.assertEqual(kwargs["content_field"], "passage")
+        self.assertEqual(kwargs["split"], "train")
+        self.assertIsNone(kwargs["limit"])
+
+    def test_repo_text_meme_dataset_preset_resolves_for_eval(self):
+        kwargs = resolve_eval_kwargs(config={"dataset": {"id": "text-meme"}})
+
+        self.assertEqual(
+            kwargs["dataset_name_or_path"],
+            "justatom/meme-russian-ir",
+        )
+        self.assertIsNone(kwargs["labels_field"])
+        self.assertEqual(kwargs["content_field"], "description")
+        self.assertEqual(kwargs["split"], "train")
+        self.assertIsNone(kwargs["limit"])
+
     def test_train_supports_direct_dict_config(self):
         kwargs = resolve_train_kwargs(
             config={
@@ -137,6 +165,9 @@ class ScenarioConfigTest(unittest.TestCase):
                 "training": {
                     "batch_size": 16,
                     "n_epochs": 3,
+                    "gamma_joint": True,
+                    "alpha_train_only": True,
+                    "alpha_mix_weight": 0.4,
                     "include_keywords_gamma": False,
                 },
                 "logging": {"backend": "wandb"},
@@ -147,6 +178,9 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(kwargs["model_name_or_path"], "intfloat/multilingual-e5-base")
         self.assertEqual(kwargs["batch_size"], 16)
         self.assertEqual(kwargs["n_epochs"], 3)
+        self.assertTrue(kwargs["gamma_joint"])
+        self.assertTrue(kwargs["alpha_train_only"])
+        self.assertEqual(kwargs["alpha_mix_weight"], 0.4)
         self.assertFalse(kwargs["include_keywords_gamma"])
         self.assertIsNone(kwargs["split"])
         self.assertIsNone(kwargs["limit"])
@@ -155,9 +189,7 @@ class ScenarioConfigTest(unittest.TestCase):
     def test_builtin_train_dataset_preset_resolves_from_packaged_defaults(self):
         kwargs = resolve_train_kwargs(config={"dataset": {"id": "demo-train"}})
 
-        self.assertEqual(
-            kwargs["dataset_name_or_path"], "builtin://datasets/demo_retrieval.jsonl"
-        )
+        self.assertEqual(kwargs["dataset_name_or_path"], "builtin://datasets/demo_retrieval.jsonl")
         self.assertEqual(kwargs["labels_field"], "queries")
         self.assertEqual(kwargs["content_field"], "content")
 
@@ -182,9 +214,7 @@ class ScenarioConfigTest(unittest.TestCase):
             overrides={"dataset": {"split": "dev|test", "limit": 25}},
         )
 
-        self.assertEqual(
-            kwargs["dataset_name_or_path"], "hf://MLNavigator/russian-retrieval"
-        )
+        self.assertEqual(kwargs["dataset_name_or_path"], "hf://MLNavigator/russian-retrieval")
         self.assertEqual(kwargs["split"], "dev|test")
         self.assertEqual(kwargs["limit"], 25)
 
@@ -192,9 +222,7 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(WeaviateDocStore._normalize_host(None), "localhost")
         self.assertEqual(WeaviateDocStore._normalize_host(""), "localhost")
         self.assertEqual(WeaviateDocStore._normalize_host("None"), "localhost")
-        self.assertEqual(
-            WeaviateDocStore._normalize_host("${WEAVIATE_HOST}"), "localhost"
-        )
+        self.assertEqual(WeaviateDocStore._normalize_host("${WEAVIATE_HOST}"), "localhost")
         self.assertEqual(WeaviateDocStore._normalize_host("weaviate"), "weaviate")
 
     def test_weaviate_normalize_port_uses_defaults_for_empty_like_values(self):

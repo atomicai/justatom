@@ -1,0 +1,7 @@
+Generate {{target_count}} diverse query/rephrase variants in {{output_language}}.
+Style: {{style}}.
+Length of each query: from {{min_words}} to {{max_words}} words.
+Additional instructions: {{extra_instructions}}.
+
+Content:
+{{content}}

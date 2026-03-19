@@ -11,6 +11,7 @@ from typing import Any, Optional, Sequence
 
 from loguru import logger
 from openai import AsyncOpenAI
+from tqdm.auto import tqdm
 
 
 @dataclass(slots=True)
@@ -46,6 +47,8 @@ class OpenAIAsyncWrapper:
         top_p: float = 0.9,
         max_tokens: int = 512,
         stream: bool = False,
+        show_progress: bool = True,
+        progress_desc: str | None = None,
     ) -> None:
         self.model = model
         self.response_format = response_format
@@ -69,13 +72,10 @@ class OpenAIAsyncWrapper:
         self.top_p = float(top_p)
         self.max_tokens = int(max_tokens)
         self.stream = bool(stream)
+        self.show_progress = bool(show_progress)
+        self.progress_desc = progress_desc
 
-        api_key = (
-            openai_token
-            or os.getenv("OPENAI_API_KEY")
-            or os.getenv("JWT_TOKEN", None)
-            or "sk-noauth"
-        )
+        api_key = openai_token or os.getenv("OPENAI_API_KEY") or os.getenv("JWT_TOKEN", None) or "sk-noauth"
         base_url = (base_url or os.getenv("OPENAI_BASE_URL") or "").rstrip("/")
 
         self.client = AsyncOpenAI(
@@ -89,9 +89,7 @@ class OpenAIAsyncWrapper:
             assert system_prompt_fpath is not None, logger.error(
                 "OpenAIAsyncWrapper: either system_prompt or system_prompt_fpath must be set"
             )
-            self.system_prompt = (
-                Path(system_prompt_fpath).read_text(encoding="utf-8").strip()
-            )
+            self.system_prompt = Path(system_prompt_fpath).read_text(encoding="utf-8").strip()
         else:
             self.system_prompt = system_prompt.strip()
 
@@ -108,22 +106,16 @@ class OpenAIAsyncWrapper:
         return results
 
     async def logger_callback(self, results: list, total: int):
-        logger.info(
-            f"OpenAIAsyncWrapper: completed {len(results)}/{total} tasks ({len(results)/total:.2%})"
-        )
+        logger.info(f"OpenAIAsyncWrapper: completed {len(results)}/{total} tasks ({len(results)/total:.2%})")
         return True
 
-    async def _arun(
-        self, tasks: Sequence[OpenAiTask], progress_cb=None
-    ) -> list[dict[str, Any]]:
+    async def _arun(self, tasks: Sequence[OpenAiTask], progress_cb=None) -> list[dict[str, Any]]:
         sem = asio.Semaphore(self.max_concurrent)
 
         async def one(t: OpenAiTask) -> dict[str, Any]:
             async with sem:
                 try:
-                    return await asio.wait_for(
-                        self._call(t), timeout=self.api_call_timeout
-                    )
+                    return await asio.wait_for(self._call(t), timeout=self.api_call_timeout)
                 except asio.TimeoutError:
                     return {
                         "id": t.id,
@@ -137,17 +129,13 @@ class OpenAIAsyncWrapper:
 
         return await asio.gather(*(one(t) for t in tasks))
 
-    async def _arun_with_progress(
-        self, tasks: Sequence[OpenAiTask], progress_cb=None
-    ) -> list[dict[str, Any]]:
+    async def _arun_with_progress(self, tasks: Sequence[OpenAiTask], progress_cb=None) -> list[dict[str, Any]]:
         sem = asio.Semaphore(self.max_concurrent)
 
         async def one(t: OpenAiTask) -> dict[str, Any]:
             async with sem:
                 try:
-                    result = await asio.wait_for(
-                        self._call(t), timeout=self.api_call_timeout
-                    )
+                    result = await asio.wait_for(self._call(t), timeout=self.api_call_timeout)
                 except asio.TimeoutError:
                     result = {
                         "id": t.id,
@@ -163,21 +151,32 @@ class OpenAIAsyncWrapper:
         total = len(tasks)
         results = []
         coros = [one(t) for t in tasks]
+        progress = (
+            tqdm(total=total, desc=self.progress_desc or "OpenAI requests", leave=False)
+            if self.show_progress and total > 0
+            else None
+        )
 
-        for future in asio.as_completed(coros):
-            resp = await future
-            results.append(resp)
-            try:
-                await self._append_snapshot(resp)
-            except Exception as exc:
-                logger.warning(f"snapshot write failed: {exc}")
-            if progress_cb:
+        try:
+            for future in asio.as_completed(coros):
+                resp = await future
+                results.append(resp)
+                if progress is not None:
+                    progress.update(1)
                 try:
-                    maybe = progress_cb(results, total)
-                    if inspect.isawaitable(maybe):
-                        await maybe
+                    await self._append_snapshot(resp)
                 except Exception as exc:
-                    logger.error(f"progress_cb error: {exc}")
+                    logger.warning(f"snapshot write failed: {exc}")
+                if progress_cb:
+                    try:
+                        maybe = progress_cb(results, total)
+                        if inspect.isawaitable(maybe):
+                            await maybe
+                    except Exception as exc:
+                        logger.error(f"progress_cb error: {exc}")
+        finally:
+            if progress is not None:
+                progress.close()
         await self._finalize_snapshot_writer()
         return results
 
@@ -189,9 +188,7 @@ class OpenAIAsyncWrapper:
         snapshot_number: int | str | None = None,
         snapshot_suffix: str | None = None,
     ) -> Path:
-        where = (
-            Path(os.getcwd()) if self.snapshot_dir is None else Path(self.snapshot_dir)
-        )
+        where = Path(os.getcwd()) if self.snapshot_dir is None else Path(self.snapshot_dir)
         snapshot_prefix = self.snapshot_prefix or ""
         snapshot_suffix = "" if snapshot_suffix is None else snapshot_suffix
         snapshot_number_str = "" if snapshot_number is None else str(snapshot_number)
@@ -250,17 +247,13 @@ class OpenAIAsyncWrapper:
                 if nxt is None:
                     queue.task_done()
                     lines = [json.dumps(it, ensure_ascii=False) + "\n" for it in batch]
-                    self._snapshot_offsets[where_path] = await asio.to_thread(
-                        self._write_lines_sync, where_path, lines
-                    )
+                    self._snapshot_offsets[where_path] = await asio.to_thread(self._write_lines_sync, where_path, lines)
                     queue.task_done()
                     return
                 batch.append(nxt)
 
             lines = [json.dumps(it, ensure_ascii=False) + "\n" for it in batch]
-            self._snapshot_offsets[where_path] = await asio.to_thread(
-                self._write_lines_sync, where_path, lines
-            )
+            self._snapshot_offsets[where_path] = await asio.to_thread(self._write_lines_sync, where_path, lines)
             for _ in batch:
                 queue.task_done()
 
@@ -272,13 +265,9 @@ class OpenAIAsyncWrapper:
     ) -> None:
         if snapshot_number is not None or snapshot_suffix is not None:
             # Keep explicit API behavior for ad-hoc writes.
-            where_path = self._snapshot_path(
-                snapshot_number=snapshot_number, snapshot_suffix=snapshot_suffix
-            )
+            where_path = self._snapshot_path(snapshot_number=snapshot_number, snapshot_suffix=snapshot_suffix)
             payload = json.dumps(item, ensure_ascii=False) + "\n"
-            self._snapshot_offsets[where_path] = await asio.to_thread(
-                self._write_lines_sync, where_path, [payload]
-            )
+            self._snapshot_offsets[where_path] = await asio.to_thread(self._write_lines_sync, where_path, [payload])
             return
 
         await self._ensure_snapshot_writer()
@@ -319,9 +308,7 @@ class OpenAIAsyncWrapper:
         snapshot_prefix = "" if snapshot_prefix is None else snapshot_prefix
         snapshot_suffix = "" if snapshot_suffix is None else snapshot_suffix
         snapshot_number_str = "" if snapshot_number is None else str(snapshot_number)
-        where_path = (
-            where / f"{snapshot_prefix}{snapshot_number_str}{snapshot_suffix}.jsonl"
-        )
+        where_path = where / f"{snapshot_prefix}{snapshot_number_str}{snapshot_suffix}.jsonl"
         where.mkdir(parents=True, exist_ok=True)
 
         is_ok_local: bool | None
@@ -331,9 +318,7 @@ class OpenAIAsyncWrapper:
             else:
                 lines = [json.dumps(data, ensure_ascii=False) + "\n"]
 
-            self._snapshot_offsets[where_path] = await asio.to_thread(
-                self._write_lines_sync, where_path, lines
-            )
+            self._snapshot_offsets[where_path] = await asio.to_thread(self._write_lines_sync, where_path, lines)
         except Exception as exc:
             logger.error(f"The data coming {data} is not JSONL compliant: {exc}")
             is_ok_local = False

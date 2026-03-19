@@ -24,8 +24,12 @@ training:
   max_seq_len: 512
   n_epochs: 1
   freeze_encoder: true
+  gamma_joint: false
   include_semantic_gamma: true
   include_keywords_gamma: true
+  alpha_entropy_weight: 0.0
+  alpha_train_only: false
+  alpha_mix_weight: 0.3
   activation_fn: sigmoid
   focal_gamma: 2.0
   lr_gamma: 0.01

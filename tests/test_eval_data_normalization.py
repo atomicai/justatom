@@ -41,9 +41,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
             }
         ]
 
-        with patch(
-            "justatom.storing.dataset.load_dataset", return_value=rows
-        ) as mocked:
+        with patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked:
             adapter = DatasetRecordAdapter.from_source(
                 dataset_name_or_path="hf://MLNavigator/russian-retrieval?split=train",
                 content_col="text",
@@ -56,24 +54,82 @@ class EvalDataNormalizationTest(unittest.TestCase):
             "MLNavigator/russian-retrieval",
             name=None,
             split="train",
-            streaming=True,
+            streaming=False,
         )
         self.assertEqual(
             first["content"],
             "Органические остатки представлены известковыми выделениями.",
         )
+        self.assertEqual(first["meta"]["labels"], ["чем представлены органические остатки?"])
         self.assertEqual(
-            first["meta"]["labels"], ["чем представлены органические остатки?"]
+            first["text"],
+            "Органические остатки представлены известковыми выделениями.",
         )
         self.assertEqual(first["meta"]["a"], "известковыми выделениями")
         self.assertEqual(first["meta"]["context"], "long supporting context")
 
+    def test_from_source_supports_plain_hf_owner_dataset_name(self):
+        rows = [
+            {
+                "text": "sample text",
+                "q": "sample query",
+            }
+        ]
+
+        with patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked:
+            adapter = DatasetRecordAdapter.from_source(
+                dataset_name_or_path="justatom/meme-russian-ir",
+                content_col="text",
+                queries_col="q",
+                lazy=True,
+            )
+
+        first = next(adapter.iterator())
+        mocked.assert_called_once_with(
+            "justatom/meme-russian-ir",
+            name=None,
+            split="train",
+            streaming=False,
+        )
+        self.assertEqual(first["content"], "sample text")
+        self.assertEqual(first["text"], "sample text")
+        self.assertEqual(first["meta"]["labels"], ["sample query"])
+
+    def test_from_source_prefers_existing_local_path_over_hf_pattern(self):
+        with tempfile.TemporaryDirectory(prefix="adapter_local_hf_like_") as td:
+            root = Path(td)
+            local_hf_like = root / "justatom" / "meme-russian-ir"
+            local_hf_like.mkdir(parents=True, exist_ok=True)
+            data_path = local_hf_like / "dataset.jsonl"
+            data_path.write_text(
+                json.dumps(
+                    {
+                        "content": "local content",
+                        "labels": ["local query"],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("justatom.storing.dataset.load_dataset") as mocked:
+                adapter = DatasetRecordAdapter.from_source(
+                    dataset_name_or_path=data_path,
+                    content_col="content",
+                    queries_col="labels",
+                    lazy=True,
+                )
+
+            first = next(adapter.iterator())
+            mocked.assert_not_called()
+            self.assertEqual(first["content"], "local content")
+            self.assertEqual(first["meta"]["labels"], ["local query"])
+
     def test_from_source_supports_hf_split_fallback_candidates(self):
         rows = [{"text": "text-a", "q": "query-a"}]
 
-        def _fake_load_dataset(
-            dataset_name, name=None, split=None, streaming=None, **kwargs
-        ):
+        def _fake_load_dataset(dataset_name, name=None, split=None, streaming=None, **kwargs):
             del name, streaming, kwargs
             if dataset_name != "MLNavigator/russian-retrieval":
                 raise AssertionError(dataset_name)
@@ -83,9 +139,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
                 return rows
             raise AssertionError(split)
 
-        with patch(
-            "justatom.storing.dataset.load_dataset", side_effect=_fake_load_dataset
-        ) as mocked:
+        with patch("justatom.storing.dataset.load_dataset", side_effect=_fake_load_dataset) as mocked:
             adapter = DatasetRecordAdapter.from_source(
                 dataset_name_or_path="hf://MLNavigator/russian-retrieval",
                 content_col="text",
@@ -127,9 +181,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
         first = next(adapter.iterator())
         self.assertEqual(first["id"], "doc-1")
         self.assertEqual(first["content"], "Cats sleep up to sixteen hours a day.")
-        self.assertEqual(
-            first["meta"]["labels"], ["how long do cats sleep", "cat sleeping hours"]
-        )
+        self.assertEqual(first["meta"]["labels"], ["how long do cats sleep", "cat sleeping hours"])
         self.assertEqual(first["meta"]["instruction"], "builtin-demo")
 
     def test_from_source_respects_limit_for_builtin_jsonl(self):
@@ -296,9 +348,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
                 first = next(iter(adapter.records))
                 self.assertEqual(first["chunk_id"], "a")
                 warning_mock.assert_called_once()
-                self.assertIn(
-                    "lazy=True for .json is unsupported", warning_mock.call_args[0][0]
-                )
+                self.assertIn("lazy=True for .json is unsupported", warning_mock.call_args[0][0])
         finally:
             data_path.unlink(missing_ok=True)
 
@@ -336,19 +386,13 @@ class EvalDataNormalizationTest(unittest.TestCase):
             data_path.unlink(missing_ok=True)
 
     def test_normalize_queries_handles_str_list_and_none(self):
-        self.assertEqual(
-            DatasetRecordAdapter.normalize_queries("one question"), ["one question"]
-        )
-        self.assertEqual(
-            DatasetRecordAdapter.normalize_queries(["q1", "q2", None, ""]), ["q1", "q2"]
-        )
+        self.assertEqual(DatasetRecordAdapter.normalize_queries("one question"), ["one question"])
+        self.assertEqual(DatasetRecordAdapter.normalize_queries(["q1", "q2", None, ""]), ["q1", "q2"])
         self.assertEqual(DatasetRecordAdapter.normalize_queries(None), [])
         self.assertEqual(DatasetRecordAdapter.normalize_queries([]), [])
 
     def test_normalize_queries_handles_json_string(self):
-        self.assertEqual(
-            DatasetRecordAdapter.normalize_queries('["q1", "q2"]'), ["q1", "q2"]
-        )
+        self.assertEqual(DatasetRecordAdapter.normalize_queries('["q1", "q2"]'), ["q1", "q2"])
 
     def test_normalize_keywords_handles_all_supported_shapes(self):
         self.assertEqual(
@@ -457,9 +501,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
         self.assertEqual(doc["meta"]["labels"], ["q1"])
         self.assertEqual(doc["meta"]["title"], "book-a")
         self.assertNotIn("chunk_id", doc["meta"])
-        self.assertEqual(
-            doc["meta"]["keywords_or_phrases"], [{"keyword_or_phrase": "alpha"}]
-        )
+        self.assertEqual(doc["meta"]["keywords_or_phrases"], [{"keyword_or_phrase": "alpha"}])
 
     def test_preserve_all_fields_can_be_disabled(self):
         rows = [

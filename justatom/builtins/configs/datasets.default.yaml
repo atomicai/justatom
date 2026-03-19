@@ -1,0 +1,40 @@
+dataset:
+  # Optional preset id from configs/dataset/<id>.yaml or builtins configs/dataset/<id>.yaml
+  id: null
+  name_or_path: null
+  content_field: content
+  split: null
+  limit: 100
+
+generation:
+  target_count: 3
+  output_language: ru
+  style: diverse
+  min_words: 4
+  max_words: 14
+  extra_instructions: ""
+
+llm:
+  model: gpt-4o-mini
+  temperature: 0.6
+  top_p: 0.95
+  max_tokens: 512
+  api_call_timeout: 120.0
+  max_parallel_requests: 8
+  base_url: ${OPENAI_BASE_URL}
+  openai_token: ${OPENAI_API_KEY}
+
+output:
+  save_path: generated/dataset_queries.jsonl
+  snapshot_dir: generated
+  snapshot_prefix: datasets-gen-
+  snapshot_backend: loguru
+
+prompt:
+  system_path: builtin://prompts/datasets_system_prompt.txt
+  user_template_path: builtin://prompts/datasets_user_template_prompt.txt
+  variables: {}
+
+runtime:
+  dry_run: false
+  print_sample: 3
