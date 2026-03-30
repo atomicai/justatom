@@ -132,3 +132,10 @@ dmypy.json
 .vscode/
 .idea
 .DS_Store
+
+# Local experiment data and training outputs
+.data/
+.tmp_runs/
+wandb/
+artifacts/
+evals/

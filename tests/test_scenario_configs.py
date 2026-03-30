@@ -142,14 +142,20 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(kwargs["split"], "train")
         self.assertIsNone(kwargs["limit"])
 
-    def test_repo_text_meme_dataset_preset_resolves_for_eval(self):
-        kwargs = resolve_eval_kwargs(config={"dataset": {"id": "text-meme"}})
+    def test_repo_meme_russian_ir_dataset_preset_resolves_for_eval(self):
+        kwargs = resolve_eval_kwargs(config={"dataset": {"id": "meme-russian-ir"}})
 
-        self.assertEqual(
-            kwargs["dataset_name_or_path"],
-            "justatom/meme-russian-ir",
-        )
-        self.assertIsNone(kwargs["labels_field"])
+        self.assertEqual(kwargs["dataset_name_or_path"], "justatom/meme-russian-ir")
+        self.assertEqual(kwargs["labels_field"], "generated")
+        self.assertEqual(kwargs["content_field"], "description")
+        self.assertEqual(kwargs["split"], "train")
+        self.assertIsNone(kwargs["limit"])
+
+    def test_repo_meme_russian_ir_dataset_preset_resolves_for_train(self):
+        kwargs = resolve_train_kwargs(config={"dataset": {"id": "meme-russian-ir"}})
+
+        self.assertEqual(kwargs["dataset_name_or_path"], "justatom/meme-russian-ir")
+        self.assertEqual(kwargs["labels_field"], "generated")
         self.assertEqual(kwargs["content_field"], "description")
         self.assertEqual(kwargs["split"], "train")
         self.assertIsNone(kwargs["limit"])
@@ -168,6 +174,7 @@ class ScenarioConfigTest(unittest.TestCase):
                     "gamma_joint": True,
                     "alpha_train_only": True,
                     "alpha_mix_weight": 0.4,
+                    "margin": 0.7,
                     "include_keywords_gamma": False,
                 },
                 "logging": {"backend": "wandb"},
@@ -181,6 +188,7 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertTrue(kwargs["gamma_joint"])
         self.assertTrue(kwargs["alpha_train_only"])
         self.assertEqual(kwargs["alpha_mix_weight"], 0.4)
+        self.assertEqual(kwargs["margin"], 0.7)
         self.assertFalse(kwargs["include_keywords_gamma"])
         self.assertIsNone(kwargs["split"])
         self.assertIsNone(kwargs["limit"])

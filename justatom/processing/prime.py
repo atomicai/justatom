@@ -1,3 +1,5 @@
+import hashlib
+
 import torch
 from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 
@@ -195,6 +197,12 @@ class TrainWithContrastiveProcessor(IProcessor):
         self.pos_queries_prefix = pos_queries_prefix
         self.pos_queries_field = pos_queries_field
 
+    @staticmethod
+    def _stable_key_id(value: str | None) -> int:
+        normalized = "" if value is None else str(value)
+        digest = hashlib.blake2b(normalized.encode("utf-8"), digest_size=8).digest()
+        return int.from_bytes(digest, "big", signed=False) & ((1 << 63) - 1)
+
     @classmethod
     def load(cls, where, config: dict, **props):
         tokenizer = ITokenizer.from_pretrained(where)
@@ -233,6 +241,7 @@ class TrainWithContrastiveProcessor(IProcessor):
         pos_queries_atten_ids_batch = tokenized_pos_queries_batch["attention_mask"]
 
         for (
+            raw,
             sample,
             pos_sample,
             queries_input_ids,
@@ -240,6 +249,7 @@ class TrainWithContrastiveProcessor(IProcessor):
             pos_queries_input_ids,
             pos_queries_att_ids,
         ) in zip(
+            dicts,
             queries,
             pos_queries,
             queries_input_ids_batch,
@@ -248,11 +258,17 @@ class TrainWithContrastiveProcessor(IProcessor):
             pos_queries_atten_ids_batch,
             strict=False,
         ):
+            raw_query = raw.get(self.queries_field)
+            raw_doc = raw.get(self.pos_queries_field)
+            raw_chunk_id = raw.get("chunk_id")
             features = dict(
                 input_ids=queries_input_ids,
                 attention_mask=queries_att_ids,
                 pos_input_ids=pos_queries_input_ids,
                 pos_attention_mask=pos_queries_att_ids,
+                doc_key_id=self._stable_key_id(raw_chunk_id if raw_chunk_id is not None else raw_doc),
+                content_key_id=self._stable_key_id(raw_doc),
+                query_key_id=self._stable_key_id(raw_query),
             )
 
             cur_sample = Sample(

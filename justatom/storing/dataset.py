@@ -1,5 +1,6 @@
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -11,6 +12,12 @@ try:
     from datasets import load_dataset
 except Exception:
     load_dataset = None  # type: ignore
+
+try:
+    from huggingface_hub import hf_hub_download, list_repo_files
+except Exception:
+    hf_hub_download = None  # type: ignore
+    list_repo_files = None  # type: ignore
 
 from justatom.configuring.builtins import resolve_builtin_path
 from justatom.etc.pattern import singleton
@@ -102,6 +109,7 @@ class PARQUETDataset(IDataset):
     def iterator(self, lazy: bool = False, **kwargs) -> pl.LazyFrame | pl.DataFrame:
         kwargs.pop("split", None)
         kwargs.pop("limit", None)
+        kwargs.pop("drop_columns", None)
         if lazy:
             try:
                 return pl.scan_parquet(self.fp, **kwargs)
@@ -170,6 +178,78 @@ class HFDataset(IDataset):
             "If split names differ, pass fallback chain like `train|test` or `dev|test`."
         )
 
+    @staticmethod
+    @lru_cache(maxsize=64)
+    def _repo_files(dataset_name: str) -> tuple[str, ...]:
+        if list_repo_files is None:
+            return ()
+        try:
+            return tuple(list_repo_files(repo_id=dataset_name, repo_type="dataset"))
+        except Exception as ex:
+            logger.warning("Failed to inspect HF dataset repo files for [{}]: {}", dataset_name, ex)
+            return ()
+
+    @staticmethod
+    def _parquet_files_for_split(repo_files: tuple[str, ...], split: str) -> list[str]:
+        split_name = split.strip().lower()
+        matches: list[str] = []
+        for repo_file in repo_files:
+            repo_file_lower = repo_file.lower()
+            basename = Path(repo_file_lower).name
+            if not repo_file_lower.endswith(".parquet"):
+                continue
+            if basename == f"{split_name}.parquet" or basename.startswith(f"{split_name}-"):
+                matches.append(repo_file)
+                continue
+            if f"/{split_name}/" in repo_file_lower or f"/{split_name}-" in repo_file_lower:
+                matches.append(repo_file)
+        return sorted(matches)
+
+    @staticmethod
+    def _drop_columns_from_result(data, drop_columns: list[str]):
+        if not drop_columns:
+            return data
+        if isinstance(data, pl.DataFrame):
+            existing_to_drop = [col for col in drop_columns if col in data.columns]
+            return data.drop(existing_to_drop) if existing_to_drop else data
+        if isinstance(data, pl.LazyFrame):
+            existing_to_drop = [col for col in drop_columns if col in data.collect_schema().names()]
+            return data.drop(existing_to_drop) if existing_to_drop else data
+        existing_to_drop = [col for col in drop_columns if col in getattr(data, "column_names", [])]
+        if existing_to_drop:
+            return data.remove_columns(existing_to_drop)
+        return data
+
+    def _load_parquet_fallback(self, dataset_name: str, split: str, lazy: bool):
+        if hf_hub_download is None:
+            return None
+
+        repo_files = self._repo_files(dataset_name)
+        parquet_files = self._parquet_files_for_split(repo_files, split)
+        if not parquet_files:
+            return None
+
+        local_paths: list[str] = []
+        for repo_file in parquet_files:
+            try:
+                local_paths.append(hf_hub_download(repo_id=dataset_name, filename=repo_file, repo_type="dataset"))
+            except Exception as ex:
+                logger.warning(
+                    "Failed to cache HF parquet shard [{}] from [{}]: {}",
+                    repo_file,
+                    dataset_name,
+                    ex,
+                )
+                return None
+
+        logger.warning(
+            "HF dataset [{}] split [{}] is falling back to [{}] cached parquet shard(s).",
+            dataset_name,
+            split,
+            len(local_paths),
+        )
+        return pl.scan_parquet(local_paths) if lazy else pl.read_parquet(local_paths)
+
     def iterator(self, lazy: bool = False, **kwargs):
         if load_dataset is None:
             msg = "To read Hugging Face datasets please install `datasets` package. " "Example: pip install datasets"
@@ -203,19 +283,19 @@ class HFDataset(IDataset):
                     streaming=effective_streaming,
                     **kwargs,
                 )
-                if drop_columns:
-                    existing_to_drop = [col for col in drop_columns if col in getattr(ds, "column_names", [])]
-                    if existing_to_drop:
-                        ds = ds.remove_columns(existing_to_drop)
-                return ds
-            except ValueError as ex:
+                return self._drop_columns_from_result(ds, drop_columns)
+            except Exception as ex:
                 last_error = ex
-                if len(split_candidates) == 1:
+                parquet_fallback = self._load_parquet_fallback(dataset_name=dataset_name, split=candidate, lazy=lazy)
+                if parquet_fallback is not None:
+                    return self._drop_columns_from_result(parquet_fallback, drop_columns)
+                if isinstance(ex, ValueError) and len(split_candidates) == 1:
                     raise self._format_split_error(dataset_name, candidate, ex) from ex
                 logger.warning(
-                    "Failed to load HF dataset [{}] split [{}], trying next candidate.",
+                    "Failed to load HF dataset [{}] split [{}], trying next candidate. Error: {}",
                     dataset_name,
                     candidate,
+                    ex,
                 )
 
         assert last_error is not None

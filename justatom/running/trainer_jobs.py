@@ -39,7 +39,7 @@ class BaseTrainingJob:
     prepare_training_data_fn: Any
     roll_metrics_path_fn: Any
     model_name_or_path: str = "intfloat/multilingual-e5-small"
-    loss: str = "contrastive"
+    loss: str = "soft-contrastive"
     num_samples: int = 100
     batch_size: int = 4
     max_seq_len: int = 512
@@ -51,6 +51,12 @@ class BaseTrainingJob:
     alpha_train_only: bool = False
     alpha_mix_weight: float = 0.3
     activation_fn: str = "sigmoid"
+    margin: float = 0.5
+    contrastive_temperature: float = 0.1
+    soft_contrastive_temperature: float = 1.0
+    grad_acc_steps: int = 6
+    optimizer: str = "auto"
+    max_negative_inverse_idf_recall: float | None = None
     focal_gamma: float = 2.0
     log_backend: str = "csv"
     wandb_project: str = "justatom-gamma"
@@ -71,6 +77,17 @@ class BaseTrainingJob:
     save_dir: str | Path | None = None
     metrics_path: str | Path | None = None
     sample_training_rows_fn: Any | None = None
+
+    def __post_init__(self):
+        training_mode = _resolve_training_mode(
+            freeze_encoder=self.freeze_encoder,
+            include_semantic_gamma=self.include_semantic_gamma,
+            include_keywords_gamma=self.include_keywords_gamma,
+        )
+        if training_mode != "encoder-only" and self.loss not in {"soft-contrastive", "contrastive", "focal-contrastive"}:
+            raise ValueError(
+                f"training_mode={training_mode} only supports loss in {{soft-contrastive, contrastive, focal-contrastive}}, got loss={self.loss}"
+            )
 
     @property
     def training_mode(self) -> str:
@@ -169,6 +186,12 @@ class BaseTrainingJob:
             "alpha_train_only": self.alpha_train_only,
             "alpha_mix_weight": self.alpha_mix_weight,
             "activation_fn": self.activation_fn,
+            "margin": self.margin,
+            "contrastive_temperature": self.contrastive_temperature,
+            "soft_contrastive_temperature": self.soft_contrastive_temperature,
+            "grad_acc_steps": self.grad_acc_steps,
+            "optimizer": self.optimizer,
+            "max_negative_inverse_idf_recall": self.max_negative_inverse_idf_recall,
             "focal_gamma": self.focal_gamma,
             "lr_gamma": self.lr_gamma,
             "lr_encoder": self.lr_encoder,
@@ -264,6 +287,12 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
             alpha_entropy_weight=self.alpha_entropy_weight,
             alpha_train_only=self.alpha_train_only,
             alpha_mix_weight=self.alpha_mix_weight,
+            margin=self.margin,
+            contrastive_temperature=self.contrastive_temperature,
+            soft_contrastive_temperature=self.soft_contrastive_temperature,
+            grad_acc_steps=self.grad_acc_steps,
+            optimizer_name=self.optimizer,
+            max_negative_inverse_idf_recall=self.max_negative_inverse_idf_recall,
             lexical_text_by_content=lexical_text_by_content,
             save_dir=save_dir,
             metrics_path=metrics_path,
@@ -315,6 +344,12 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             alpha_entropy_weight=self.alpha_entropy_weight,
             alpha_train_only=self.alpha_train_only,
             alpha_mix_weight=self.alpha_mix_weight,
+            margin=self.margin,
+            contrastive_temperature=self.contrastive_temperature,
+            soft_contrastive_temperature=self.soft_contrastive_temperature,
+            grad_acc_steps=self.grad_acc_steps,
+            optimizer_name=self.optimizer,
+            max_negative_inverse_idf_recall=self.max_negative_inverse_idf_recall,
             lexical_text_by_content=lexical_text_by_content,
             save_dir=save_dir,
             metrics_path=metrics_path,
@@ -350,9 +385,14 @@ class EncoderOnlyTrainingJob(BaseTrainingJob):
         return EncoderOnlyLightningTrainer(
             runner=runner,
             loss_name=self.loss,
+            margin=self.margin,
             focal_gamma=self.focal_gamma,
+            contrastive_temperature=self.contrastive_temperature,
+            soft_contrastive_temperature=self.soft_contrastive_temperature,
             lr_encoder=self.lr_encoder,
             weight_decay=self.weight_decay,
+            grad_acc_steps=self.grad_acc_steps,
+            optimizer_name=self.optimizer,
             save_dir=save_dir,
             metrics_path=metrics_path,
         )

@@ -142,11 +142,23 @@ class SoftContrastiveLoss(nn.Module):
         distance_metric=cosine_distance,
         margin: float = 0.5,
         size_average: bool = True,
+        temperature: float = 1.0,
     ) -> None:
         super().__init__()
         self.distance_metric = distance_metric
         self.margin = float(margin)
         self.size_average = bool(size_average)
+        if temperature <= 0:
+            raise ValueError(f"temperature must be > 0, got {temperature}")
+        self.temperature = float(temperature)
+
+    def _distance(self, rep_anchor: torch.Tensor, rep_other: torch.Tensor) -> torch.Tensor:
+        if self.temperature == 1.0:
+            return self.distance_metric(rep_anchor, rep_other)
+
+        similarities = F.cosine_similarity(rep_anchor, rep_other) / self.temperature
+        similarities = similarities.clamp(min=-1.0, max=1.0)
+        return 1.0 - similarities
 
     def forward(self, rep_anchor: torch.Tensor, rep_other: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         if rep_anchor.shape != rep_other.shape:
@@ -156,7 +168,7 @@ class SoftContrastiveLoss(nn.Module):
         if rep_anchor.shape[0] != labels.shape[0]:
             raise ValueError(f"Batch size mismatch between embeddings and labels. Got {rep_anchor.shape[0]} vs {labels.shape[0]}")
 
-        distances = self.distance_metric(rep_anchor, rep_other)
+        distances = self._distance(rep_anchor, rep_other)
         losses = 0.5 * (labels.float() * distances.pow(2) + (1 - labels).float() * F.relu(self.margin - distances).pow(2))
         return losses.mean() if self.size_average else losses.sum()
 

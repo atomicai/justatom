@@ -54,7 +54,7 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
     return {
         "dataset_name_or_path": dataset.get("name_or_path"),
         "model_name_or_path": model.get("name", "intfloat/multilingual-e5-small"),
-        "loss": training.get("loss", "contrastive"),
+        "loss": training.get("loss", "soft-contrastive"),
         "num_samples": int(training.get("num_samples", 100)),
         "batch_size": int(training.get("batch_size", 4)),
         "max_seq_len": int(training.get("max_seq_len", 512)),
@@ -66,6 +66,16 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "alpha_train_only": bool(training.get("alpha_train_only", False)),
         "alpha_mix_weight": float(training.get("alpha_mix_weight", 0.3)),
         "activation_fn": training.get("activation_fn", "sigmoid"),
+        "margin": float(training.get("margin", 0.5)),
+        "contrastive_temperature": float(training.get("contrastive_temperature", 0.1)),
+        "soft_contrastive_temperature": float(training.get("soft_contrastive_temperature", 1.0)),
+        "grad_acc_steps": int(training.get("grad_acc_steps", 6)),
+        "optimizer": training.get("optimizer", "auto"),
+        "max_negative_inverse_idf_recall": (
+            None
+            if training.get("max_negative_inverse_idf_recall") is None
+            else float(training.get("max_negative_inverse_idf_recall"))
+        ),
         "focal_gamma": float(training.get("focal_gamma", 2.0)),
         "log_backend": logging_cfg.get("backend", "csv"),
         "wandb_project": logging_cfg.get("wandb_project", "justatom-gamma"),

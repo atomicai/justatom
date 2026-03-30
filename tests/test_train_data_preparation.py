@@ -111,6 +111,28 @@ def test_prepare_training_data_streams_and_bounds_sample_size():
     assert all(row["lexical_text"] == lexical_by_content[row["content"]] for row in js_data)
 
 
+def test_prepare_training_data_preserves_chunk_identity_for_duplicate_content():
+    rows = [
+        {"chunk_id": "a", "content": "same-doc", "queries": ["q1"]},
+        {"chunk_id": "b", "content": "same-doc", "queries": ["q2"]},
+    ]
+    path = _write_jsonl(rows)
+
+    try:
+        _, js_data, lexical_by_content = train_api.prepare_training_data(
+            dataset_name_or_path=path,
+            num_samples=2,
+            content_field="content",
+            labels_field="queries",
+            chunk_id_col="chunk_id",
+        )
+    finally:
+        path.unlink(missing_ok=True)
+
+    assert [row["chunk_id"] for row in js_data] == ["a", "b"]
+    assert lexical_by_content == {"same-doc": "same-doc"}
+
+
 def test_iterate_training_rows_applies_limit_after_query_expansion():
     rows = [
         {"chunk_id": "a", "content": "doc-a", "queries": ["q1", "q2"]},
@@ -135,6 +157,38 @@ def test_iterate_training_rows_applies_limit_after_query_expansion():
     assert [row["queries"] for row in sample_rows] == ["q1", "q2"]
 
 
+def test_iterate_training_rows_handles_extra_source_fields_for_iterable_sources(
+    monkeypatch,
+):
+    rows = [
+        {"passage": "doc-a", "question": "q1"},
+        {"passage": "doc-b", "question": "q2"},
+    ]
+
+    class _FakeDataset:
+        def iterator(self, **kwargs):
+            return iter(rows)
+
+    def fake_named(*args, **kwargs):
+        return _FakeDataset()
+
+    monkeypatch.setattr(train_api.DatasetApi, "named", fake_named)
+
+    sample_rows = list(
+        train_api.iterate_training_rows(
+            dataset_name_or_path="hf://dummy/boolq-like",
+            content_field="passage",
+            labels_field="question",
+            limit=2,
+        )
+    )
+
+    assert sample_rows == [
+        {"content": "doc-a", "queries": "q1", "lexical_text": "doc-a"},
+        {"content": "doc-b", "queries": "q2", "lexical_text": "doc-b"},
+    ]
+
+
 def test_create_training_job_selects_gamma_only_mode():
     job = train_api.create_training_job(
         dataset_name_or_path="dummy",
@@ -147,6 +201,7 @@ def test_create_training_job_selects_gamma_only_mode():
     assert isinstance(job, train_api.GammaOnlyTrainingJob)
     assert job.training_mode == "gamma-only"
     assert job.gamma_joint is True
+    assert job.loss == "soft-contrastive"
 
 
 def test_create_training_job_selects_encoder_gamma_mode():
@@ -171,3 +226,70 @@ def test_create_training_job_selects_encoder_only_mode():
 
     assert isinstance(job, train_api.EncoderOnlyTrainingJob)
     assert job.training_mode == "encoder-only"
+
+
+def test_create_training_job_preserves_optimizer_and_legacy_style_params():
+    job = train_api.create_training_job(
+        dataset_name_or_path="dummy",
+        freeze_encoder=False,
+        include_semantic_gamma=True,
+        include_keywords_gamma=True,
+        loss="contrastive",
+        optimizer="adafactor",
+        grad_acc_steps=6,
+        contrastive_temperature=0.1,
+        soft_contrastive_temperature=10.0,
+    )
+
+    assert isinstance(job, train_api.EncoderGammaTrainingJob)
+    assert job.optimizer == "adafactor"
+    assert job.grad_acc_steps == 6
+    assert job.contrastive_temperature == 0.1
+    assert job.soft_contrastive_temperature == 10.0
+
+
+def test_resolve_train_kwargs_reads_optimizer_and_legacy_style_params():
+    kwargs = train_api.resolve_train_kwargs(
+        config={
+            "dataset": {"name_or_path": "dummy"},
+            "training": {
+                "optimizer": "adafactor",
+                "grad_acc_steps": 6,
+                "contrastive_temperature": 0.1,
+                "soft_contrastive_temperature": 10.0,
+            },
+        }
+    )
+
+    assert kwargs["optimizer"] == "adafactor"
+    assert kwargs["grad_acc_steps"] == 6
+    assert kwargs["contrastive_temperature"] == 0.1
+    assert kwargs["soft_contrastive_temperature"] == 10.0
+
+
+def test_create_training_job_allows_temperature_contrastive_for_gamma_modes():
+    job = train_api.create_training_job(
+        dataset_name_or_path="dummy",
+        freeze_encoder=False,
+        include_semantic_gamma=True,
+        include_keywords_gamma=True,
+        loss="contrastive",
+    )
+
+    assert isinstance(job, train_api.EncoderGammaTrainingJob)
+    assert job.loss == "contrastive"
+
+
+def test_create_training_job_allows_focal_contrastive_for_gamma_modes():
+    job = train_api.create_training_job(
+        dataset_name_or_path="dummy",
+        freeze_encoder=False,
+        include_semantic_gamma=True,
+        include_keywords_gamma=True,
+        loss="focal-contrastive",
+        focal_gamma=3.0,
+    )
+
+    assert isinstance(job, train_api.EncoderGammaTrainingJob)
+    assert job.loss == "focal-contrastive"
+    assert job.focal_gamma == 3.0

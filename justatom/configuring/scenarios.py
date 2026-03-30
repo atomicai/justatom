@@ -148,13 +148,9 @@ def _resolve_dataset_overlay(
     builtin_defaults = load_builtin_yaml(_builtins_default_relative_path(scenario_name))
     builtin_dataset_defaults = builtin_defaults.get("dataset") or {}
     explicit_dataset_cfg = _drop_none_values(dataset_cfg)
-    if isinstance(explicit_dataset_cfg, dict) and isinstance(
-        builtin_dataset_defaults, dict
-    ):
+    if isinstance(explicit_dataset_cfg, dict) and isinstance(builtin_dataset_defaults, dict):
         explicit_dataset_cfg = {
-            key: value
-            for key, value in explicit_dataset_cfg.items()
-            if builtin_dataset_defaults.get(key) != value
+            key: value for key, value in explicit_dataset_cfg.items() if builtin_dataset_defaults.get(key) != value
         }
 
     out = dict(cfg)

@@ -62,9 +62,7 @@ class Document:
         """  # noqa: E501
 
         if content is None:
-            raise ValueError(
-                "Can't create 'Document': Mandatory 'content' field is None"
-            )
+            raise ValueError("Can't create 'Document': Mandatory 'content' field is None")
 
         self.content = content
         self.content_type = content_type
@@ -116,9 +114,7 @@ class Document:
             final_hash_key += ":" + str(getattr(self, attr))
 
         if final_hash_key == "":
-            raise ValueError(
-                "Cant't create 'Document': 'id_hash_keys' must contain at least one of ['content', 'meta']"
-            )
+            raise ValueError("Cant't create 'Document': 'id_hash_keys' must contain at least one of ['content', 'meta']")
 
         return f"{mmh3.hash128(final_hash_key, signed=False):02x}"
 
@@ -142,9 +138,7 @@ class Document:
                 continue
             if k == "content":  # noqa: SIM102
                 # Convert pl.DataFrame to list of rows for serialization
-                if self.content_type == "table" and isinstance(
-                    self.content, pl.DataFrame
-                ):
+                if self.content_type == "table" and isinstance(self.content, pl.DataFrame):
                     v = [self.content.columns.tolist()] + self.content.values.tolist()
             k = k if k not in inv_field_map else inv_field_map[k]  # noqa: SIM401
             _doc[k] = v
@@ -179,7 +173,6 @@ class Document:
             "keywords",
             "id",
             "score",
-            "question",
             "meta",
             "embedding",
         ]
@@ -206,12 +199,8 @@ class Document:
             _new_doc["id_hash_keys"] = id_hash_keys
 
         # Convert list of rows to pl.DataFrame
-        if _new_doc.get("content_type") == "table" and isinstance(
-            _new_doc["content"], list
-        ):
-            _new_doc["content"] = pl.DataFrame(
-                _new_doc["content"][1:], schema=_new_doc["content"][0]
-            )
+        if _new_doc.get("content_type") == "table" and isinstance(_new_doc["content"], list):
+            _new_doc["content"] = pl.DataFrame(_new_doc["content"][1:], schema=_new_doc["content"][0])
 
         return cls(**_new_doc)
 
@@ -242,9 +231,7 @@ class Document:
         doc_dict = self.to_dict()
         embedding = doc_dict.get("embedding", None)
         if embedding is not None:
-            doc_dict["embedding"] = (
-                f"<embedding of shape {getattr(embedding, 'shape', '[no shape]')}>"
-            )
+            doc_dict["embedding"] = f"<embedding of shape {getattr(embedding, 'shape', '[no shape]')}>"
         return f"<Document: {str(doc_dict)}>"
 
     def __str__(self):

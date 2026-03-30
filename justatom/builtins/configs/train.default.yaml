@@ -18,7 +18,7 @@ model:
   name: intfloat/multilingual-e5-small
 
 training:
-  loss: contrastive
+  loss: soft-contrastive
   num_samples: 100
   batch_size: 4
   max_seq_len: 512
@@ -31,6 +31,12 @@ training:
   alpha_train_only: false
   alpha_mix_weight: 0.3
   activation_fn: sigmoid
+  margin: 0.5
+  contrastive_temperature: 0.1
+  soft_contrastive_temperature: 1.0
+  grad_acc_steps: 6
+  optimizer: auto
+  max_negative_inverse_idf_recall: null
   focal_gamma: 2.0
   lr_gamma: 0.01
   lr_encoder: 0.00002
