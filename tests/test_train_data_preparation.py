@@ -196,12 +196,16 @@ def test_create_training_job_selects_gamma_only_mode():
         gamma_joint=True,
         include_semantic_gamma=True,
         include_keywords_gamma=True,
+        temperature=0.07,
+        grad_acc_steps=4,
     )
 
     assert isinstance(job, train_api.GammaOnlyTrainingJob)
     assert job.training_mode == "gamma-only"
     assert job.gamma_joint is True
     assert job.loss == "soft-contrastive"
+    assert job.temperature == 0.07
+    assert job.grad_acc_steps == 4
 
 
 def test_create_training_job_selects_encoder_gamma_mode():

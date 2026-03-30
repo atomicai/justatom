@@ -6,6 +6,13 @@ from pathlib import Path
 from typing import Any
 from loguru import logger
 
+from justatom.tooling.collections import (
+    build_collection_metadata,
+    build_collection_tag_payload,
+    resolve_artifact_dirname,
+    write_collection_metadata,
+)
+
 
 def maybe_cuda_or_mps() -> str:
     import torch
@@ -39,7 +46,10 @@ class BaseTrainingJob:
     prepare_training_data_fn: Any
     roll_metrics_path_fn: Any
     model_name_or_path: str = "intfloat/multilingual-e5-small"
+    collection_name: str | None = None
+    collection_tag: str | None = None
     loss: str = "soft-contrastive"
+    temperature: float | None = None
     num_samples: int = 100
     batch_size: int = 4
     max_seq_len: int = 512
@@ -79,6 +89,11 @@ class BaseTrainingJob:
     sample_training_rows_fn: Any | None = None
 
     def __post_init__(self):
+        if self.temperature is None:
+            self.temperature = float(self.contrastive_temperature)
+        else:
+            self.temperature = float(self.temperature)
+            self.contrastive_temperature = float(self.temperature)
         training_mode = _resolve_training_mode(
             freeze_encoder=self.freeze_encoder,
             include_semantic_gamma=self.include_semantic_gamma,
@@ -104,7 +119,11 @@ class BaseTrainingJob:
         raise NotImplementedError
 
     def _resolved_save_dir(self) -> Path:
-        save_dir = Path(self.save_dir or Path(os.getcwd()) / "weights")
+        if self.save_dir is not None:
+            save_dir = Path(self.save_dir)
+        else:
+            dirname = resolve_artifact_dirname(self.collection_name)
+            save_dir = Path(os.getcwd()) / "weights" / dirname
         save_dir.mkdir(parents=True, exist_ok=True)
         return save_dir
 
@@ -115,6 +134,48 @@ class BaseTrainingJob:
         if self.log_backend == "csv":
             return str(self.roll_metrics_path_fn(default_metrics_path))
         return None
+
+    def _collection_payload(self) -> dict[str, object]:
+        return build_collection_tag_payload(
+            model_name_or_path=self.model_name_or_path,
+            dataset_name_or_path=self.dataset_name_or_path,
+            loss=self.loss,
+            temperature=self.temperature,
+            grad_acc_steps=self.grad_acc_steps,
+            freeze_encoder=self.freeze_encoder,
+            include_semantic_gamma=self.include_semantic_gamma,
+            include_keywords_gamma=self.include_keywords_gamma,
+            activation_fn=self.activation_fn,
+            batch_size=self.batch_size,
+            max_seq_len=self.max_seq_len,
+            lr_gamma=self.lr_gamma,
+            lr_encoder=self.lr_encoder,
+            weight_decay=self.weight_decay,
+            alpha_entropy_weight=self.alpha_entropy_weight,
+            alpha_train_only=self.alpha_train_only,
+            alpha_mix_weight=self.alpha_mix_weight,
+            focal_gamma=self.focal_gamma,
+            collection_tag=self.collection_tag,
+        )
+
+    def _write_collection_metadata(self, *, save_dir: Path) -> None:
+        if self.collection_name is None:
+            return
+        metadata = build_collection_metadata(
+            collection_name=self.collection_name,
+            collection_tag=self.collection_tag,
+            model_name_or_path=self.model_name_or_path,
+            dataset_name_or_path=self.dataset_name_or_path,
+            save_dir=save_dir,
+            payload=self._collection_payload(),
+        )
+        local_meta_path, registry_path = write_collection_metadata(
+            save_dir=save_dir,
+            metadata=metadata,
+        )
+        logger.info(f"Collection metadata saved to: {local_meta_path}")
+        if registry_path is not None:
+            logger.info(f"Collection tag registry saved to: {registry_path}")
 
     def _build_loader(self):
         from justatom.processing import ITokenizer, igniset
@@ -169,11 +230,15 @@ class BaseTrainingJob:
             return False
         from pytorch_lightning.loggers import WandbLogger
 
-        pl_logger = WandbLogger(project=self.wandb_project, name=self.wandb_run_name)
+        run_name = self.wandb_run_name or self.collection_name
+        pl_logger = WandbLogger(project=self.wandb_project, name=run_name)
         wandb_config = {
             "dataset_name_or_path": str(self.dataset_name_or_path),
             "model_name_or_path": self.model_name_or_path,
+            "collection_name": self.collection_name,
+            "collection_tag": self.collection_tag,
             "loss": self.loss,
+            "temperature": self.temperature,
             "num_samples": self.num_samples,
             "batch_size": self.batch_size,
             "max_seq_len": self.max_seq_len,
@@ -209,6 +274,7 @@ class BaseTrainingJob:
             "metrics_path": self.metrics_path,
             "log_backend": self.log_backend,
             "training_mode": self.training_mode,
+            "resolved_wandb_run_name": run_name,
         }
         pl_logger.experiment.config.update(wandb_config, allow_val_change=True)
         return pl_logger
@@ -218,6 +284,9 @@ class BaseTrainingJob:
 
         save_dir = self._resolved_save_dir()
         metrics_path = self._resolved_metrics_path(save_dir)
+        self._write_collection_metadata(save_dir=save_dir)
+        if self.collection_name is not None:
+            logger.info(f"Derived collection name for downstream indexing: {self.collection_name}")
         if metrics_path is not None:
             logger.info(f"Batch metrics CSV will be written to: {metrics_path}")
 

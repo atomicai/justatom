@@ -22,6 +22,7 @@ from justatom.running.trainer_jobs import (
     create_training_job as _create_training_job,
 )
 from justatom.storing.dataset import API as DatasetApi
+from justatom.tooling.collections import resolve_collection_name, resolve_collection_tag
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 dotenv.load_dotenv()
@@ -44,6 +45,7 @@ def load_train_config(
 
 
 def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
+    collection = cfg.get("collection") or {}
     dataset = cfg.get("dataset") or {}
     model = cfg.get("model") or {}
     training = cfg.get("training") or {}
@@ -51,10 +53,50 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
     logging_cfg = cfg.get("logging") or {}
     filters_cfg = cfg.get("filters") or {}
 
+    legacy_temperature = training.get("temperature")
+    raw_contrastive_temperature = training.get("contrastive_temperature")
+    if legacy_temperature is not None and raw_contrastive_temperature in {None, 0.1, 0.1}:
+        contrastive_temperature = float(legacy_temperature)
+    elif raw_contrastive_temperature is not None:
+        contrastive_temperature = float(raw_contrastive_temperature)
+    else:
+        contrastive_temperature = float(legacy_temperature if legacy_temperature is not None else 0.1)
+    grad_acc_steps = int(training.get("grad_acc_steps", 6))
+    collection_tag = resolve_collection_tag(
+        collection.get("tag"),
+        model_name_or_path=model.get("name", "intfloat/multilingual-e5-small"),
+        dataset_name_or_path=dataset.get("name_or_path") or dataset.get("id"),
+        auto_generate=True,
+        loss=training.get("loss", "soft-contrastive"),
+        temperature=contrastive_temperature,
+        grad_acc_steps=grad_acc_steps,
+        freeze_encoder=bool(training.get("freeze_encoder", True)),
+        include_semantic_gamma=bool(training.get("include_semantic_gamma", True)),
+        include_keywords_gamma=bool(training.get("include_keywords_gamma", True)),
+        activation_fn=training.get("activation_fn", "sigmoid"),
+        batch_size=int(training.get("batch_size", 4)),
+        max_seq_len=int(training.get("max_seq_len", 512)),
+        lr_gamma=float(training.get("lr_gamma", 1e-2)),
+        lr_encoder=float(training.get("lr_encoder", 2e-5)),
+        weight_decay=float(training.get("weight_decay", 0.01)),
+        alpha_entropy_weight=float(training.get("alpha_entropy_weight", 0.0)),
+        alpha_train_only=bool(training.get("alpha_train_only", False)),
+        alpha_mix_weight=float(training.get("alpha_mix_weight", 0.3)),
+        focal_gamma=float(training.get("focal_gamma", 2.0)),
+    )
+
     return {
         "dataset_name_or_path": dataset.get("name_or_path"),
         "model_name_or_path": model.get("name", "intfloat/multilingual-e5-small"),
+        "collection_name": resolve_collection_name(
+            collection.get("name", "Document"),
+            model_name_or_path=model.get("name", "intfloat/multilingual-e5-small"),
+            dataset_name_or_path=dataset.get("name_or_path") or dataset.get("id"),
+            collection_tag=collection_tag,
+        ),
+        "collection_tag": collection_tag,
         "loss": training.get("loss", "soft-contrastive"),
+        "temperature": contrastive_temperature,
         "num_samples": int(training.get("num_samples", 100)),
         "batch_size": int(training.get("batch_size", 4)),
         "max_seq_len": int(training.get("max_seq_len", 512)),
@@ -67,9 +109,9 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "alpha_mix_weight": float(training.get("alpha_mix_weight", 0.3)),
         "activation_fn": training.get("activation_fn", "sigmoid"),
         "margin": float(training.get("margin", 0.5)),
-        "contrastive_temperature": float(training.get("contrastive_temperature", 0.1)),
+        "contrastive_temperature": contrastive_temperature,
         "soft_contrastive_temperature": float(training.get("soft_contrastive_temperature", 1.0)),
-        "grad_acc_steps": int(training.get("grad_acc_steps", 6)),
+        "grad_acc_steps": grad_acc_steps,
         "optimizer": training.get("optimizer", "auto"),
         "max_negative_inverse_idf_recall": (
             None

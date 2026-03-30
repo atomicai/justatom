@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,6 +67,51 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(kwargs["labels_field"], "labels")
         self.assertEqual(kwargs["top_k"], 11)
         self.assertEqual(kwargs["collection_name"], "EvalCollection")
+
+    def test_eval_auto_collection_name_reflects_model_and_dataset(self):
+        kwargs = resolve_eval_kwargs(
+            config={
+                "dataset": {"id": "justatom"},
+                "model": {"name": "intfloat/multilingual-e5-small"},
+            }
+        )
+
+        self.assertEqual(kwargs["collection_name"], "ModelE5SmallSEPCollectionJustAtom")
+        self.assertIsNone(kwargs["collection_tag"])
+
+    def test_eval_auto_collection_name_supports_collection_tag(self):
+        kwargs = resolve_eval_kwargs(
+            config={
+                "dataset": {"id": "justatom"},
+                "model": {"name": "intfloat/multilingual-e5-small"},
+                "collection": {"tag": "ablation-lr-1e5"},
+            }
+        )
+
+        self.assertEqual(kwargs["collection_name"], "ModelE5SmallSEPCollectionJustAtomSEPTagAblationLr1e5")
+        self.assertEqual(kwargs["collection_tag"], "AblationLr1e5")
+
+    def test_eval_reuses_prebuilt_training_run_name_from_local_checkpoint_path(self):
+        kwargs = resolve_eval_kwargs(
+            config={
+                "dataset": {"id": "justatom"},
+                "model": {"name": "weights/ModelE5SmallSEPCollectionJustAtomSEPModeGammaOnlySEPLossContrastive/BiGamma/epoch1"},
+            }
+        )
+
+        self.assertEqual(kwargs["collection_name"], "ModelE5SmallSEPCollectionJustAtom")
+        self.assertIsNone(kwargs["collection_tag"])
+
+    def test_eval_explicit_collection_name_beats_auto_name(self):
+        kwargs = resolve_eval_kwargs(
+            config={
+                "dataset": {"id": "justatom"},
+                "model": {"name": "intfloat/multilingual-e5-small"},
+                "collection": {"name": "ManualCollection"},
+            }
+        )
+
+        self.assertEqual(kwargs["collection_name"], "ManualCollection")
 
     def test_builtin_eval_dataset_preset_resolves_from_packaged_defaults(self):
         kwargs = resolve_eval_kwargs(config={"dataset": {"id": "demo-eval"}})
@@ -170,7 +216,9 @@ class ScenarioConfigTest(unittest.TestCase):
                 "model": {"name": "intfloat/multilingual-e5-base"},
                 "training": {
                     "batch_size": 16,
+                    "grad_acc_steps": 3,
                     "n_epochs": 3,
+                    "temperature": 0.07,
                     "gamma_joint": True,
                     "alpha_train_only": True,
                     "alpha_mix_weight": 0.4,
@@ -183,8 +231,12 @@ class ScenarioConfigTest(unittest.TestCase):
 
         self.assertEqual(kwargs["dataset_name_or_path"], "train.jsonl")
         self.assertEqual(kwargs["model_name_or_path"], "intfloat/multilingual-e5-base")
+        self.assertRegex(kwargs["collection_name"], r"^ModelE5BaseSEPCollectionTrainSEPTagCfg[A-F0-9]{10}$")
+        self.assertRegex(kwargs["collection_tag"], r"^Cfg[A-F0-9]{10}$")
         self.assertEqual(kwargs["batch_size"], 16)
+        self.assertEqual(kwargs["grad_acc_steps"], 3)
         self.assertEqual(kwargs["n_epochs"], 3)
+        self.assertEqual(kwargs["temperature"], 0.07)
         self.assertTrue(kwargs["gamma_joint"])
         self.assertTrue(kwargs["alpha_train_only"])
         self.assertEqual(kwargs["alpha_mix_weight"], 0.4)
@@ -205,12 +257,34 @@ class ScenarioConfigTest(unittest.TestCase):
         kwargs = resolve_train_kwargs(config={"dataset": {"id": "justatom"}})
 
         self.assertEqual(kwargs["dataset_name_or_path"], "justatom")
+        self.assertRegex(kwargs["collection_name"], r"^ModelE5SmallSEPCollectionJustAtomSEPTagCfg[A-F0-9]{10}$")
+        self.assertRegex(kwargs["collection_tag"], r"^Cfg[A-F0-9]{10}$")
         self.assertEqual(kwargs["labels_field"], "queries")
         self.assertEqual(kwargs["content_field"], "content")
         self.assertIsNone(kwargs["split"])
         self.assertIsNone(kwargs["limit"])
         self.assertEqual(kwargs["chunk_id_col"], "chunk_id")
         self.assertEqual(kwargs["keywords_or_phrases_field"], "keywords_or_phrases")
+
+    def test_train_collection_tag_is_appended_to_auto_name(self):
+        kwargs = resolve_train_kwargs(
+            config={
+                "dataset": {"id": "justatom"},
+                "collection": {"tag": "adamw-lr2e5"},
+            }
+        )
+
+        self.assertEqual(
+            kwargs["collection_name"],
+            "ModelE5SmallSEPCollectionJustAtomSEPTagAdamwLr2e5",
+        )
+        self.assertEqual(kwargs["collection_tag"], "AdamwLr2e5")
+
+    def test_train_defaults_include_temperature_and_grad_acc_steps(self):
+        kwargs = resolve_train_kwargs(config={"dataset": {"id": "justatom"}})
+
+        self.assertEqual(kwargs["temperature"], 0.1)
+        self.assertEqual(kwargs["grad_acc_steps"], 6)
 
     def test_explicit_missing_config_path_raises(self):
         with self.assertRaises(FileNotFoundError):
