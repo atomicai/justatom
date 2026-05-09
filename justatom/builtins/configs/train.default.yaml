@@ -18,7 +18,7 @@ model:
   name: intfloat/multilingual-e5-small
 
 training:
-  loss: soft-contrastive
+  loss: contrastive
   num_samples: 100
   batch_size: 4
   max_seq_len: 512
@@ -30,13 +30,29 @@ training:
   alpha_entropy_weight: 0.0
   alpha_train_only: false
   alpha_mix_weight: 0.3
+  alpha_mix_weight_warmup_steps: 0
+  query_diagonal_gate: false
+  query_diagonal_gate_scale: 0.25
+  query_diagonal_gate_mode: raw
+  query_diagonal_identity_weight: 0.0
+  query_diagonal_saturation_weight: 0.0
   activation_fn: sigmoid
   margin: 0.5
-  contrastive_temperature: 0.1
+  contrastive_temperature: 0.03
   soft_contrastive_temperature: 1.0
   grad_acc_steps: 6
-  optimizer: auto
+  optimizer: adamw
   max_negative_inverse_idf_recall: null
+  contrastive_learnable_temperature: true
+  contrastive_decoupled: true
+  contrastive_simcse_dropout_weight: 0.0
+  contrastive_soft_fn_attract_weight: 0.0
+  contrastive_soft_fn_topk: 1
+  contrastive_loss_alpha_gate: false
+  contrastive_loss_alpha_gate_mode: augment
+  min_negative_inverse_idf_recall: null
+  negative_sampling_mode: safe-random
+  hard_negative_top_k: null
   focal_gamma: 2.0
   lr_gamma: 0.01
   lr_encoder: 0.00002

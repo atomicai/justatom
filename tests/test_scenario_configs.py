@@ -126,31 +126,22 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertTrue(path.exists())
         self.assertEqual(path.name, "demo_retrieval.jsonl")
 
-    def test_builtin_hf_dataset_preset_resolves_from_packaged_defaults(self):
-        kwargs = resolve_eval_kwargs(config={"dataset": {"id": "mlnavigator-russian-retrieval"}})
-
-        self.assertEqual(kwargs["dataset_name_or_path"], "hf://MLNavigator/russian-retrieval")
-        self.assertEqual(kwargs["labels_field"], "q")
-        self.assertEqual(kwargs["content_field"], "text")
-        self.assertEqual(kwargs["split"], "train")
-        self.assertIsNone(kwargs["limit"])
-
     def test_dotted_dataset_id_override_loads_dataset_preset(self):
         kwargs = resolve_eval_kwargs(
             config_path="configs/evaluate.yaml",
             overrides={
                 "dataset": {
-                    "id": "mlnavigator-russian-retrieval",
-                    "split": "test",
+                    "id": "boolq-ru",
+                    "split": "validation|train",
                     "limit": 500,
                 }
             },
         )
 
-        self.assertEqual(kwargs["dataset_name_or_path"], "hf://MLNavigator/russian-retrieval")
-        self.assertEqual(kwargs["labels_field"], "q")
-        self.assertEqual(kwargs["content_field"], "text")
-        self.assertEqual(kwargs["split"], "test")
+        self.assertEqual(kwargs["dataset_name_or_path"], "hf://d0rj/boolq-ru")
+        self.assertEqual(kwargs["labels_field"], "question")
+        self.assertEqual(kwargs["content_field"], "passage")
+        self.assertEqual(kwargs["split"], "validation|train")
         self.assertEqual(kwargs["limit"], 500)
 
     def test_repo_justatom_dataset_preset_resolves_for_eval(self):
@@ -161,6 +152,16 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(kwargs["content_field"], "content")
         self.assertEqual(kwargs["chunk_id_col"], "chunk_id")
         self.assertEqual(kwargs["keywords_or_phrases_field"], "keywords_or_phrases")
+        self.assertIsNone(kwargs["split"])
+        self.assertIsNone(kwargs["limit"])
+
+    def test_repo_miracl_ru_dataset_preset_resolves_for_eval(self):
+        kwargs = resolve_eval_kwargs(config={"dataset": {"id": "miracl-ru"}})
+
+        self.assertEqual(kwargs["dataset_name_or_path"], ".data/retrieval/miracl-ru-train.jsonl")
+        self.assertEqual(kwargs["labels_field"], "queries")
+        self.assertEqual(kwargs["content_field"], "content")
+        self.assertEqual(kwargs["chunk_id_col"], "chunk_id")
         self.assertIsNone(kwargs["split"])
         self.assertIsNone(kwargs["limit"])
 
@@ -283,7 +284,7 @@ class ScenarioConfigTest(unittest.TestCase):
     def test_train_defaults_include_temperature_and_grad_acc_steps(self):
         kwargs = resolve_train_kwargs(config={"dataset": {"id": "justatom"}})
 
-        self.assertEqual(kwargs["temperature"], 0.1)
+        self.assertEqual(kwargs["temperature"], 0.03)
         self.assertEqual(kwargs["grad_acc_steps"], 6)
 
     def test_explicit_missing_config_path_raises(self):
@@ -292,12 +293,12 @@ class ScenarioConfigTest(unittest.TestCase):
 
     def test_dataset_split_and_limit_can_be_overridden_explicitly(self):
         kwargs = resolve_eval_kwargs(
-            config={"dataset": {"id": "mlnavigator-russian-retrieval"}},
-            overrides={"dataset": {"split": "dev|test", "limit": 25}},
+            config={"dataset": {"id": "boolq-ru"}},
+            overrides={"dataset": {"split": "validation|train", "limit": 25}},
         )
 
-        self.assertEqual(kwargs["dataset_name_or_path"], "hf://MLNavigator/russian-retrieval")
-        self.assertEqual(kwargs["split"], "dev|test")
+        self.assertEqual(kwargs["dataset_name_or_path"], "hf://d0rj/boolq-ru")
+        self.assertEqual(kwargs["split"], "validation|train")
         self.assertEqual(kwargs["limit"], 25)
 
     def test_weaviate_normalize_host_falls_back_for_empty_like_values(self):

@@ -21,6 +21,7 @@ from justatom.configuring.scenarios import parse_unknown_overrides
 from justatom.running.evaluator import EvaluatorRunner
 from justatom.running.mask import IEvaluatorRunner
 from justatom.running.service import RunningService
+from justatom.tooling.collections import resolve_collection_name, resolve_collection_tag
 from justatom.tooling.dataset import DatasetRecordAdapter
 from justatom.tooling import stl
 
@@ -125,13 +126,26 @@ def _cfg_to_main_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
 
     filter_fields = filters_cfg.get("fields")
     filters = {"fields": filter_fields} if filter_fields else None
+    collection_tag = resolve_collection_tag(
+        collection.get("tag"),
+        auto_generate=False,
+    )
+    should_auto_resolve_collection = bool(dataset.get("id") or collection_tag or model.get("name"))
+    collection_name = collection.get("name", "Document")
+    if should_auto_resolve_collection:
+        collection_name = resolve_collection_name(
+            collection_name,
+            model_name_or_path=model.get("name"),
+            dataset_name_or_path=dataset.get("name_or_path") or dataset.get("id"),
+            collection_tag=collection_tag,
+        )
 
     out = {
         "model_name_or_path": model.get("name"),
         "search_pipeline": search.get("pipeline", "embedding"),
         "query_prefix": model.get("query_prefix"),
         "content_prefix": model.get("content_prefix"),
-        "collection_name": collection.get("name", "Document"),
+        "collection_name": collection_name,
         "flush_collection": bool(index.get("flush_collection", False)),
         "dataset_name_or_path": dataset.get("name_or_path"),
         "save_results_to_dir": output.get("save_results_to_dir"),
@@ -148,6 +162,7 @@ def _cfg_to_main_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "limit": dataset.get("limit"),
         "chunk_id_col": dataset.get("chunk_id_col"),
         "keywords_or_phrases_field": dataset.get("keywords_col"),
+        "collection_tag": collection_tag,
         "keywords_nested_col": dataset.get("keywords_nested_col"),
         "explanation_nested_col": dataset.get("explanation_nested_col"),
         "drop_columns": dataset.get("drop_columns"),

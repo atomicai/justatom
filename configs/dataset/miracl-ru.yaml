@@ -1,0 +1,4 @@
+name_or_path: .data/retrieval/miracl-ru-train.jsonl
+labels_field: queries
+content_field: content
+chunk_id_col: chunk_id

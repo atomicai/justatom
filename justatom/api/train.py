@@ -55,12 +55,12 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
 
     legacy_temperature = training.get("temperature")
     raw_contrastive_temperature = training.get("contrastive_temperature")
-    if legacy_temperature is not None and raw_contrastive_temperature in {None, 0.1, 0.1}:
+    if legacy_temperature is not None and raw_contrastive_temperature in {None, 0.03, 0.1}:
         contrastive_temperature = float(legacy_temperature)
     elif raw_contrastive_temperature is not None:
         contrastive_temperature = float(raw_contrastive_temperature)
     else:
-        contrastive_temperature = float(legacy_temperature if legacy_temperature is not None else 0.1)
+        contrastive_temperature = float(legacy_temperature if legacy_temperature is not None else 0.03)
     grad_acc_steps = int(training.get("grad_acc_steps", 6))
     collection_tag = resolve_collection_tag(
         collection.get("tag"),
@@ -82,6 +82,15 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         alpha_entropy_weight=float(training.get("alpha_entropy_weight", 0.0)),
         alpha_train_only=bool(training.get("alpha_train_only", False)),
         alpha_mix_weight=float(training.get("alpha_mix_weight", 0.3)),
+        alpha_mix_weight_warmup_steps=int(training.get("alpha_mix_weight_warmup_steps", 0)),
+        alpha_residual=bool(training.get("alpha_residual", False)),
+        alpha_prior=float(training.get("alpha_prior", 0.5)),
+        alpha_residual_scale=float(training.get("alpha_residual_scale", 0.25)),
+        query_diagonal_gate=bool(training.get("query_diagonal_gate", False)),
+        query_diagonal_gate_scale=float(training.get("query_diagonal_gate_scale", 0.25)),
+        query_diagonal_gate_mode=str(training.get("query_diagonal_gate_mode", "raw")),
+        query_diagonal_identity_weight=float(training.get("query_diagonal_identity_weight", 0.0)),
+        query_diagonal_saturation_weight=float(training.get("query_diagonal_saturation_weight", 0.0)),
         focal_gamma=float(training.get("focal_gamma", 2.0)),
     )
 
@@ -95,7 +104,7 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
             collection_tag=collection_tag,
         ),
         "collection_tag": collection_tag,
-        "loss": training.get("loss", "soft-contrastive"),
+        "loss": training.get("loss", "contrastive"),
         "temperature": contrastive_temperature,
         "num_samples": int(training.get("num_samples", 100)),
         "batch_size": int(training.get("batch_size", 4)),
@@ -107,17 +116,40 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "alpha_entropy_weight": float(training.get("alpha_entropy_weight", 0.0)),
         "alpha_train_only": bool(training.get("alpha_train_only", False)),
         "alpha_mix_weight": float(training.get("alpha_mix_weight", 0.3)),
+        "alpha_mix_weight_warmup_steps": int(training.get("alpha_mix_weight_warmup_steps", 0)),
+        "alpha_residual": bool(training.get("alpha_residual", False)),
+        "alpha_prior": float(training.get("alpha_prior", 0.5)),
+        "alpha_residual_scale": float(training.get("alpha_residual_scale", 0.25)),
+        "query_diagonal_gate": bool(training.get("query_diagonal_gate", False)),
+        "query_diagonal_gate_scale": float(training.get("query_diagonal_gate_scale", 0.25)),
+        "query_diagonal_gate_mode": str(training.get("query_diagonal_gate_mode", "raw")),
+        "query_diagonal_identity_weight": float(training.get("query_diagonal_identity_weight", 0.0)),
+        "query_diagonal_saturation_weight": float(training.get("query_diagonal_saturation_weight", 0.0)),
         "activation_fn": training.get("activation_fn", "sigmoid"),
         "margin": float(training.get("margin", 0.5)),
         "contrastive_temperature": contrastive_temperature,
         "soft_contrastive_temperature": float(training.get("soft_contrastive_temperature", 1.0)),
         "grad_acc_steps": grad_acc_steps,
-        "optimizer": training.get("optimizer", "auto"),
+        "optimizer": training.get("optimizer", "adamw"),
         "max_negative_inverse_idf_recall": (
             None
             if training.get("max_negative_inverse_idf_recall") is None
             else float(training.get("max_negative_inverse_idf_recall"))
         ),
+        "contrastive_learnable_temperature": bool(training.get("contrastive_learnable_temperature", True)),
+        "contrastive_decoupled": bool(training.get("contrastive_decoupled", True)),
+        "contrastive_simcse_dropout_weight": float(training.get("contrastive_simcse_dropout_weight", 0.0)),
+        "contrastive_soft_fn_attract_weight": float(training.get("contrastive_soft_fn_attract_weight", 0.0)),
+        "contrastive_soft_fn_topk": int(training.get("contrastive_soft_fn_topk", 1)),
+        "contrastive_loss_alpha_gate": bool(training.get("contrastive_loss_alpha_gate", False)),
+        "contrastive_loss_alpha_gate_mode": str(training.get("contrastive_loss_alpha_gate_mode", "augment")),
+        "min_negative_inverse_idf_recall": (
+            None
+            if training.get("min_negative_inverse_idf_recall") is None
+            else float(training.get("min_negative_inverse_idf_recall"))
+        ),
+        "negative_sampling_mode": str(training.get("negative_sampling_mode", "safe-random")),
+        "hard_negative_top_k": (None if training.get("hard_negative_top_k") is None else int(training.get("hard_negative_top_k"))),
         "focal_gamma": float(training.get("focal_gamma", 2.0)),
         "log_backend": logging_cfg.get("backend", "csv"),
         "wandb_project": logging_cfg.get("wandb_project", "justatom-gamma"),
@@ -382,6 +414,54 @@ def _reservoir_sample_rows(rows: Iterable[dict[str, Any]], num_samples: int) -> 
         if replacement_idx < num_samples:
             sample[replacement_idx] = row
     return sample
+
+
+def rebalance_rows_by_content(
+    rows: Iterable[dict[str, Any]],
+    batch_size: int,
+    *,
+    content_key: str = "content",
+) -> list[dict[str, Any]]:
+    rows_list = list(rows)
+    if batch_size <= 1 or len(rows_list) <= 1:
+        return rows_list
+
+    grouped_rows: dict[str, list[dict[str, Any]]] = {}
+    for row in rows_list:
+        content_value = row.get(content_key)
+        content_id = "" if content_value is None else str(content_value)
+        grouped_rows.setdefault(content_id, []).append(row)
+
+    if len(grouped_rows) == len(rows_list):
+        return rows_list
+
+    max_group_size = max(len(group) for group in grouped_rows.values())
+    rebalanced_rows: list[dict[str, Any]] = []
+    ordered_groups = list(grouped_rows.values())
+    for level in range(max_group_size):
+        for group in ordered_groups:
+            if level < len(group):
+                rebalanced_rows.append(group[level])
+    return rebalanced_rows
+
+
+def count_batches_with_duplicate_content(
+    rows: Iterable[dict[str, Any]],
+    batch_size: int,
+    *,
+    content_key: str = "content",
+) -> int:
+    if batch_size <= 1:
+        return 0
+
+    rows_list = list(rows)
+    duplicate_batches = 0
+    for start in range(0, len(rows_list), batch_size):
+        batch = rows_list[start : start + batch_size]
+        contents = ["" if row.get(content_key) is None else str(row.get(content_key)) for row in batch]
+        if len(contents) != len(set(contents)):
+            duplicate_batches += 1
+    return duplicate_batches
 
 
 def sample_training_rows(

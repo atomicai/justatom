@@ -1,0 +1,9 @@
+name_or_path: hf://unicamp-dl/mmarco?config=russian
+labels_field: query
+content_field: positive
+split: train
+limit: null
+chunk_id_col: null
+keywords_col: null
+keywords_nested_col: null
+explanation_nested_col: null

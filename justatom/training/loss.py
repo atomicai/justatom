@@ -1,3 +1,4 @@
+import math
 import warnings
 from collections import OrderedDict
 from numbers import Real
@@ -453,58 +454,181 @@ class TripletLoss(nn.Module):
 
 
 class ContrastiveLoss(nn.Module):
-    """
-    Calculates the InfoNCE loss for self-supervised learning.
-    This contrastive loss enforces the embeddings of similar (positive) samples to be close
-        and those of different (negative) samples to be distant.
-    A query embedding is compared with one positive key and with one or more negative keys.
+    r"""InfoNCE contrastive loss on the unit hypersphere $S^{d-1}$.
 
-    References:
-        https://arxiv.org/abs/1807.03748v2
-        https://arxiv.org/abs/2010.05113
+    Combines four well-studied stabilizers behind a single, ablation-friendly API:
+
+    1. **Learnable temperature** $\tau = \exp(\log\tau)$ — clamped to $[10^{-3}, 1.0]$.
+       Initialized with the user-supplied ``temperature`` argument. Following CLIP /
+       SigLIP, optimizing $\log\tau$ jointly with the encoder yields better
+       calibration than a fixed schedule (Radford et al. 2021; Zhai et al. 2023).
+    2. **Decoupled InfoNCE (DCL)** — the positive logit is removed from the
+       denominator (Yeh et al. 2022, ``arXiv:2110.06848``). This unties the
+       gradient on the positive pair from negatives in the same batch and avoids
+       the negative–positive coupling pathology of vanilla InfoNCE.
+    3. **SimCSE-style dropout positives** — a second forward of the *queries*
+       through the encoder (with a different dropout mask) provides a cheap
+       data-free positive view, which is then contrasted as an additional
+       InfoNCE term (Gao, Yao & Chen 2021, ``arXiv:2104.08821``).
+    4. **Soft false-negative attractive term** — the top-$k$ off-diagonal
+       candidates per query are pulled *toward* the anchor instead of being
+       repelled, mimicking the soft-positive treatment from Huynh et al. 2021
+       (``arXiv:2104.07939``) and GISTEmbed (Solatorio 2024, ``arXiv:2402.16829``).
+       Cheaper alternative to hard FN masking and empirically more robust.
+
+    No hard masking is performed: every off-diagonal pair contributes gradient,
+    which preserves the calibration signal that hard FN-masks tend to remove.
+
+    The loss class deliberately exposes per-row (``reduction="none"``) outputs
+    so a downstream trainer can apply a per-query ``alpha(q)`` convex gate of the
+    form ``alpha(q) * main + (1 - alpha(q)) * aux`` without re-implementing
+    InfoNCE on top.
 
     Args:
-        temperature: Logits are divided by temperature before calculating the cross entropy.
-        reduction: Reduction method applied to the output.
-            Value must be one of ['none', 'sum', 'mean'].
-            See torch.nn.functional.cross_entropy for more details about each option.
-        negative_mode: Determines how the (optional) negative_keys are handled.
-            Value must be one of ['paired', 'unpaired'].
-            If 'paired', then each query sample is paired with a number of negative keys.
-            Comparable to a triplet loss, but with multiple negatives per sample.
-            If 'unpaired', then the set of negative keys are all unrelated to any positive key.
-
-    Input shape:
-        query: (N, D) Tensor with query samples (e.g. embeddings of the input).
-        positive_key: (N, D) Tensor with positive samples (e.g. embeddings of augmented input).
-        negative_keys (optional): Tensor with negative samples (e.g. embeddings of other inputs)
-            If negative_mode = 'paired', then negative_keys is a (N, M, D) Tensor.
-            If negative_mode = 'unpaired', then negative_keys is a (M, D) Tensor.
-            If None, then the negative keys for a sample are the positive keys for the other samples.
-
-    Returns:
-         Value of the InfoNCE Loss.
-
-     Examples:
-        >>> loss = InfoNCE()
-        >>> batch_size, num_negative, embedding_size = 32, 48, 128
-        >>> query = torch.randn(batch_size, embedding_size)
-        >>> positive_key = torch.randn(batch_size, embedding_size)
-        >>> negative_keys = torch.randn(num_negative, embedding_size)
-        >>> output = loss(query, positive_key, negative_keys)
+        temperature: Initial value of $\tau$. Default 0.05 (CLIP-ish).
+        learnable_temperature: If ``True``, $\log\tau$ is a trainable
+            ``nn.Parameter``; otherwise it is registered as a frozen buffer.
+        decoupled: If ``True``, use DCL; if ``False``, use vanilla InfoNCE
+            via cross-entropy on the full row.
+        reduction: Default reduction for ``forward`` / ``info_nce``: ``"mean"``,
+            ``"sum"``, or ``"none"``.
+        negative_mode: Kept for backward compatibility with paired-negative
+            callers. Only ``"unpaired"`` is exercised by the InfoNCE/DCL path.
     """
 
-    def __init__(self, temperature=0.1, reduction="mean", negative_mode="unpaired"):
+    _TAU_MIN: float = 1e-3
+    _TAU_MAX: float = 1.0
+
+    def __init__(
+        self,
+        temperature: float = 0.05,
+        reduction: str = "mean",
+        negative_mode: str = "unpaired",
+        learnable_temperature: bool = True,
+        decoupled: bool = True,
+    ):
         super().__init__()
-        self.temperature = temperature
+        if temperature <= 0.0:
+            raise ValueError(f"temperature must be > 0, got {temperature}")
         self.reduction = reduction
         self.negative_mode = negative_mode
+        self.learnable_temperature = bool(learnable_temperature)
+        self.decoupled = bool(decoupled)
+        log_tau_init = torch.tensor(math.log(float(temperature)), dtype=torch.float32)
+        if self.learnable_temperature:
+            self.log_tau = nn.Parameter(log_tau_init)
+        else:
+            self.register_buffer("log_tau", log_tau_init)
+        # ``temperature`` kept for backward compat with code that read it.
+        self.temperature = float(temperature)
 
-    def normalize(self, *xs):
+    @property
+    def tau(self) -> torch.Tensor:
+        return self.log_tau.exp().clamp(min=self._TAU_MIN, max=self._TAU_MAX)
+
+    @staticmethod
+    def normalize(*xs):
         return [None if x is None else F.normalize(x, dim=-1) for x in xs]
 
-    def transpose(self, x: torch.Tensor):
+    @staticmethod
+    def transpose(x: torch.Tensor) -> torch.Tensor:
         return x.transpose(-2, -1)
+
+    @staticmethod
+    def _reduce(per_row: torch.Tensor, reduction: str) -> torch.Tensor:
+        if reduction == "none":
+            return per_row
+        if reduction == "sum":
+            return per_row.sum()
+        if reduction == "mean":
+            return per_row.mean()
+        raise ValueError(f"Unsupported reduction={reduction!r}. Expected one of: none, sum, mean")
+
+    def info_nce(
+        self,
+        queries: torch.Tensor,
+        pos_queries: torch.Tensor,
+        neg_queries: torch.Tensor | None = None,
+        reduction: str | None = None,
+    ) -> torch.Tensor:
+        """InfoNCE / DCL on (queries, pos_queries) with in-batch negatives.
+
+        If ``neg_queries`` is supplied (paired or unpaired), the legacy
+        explicit-negative path is used and ``decoupled`` is ignored.
+        """
+        if queries.dim() != 2 or pos_queries.dim() != 2:
+            raise ValueError("queries and pos_queries must be 2D")
+        if queries.shape != pos_queries.shape:
+            raise ValueError(
+                f"queries and pos_queries must have matching shape, got {tuple(queries.shape)} vs {tuple(pos_queries.shape)}"
+            )
+
+        reduction = reduction or self.reduction
+        q, p, n = self.normalize(queries, pos_queries, neg_queries)
+
+        if n is not None:
+            positive_logit = torch.sum(q * p, dim=1, keepdim=True)
+            if self.negative_mode == "paired":
+                if n.dim() != 3:
+                    raise ValueError("paired negatives require neg_queries with 3 dims")
+                negative_logits = (q.unsqueeze(1) @ self.transpose(n)).squeeze(1)
+            else:
+                negative_logits = q @ self.transpose(n)
+            logits = torch.cat([positive_logit, negative_logits], dim=1)
+            labels = torch.zeros(logits.shape[0], dtype=torch.long, device=q.device)
+            per_row = F.cross_entropy(logits / self.tau, labels, reduction="none")
+            return self._reduce(per_row, reduction)
+
+        # In-batch negatives path
+        sim = q @ self.transpose(p) / self.tau  # [B, B]
+        batch_size = sim.shape[0]
+        eye = torch.eye(batch_size, dtype=torch.bool, device=sim.device)
+        pos_logits = sim.diagonal()
+        if self.decoupled:
+            neg_logits = sim.masked_fill(eye, float("-inf"))
+            per_row = -pos_logits + torch.logsumexp(neg_logits, dim=-1)
+        else:
+            labels = torch.arange(batch_size, device=sim.device)
+            per_row = F.cross_entropy(sim, labels, reduction="none")
+        return self._reduce(per_row, reduction)
+
+    def simcse_term(
+        self,
+        queries: torch.Tensor,
+        queries_alt: torch.Tensor,
+        reduction: str | None = None,
+    ) -> torch.Tensor:
+        """SimCSE: InfoNCE/DCL between two dropout views of the same queries."""
+        return self.info_nce(queries, queries_alt, reduction=reduction)
+
+    def soft_fn_term(
+        self,
+        queries: torch.Tensor,
+        positives: torch.Tensor,
+        topk: int = 1,
+        reduction: str | None = None,
+    ) -> torch.Tensor:
+        """Soft false-negative attractive term (Huynh et al. 2021).
+
+        Pulls the top-``k`` highest-similarity off-diagonal items closer to the
+        anchor query. ``loss_per_row = -mean(top-k cosine / tau)`` so that
+        gradients act as a soft positive on those candidates rather than
+        repelling them.
+        """
+        if queries.dim() != 2 or positives.dim() != 2:
+            raise ValueError("queries and positives must be 2D")
+        reduction = reduction or self.reduction
+        q, p = self.normalize(queries, positives)
+        sim = q @ self.transpose(p) / self.tau
+        batch_size = sim.shape[0]
+        if batch_size < 2:
+            return self._reduce(torch.zeros(batch_size, device=sim.device, dtype=sim.dtype), reduction)
+        eye = torch.eye(batch_size, dtype=torch.bool, device=sim.device)
+        sim_no_pos = sim.masked_fill(eye, float("-inf"))
+        k = max(1, min(int(topk), batch_size - 1))
+        topk_sim = sim_no_pos.topk(k, dim=-1).values
+        per_row = -topk_sim.mean(dim=-1)
+        return self._reduce(per_row, reduction)
 
     def hit_rate_at_k(self, scores: torch.Tensor, labels: torch.Tensor, k: int = 1):
         hit_count = 0
@@ -514,88 +638,14 @@ class ContrastiveLoss(nn.Module):
                 hit_count += 1
         return hit_count / len(labels)
 
-    def info_nce(
+    def forward(
         self,
-        queries,
-        pos_queries,
-        neg_queries=None,
-        temperature=0.1,
-        reduction="mean",
-        negative_mode="unpair",
-    ):
-        # Check input dimensionality.
-        if queries.dim() != 2:
-            raise ValueError("<queries> must have 2 dimensions.")
-        if pos_queries.dim() != 2:
-            raise ValueError("<pos_queries> must have 2 dimensions.")
-        if neg_queries is not None:
-            if negative_mode == "unpaired" and neg_queries.dim() != 2:
-                raise ValueError("<neg_queries> must have 2 dimensions if <negative_mode> == 'unpaired'.")
-            if negative_mode == "paired" and neg_queries.dim() != 3:
-                raise ValueError("<negative_keys> must have 3 dimensions if <negative_mode> == 'paired'.")
-
-        # Check matching number of samples.
-        if len(queries) != len(pos_queries):
-            raise ValueError("<queries> and <pos_queries> must must have the same number of samples.")
-        if neg_queries is not None:  # noqa: SIM102
-            if negative_mode == "paired" and len(queries) != len(neg_queries):
-                raise ValueError(
-                    "If negative_mode == 'paired', then <negative_keys> must have the same number of samples as <query>."
-                )
-
-        # Embedding vectors should have same number of components.
-        if queries.shape[-1] != pos_queries.shape[-1]:
-            raise ValueError("Vectors of <queries> and <pos_queries> should have the same number of components.")
-        if neg_queries is not None:  # noqa: SIM102
-            if queries.shape[-1] != neg_queries.shape[-1]:
-                raise ValueError("Vectors of <queries> and <neg_queries> should have the same number of components.")
-
-        # Normalize to unit vectors
-
-        queries, pos_queries, neg_queries = self.normalize(queries, pos_queries, neg_queries)
-        if neg_queries is not None:
-            # Explicit negative keys
-
-            # Cosine between positive pairs
-            positive_logit = torch.sum(queries * pos_queries, dim=1, keepdim=True)
-
-            if negative_mode == "unpaired":
-                # Cosine between all query-negative combinations
-                negative_logits = queries @ self.transpose(neg_queries)
-                logits = torch.cat([positive_logit, negative_logits], dim=1)
-                labels = torch.zeros(len(logits), dtype=torch.long, device=queries.device)
-            elif negative_mode == "paired":
-                queries = queries.unsqueeze(1)
-                negative_logits = queries @ self.transpose(neg_queries)
-                negative_logits = negative_logits.squeeze(1)
-
-                # First index in last dimension are the positive samples
-                logits = torch.cat([positive_logit, negative_logits], dim=1)
-                labels = torch.zeros(len(logits), dtype=torch.long, device=queries.device)
-            else:
-                raise ValueError(f"Unsupported negative_mode={negative_mode!r}.")
-        else:
-            # Negative keys are implicitly off-diagonal positive keys.
-
-            # Cosine between all combinations
-            logits = queries @ self.transpose(pos_queries)
-
-            # Positive keys are the entries on the diagonal
-            labels = torch.arange(len(queries), device=queries.device)
-        # TODO: We need to return some per-batch metrics as well.
-        # TODO: e.g. HitRate@1 HitRate@2, ...
-        #
-        return F.cross_entropy(logits / temperature, labels, reduction=reduction)
-
-    def forward(self, queries, pos_queries, neg_queries=None):
-        return self.info_nce(
-            queries,
-            pos_queries,
-            neg_queries,
-            temperature=self.temperature,
-            reduction=self.reduction,
-            negative_mode=self.negative_mode,
-        )
+        queries: torch.Tensor,
+        pos_queries: torch.Tensor,
+        neg_queries: torch.Tensor | None = None,
+        reduction: str | None = None,
+    ) -> torch.Tensor:
+        return self.info_nce(queries, pos_queries, neg_queries, reduction=reduction)
 
 
 class UMAPLoss(nn.Module):

@@ -43,7 +43,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
 
         with patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked:
             adapter = DatasetRecordAdapter.from_source(
-                dataset_name_or_path="hf://MLNavigator/russian-retrieval?split=train",
+                dataset_name_or_path="hf://miracl/miracl?config=ru&split=train",
                 content_col="text",
                 queries_col="q",
                 lazy=True,
@@ -51,8 +51,8 @@ class EvalDataNormalizationTest(unittest.TestCase):
 
         first = next(adapter.iterator())
         mocked.assert_called_once_with(
-            "MLNavigator/russian-retrieval",
-            name=None,
+            "miracl/miracl",
+            name="ru",
             split="train",
             streaming=False,
         )
@@ -131,7 +131,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
 
         def _fake_load_dataset(dataset_name, name=None, split=None, streaming=None, **kwargs):
             del name, streaming, kwargs
-            if dataset_name != "MLNavigator/russian-retrieval":
+            if dataset_name != "miracl/miracl":
                 raise AssertionError(dataset_name)
             if split == "dev":
                 raise ValueError("Unknown split: dev")
@@ -141,7 +141,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
 
         with patch("justatom.storing.dataset.load_dataset", side_effect=_fake_load_dataset) as mocked:
             adapter = DatasetRecordAdapter.from_source(
-                dataset_name_or_path="hf://MLNavigator/russian-retrieval",
+                dataset_name_or_path="hf://miracl/miracl?config=ru",
                 content_col="text",
                 queries_col="q",
                 split="dev|test",
@@ -162,7 +162,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, r"test\|train|train\|test"):
                 DatasetRecordAdapter.from_source(
-                    dataset_name_or_path="hf://MLNavigator/russian-retrieval",
+                    dataset_name_or_path="hf://miracl/miracl?config=ru",
                     content_col="text",
                     queries_col="q",
                     split="test",

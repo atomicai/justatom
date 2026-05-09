@@ -48,7 +48,7 @@ class BaseTrainingJob:
     model_name_or_path: str = "intfloat/multilingual-e5-small"
     collection_name: str | None = None
     collection_tag: str | None = None
-    loss: str = "soft-contrastive"
+    loss: str = "contrastive"
     temperature: float | None = None
     num_samples: int = 100
     batch_size: int = 4
@@ -60,13 +60,32 @@ class BaseTrainingJob:
     alpha_entropy_weight: float = 0.0
     alpha_train_only: bool = False
     alpha_mix_weight: float = 0.3
+    alpha_mix_weight_warmup_steps: int = 0
+    alpha_residual: bool = False
+    alpha_prior: float = 0.5
+    alpha_residual_scale: float = 0.25
+    query_diagonal_gate: bool = False
+    query_diagonal_gate_scale: float = 0.25
+    query_diagonal_gate_mode: str = "raw"
+    query_diagonal_identity_weight: float = 0.0
+    query_diagonal_saturation_weight: float = 0.0
     activation_fn: str = "sigmoid"
     margin: float = 0.5
-    contrastive_temperature: float = 0.1
+    contrastive_temperature: float = 0.03
     soft_contrastive_temperature: float = 1.0
     grad_acc_steps: int = 6
-    optimizer: str = "auto"
+    optimizer: str = "adamw"
     max_negative_inverse_idf_recall: float | None = None
+    contrastive_learnable_temperature: bool = True
+    contrastive_decoupled: bool = True
+    contrastive_simcse_dropout_weight: float = 0.0
+    contrastive_soft_fn_attract_weight: float = 0.0
+    contrastive_soft_fn_topk: int = 1
+    contrastive_loss_alpha_gate: bool = False
+    contrastive_loss_alpha_gate_mode: str = "augment"
+    min_negative_inverse_idf_recall: float | None = None
+    negative_sampling_mode: str = "safe-random"
+    hard_negative_top_k: int | None = None
     focal_gamma: float = 2.0
     log_backend: str = "csv"
     wandb_project: str = "justatom-gamma"
@@ -103,6 +122,14 @@ class BaseTrainingJob:
             raise ValueError(
                 f"training_mode={training_mode} only supports loss in {{soft-contrastive, contrastive, focal-contrastive}}, got loss={self.loss}"
             )
+        if self.alpha_residual and not self.gamma_joint:
+            raise ValueError("alpha_residual=True requires gamma_joint=True")
+        if not 0.0 < float(self.alpha_prior) < 1.0:
+            raise ValueError(f"alpha_prior must be strictly between 0 and 1, got {self.alpha_prior}")
+        if float(self.alpha_residual_scale) < 0.0:
+            raise ValueError(f"alpha_residual_scale must be >= 0, got {self.alpha_residual_scale}")
+        if self.query_diagonal_gate and not self.gamma_joint:
+            raise ValueError("query_diagonal_gate=True requires gamma_joint=True")
 
     @property
     def training_mode(self) -> str:
@@ -154,7 +181,19 @@ class BaseTrainingJob:
             alpha_entropy_weight=self.alpha_entropy_weight,
             alpha_train_only=self.alpha_train_only,
             alpha_mix_weight=self.alpha_mix_weight,
+            alpha_mix_weight_warmup_steps=self.alpha_mix_weight_warmup_steps,
+            alpha_residual=self.alpha_residual,
+            alpha_prior=self.alpha_prior,
+            alpha_residual_scale=self.alpha_residual_scale,
+            query_diagonal_gate=self.query_diagonal_gate,
+            query_diagonal_gate_scale=self.query_diagonal_gate_scale,
+            query_diagonal_gate_mode=self.query_diagonal_gate_mode,
+            query_diagonal_identity_weight=self.query_diagonal_identity_weight,
+            query_diagonal_saturation_weight=self.query_diagonal_saturation_weight,
             focal_gamma=self.focal_gamma,
+            min_negative_inverse_idf_recall=self.min_negative_inverse_idf_recall,
+            negative_sampling_mode=self.negative_sampling_mode,
+            hard_negative_top_k=self.hard_negative_top_k,
             collection_tag=self.collection_tag,
         )
 
@@ -250,6 +289,12 @@ class BaseTrainingJob:
             "alpha_entropy_weight": self.alpha_entropy_weight,
             "alpha_train_only": self.alpha_train_only,
             "alpha_mix_weight": self.alpha_mix_weight,
+            "alpha_mix_weight_warmup_steps": self.alpha_mix_weight_warmup_steps,
+            "query_diagonal_gate": self.query_diagonal_gate,
+            "query_diagonal_gate_scale": self.query_diagonal_gate_scale,
+            "query_diagonal_gate_mode": self.query_diagonal_gate_mode,
+            "query_diagonal_identity_weight": self.query_diagonal_identity_weight,
+            "query_diagonal_saturation_weight": self.query_diagonal_saturation_weight,
             "activation_fn": self.activation_fn,
             "margin": self.margin,
             "contrastive_temperature": self.contrastive_temperature,
@@ -257,6 +302,16 @@ class BaseTrainingJob:
             "grad_acc_steps": self.grad_acc_steps,
             "optimizer": self.optimizer,
             "max_negative_inverse_idf_recall": self.max_negative_inverse_idf_recall,
+            "contrastive_learnable_temperature": self.contrastive_learnable_temperature,
+            "contrastive_decoupled": self.contrastive_decoupled,
+            "contrastive_simcse_dropout_weight": self.contrastive_simcse_dropout_weight,
+            "contrastive_soft_fn_attract_weight": self.contrastive_soft_fn_attract_weight,
+            "contrastive_soft_fn_topk": self.contrastive_soft_fn_topk,
+            "contrastive_loss_alpha_gate": self.contrastive_loss_alpha_gate,
+            "contrastive_loss_alpha_gate_mode": self.contrastive_loss_alpha_gate_mode,
+            "min_negative_inverse_idf_recall": self.min_negative_inverse_idf_recall,
+            "negative_sampling_mode": self.negative_sampling_mode,
+            "hard_negative_top_k": self.hard_negative_top_k,
             "focal_gamma": self.focal_gamma,
             "lr_gamma": self.lr_gamma,
             "lr_encoder": self.lr_encoder,
@@ -342,6 +397,12 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
             include_keywords_gamma=self.include_keywords_gamma,
             gamma_joint=self.gamma_joint,
             activation_fn=self.activation_fn,
+            query_diagonal_gate=self.query_diagonal_gate,
+            query_diagonal_gate_scale=self.query_diagonal_gate_scale,
+            query_diagonal_gate_mode=self.query_diagonal_gate_mode,
+            alpha_residual=self.alpha_residual,
+            alpha_prior=self.alpha_prior,
+            alpha_residual_scale=self.alpha_residual_scale,
         )
         enabled_count = int(self.include_semantic_gamma) + int(self.include_keywords_gamma)
         trainer_cls = BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
@@ -356,12 +417,25 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
             alpha_entropy_weight=self.alpha_entropy_weight,
             alpha_train_only=self.alpha_train_only,
             alpha_mix_weight=self.alpha_mix_weight,
+            alpha_mix_weight_warmup_steps=self.alpha_mix_weight_warmup_steps,
+            query_diagonal_identity_weight=self.query_diagonal_identity_weight,
+            query_diagonal_saturation_weight=self.query_diagonal_saturation_weight,
             margin=self.margin,
             contrastive_temperature=self.contrastive_temperature,
             soft_contrastive_temperature=self.soft_contrastive_temperature,
             grad_acc_steps=self.grad_acc_steps,
             optimizer_name=self.optimizer,
             max_negative_inverse_idf_recall=self.max_negative_inverse_idf_recall,
+            contrastive_learnable_temperature=self.contrastive_learnable_temperature,
+            contrastive_decoupled=self.contrastive_decoupled,
+            contrastive_simcse_dropout_weight=self.contrastive_simcse_dropout_weight,
+            contrastive_soft_fn_attract_weight=self.contrastive_soft_fn_attract_weight,
+            contrastive_soft_fn_topk=self.contrastive_soft_fn_topk,
+            contrastive_loss_alpha_gate=self.contrastive_loss_alpha_gate,
+            contrastive_loss_alpha_gate_mode=self.contrastive_loss_alpha_gate_mode,
+            min_negative_inverse_idf_recall=self.min_negative_inverse_idf_recall,
+            negative_sampling_mode=self.negative_sampling_mode,
+            hard_negative_top_k=self.hard_negative_top_k,
             lexical_text_by_content=lexical_text_by_content,
             save_dir=save_dir,
             metrics_path=metrics_path,
@@ -399,6 +473,12 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             include_keywords_gamma=self.include_keywords_gamma,
             gamma_joint=self.gamma_joint,
             activation_fn=self.activation_fn,
+            query_diagonal_gate=self.query_diagonal_gate,
+            query_diagonal_gate_scale=self.query_diagonal_gate_scale,
+            query_diagonal_gate_mode=self.query_diagonal_gate_mode,
+            alpha_residual=self.alpha_residual,
+            alpha_prior=self.alpha_prior,
+            alpha_residual_scale=self.alpha_residual_scale,
         )
         enabled_count = int(self.include_semantic_gamma) + int(self.include_keywords_gamma)
         trainer_cls = BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
@@ -413,12 +493,25 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             alpha_entropy_weight=self.alpha_entropy_weight,
             alpha_train_only=self.alpha_train_only,
             alpha_mix_weight=self.alpha_mix_weight,
+            alpha_mix_weight_warmup_steps=self.alpha_mix_weight_warmup_steps,
+            query_diagonal_identity_weight=self.query_diagonal_identity_weight,
+            query_diagonal_saturation_weight=self.query_diagonal_saturation_weight,
             margin=self.margin,
             contrastive_temperature=self.contrastive_temperature,
             soft_contrastive_temperature=self.soft_contrastive_temperature,
             grad_acc_steps=self.grad_acc_steps,
             optimizer_name=self.optimizer,
             max_negative_inverse_idf_recall=self.max_negative_inverse_idf_recall,
+            contrastive_learnable_temperature=self.contrastive_learnable_temperature,
+            contrastive_decoupled=self.contrastive_decoupled,
+            contrastive_simcse_dropout_weight=self.contrastive_simcse_dropout_weight,
+            contrastive_soft_fn_attract_weight=self.contrastive_soft_fn_attract_weight,
+            contrastive_soft_fn_topk=self.contrastive_soft_fn_topk,
+            contrastive_loss_alpha_gate=self.contrastive_loss_alpha_gate,
+            contrastive_loss_alpha_gate_mode=self.contrastive_loss_alpha_gate_mode,
+            min_negative_inverse_idf_recall=self.min_negative_inverse_idf_recall,
+            negative_sampling_mode=self.negative_sampling_mode,
+            hard_negative_top_k=self.hard_negative_top_k,
             lexical_text_by_content=lexical_text_by_content,
             save_dir=save_dir,
             metrics_path=metrics_path,
@@ -442,7 +535,6 @@ class EncoderOnlyTrainingJob(BaseTrainingJob):
         from justatom.running.encoders import EncoderRunner
         from justatom.running.trainer import EncoderOnlyLightningTrainer
 
-        del lexical_text_by_content
         lm_model = ILanguageModel.load(model_name_or_path=self.model_name_or_path)
         device = maybe_cuda_or_mps()
         runner = EncoderRunner(
@@ -462,6 +554,12 @@ class EncoderOnlyTrainingJob(BaseTrainingJob):
             weight_decay=self.weight_decay,
             grad_acc_steps=self.grad_acc_steps,
             optimizer_name=self.optimizer,
+            contrastive_learnable_temperature=self.contrastive_learnable_temperature,
+            contrastive_decoupled=self.contrastive_decoupled,
+            contrastive_simcse_dropout_weight=self.contrastive_simcse_dropout_weight,
+            contrastive_soft_fn_attract_weight=self.contrastive_soft_fn_attract_weight,
+            contrastive_soft_fn_topk=self.contrastive_soft_fn_topk,
+            lexical_text_by_content=lexical_text_by_content,
             save_dir=save_dir,
             metrics_path=metrics_path,
         )

@@ -1,4 +1,5 @@
 from pathlib import Path
+import math
 
 import simplejson as json
 import torch
@@ -265,6 +266,12 @@ class GammaHybridRunner(EncoderRunner):
         semantic_gamma: float = 0.5,
         keywords_gamma: float = 1.5,
         activation_fn: str = "sigmoid",
+        alpha_residual: bool = False,
+        alpha_prior: float = 0.5,
+        alpha_residual_scale: float = 0.25,
+        query_diagonal_gate: bool = False,
+        query_diagonal_gate_scale: float = 0.25,
+        query_diagonal_gate_mode: str = "raw",
     ):
         super(GammaHybridRunner, self).__init__(
             model=model,
@@ -277,12 +284,25 @@ class GammaHybridRunner(EncoderRunner):
             raise ValueError("Both include_semantic_gamma and include_keywords_gamma are False. Nothing to calibrate.")
         if gamma_joint and (not include_semantic_gamma or not include_keywords_gamma):
             raise ValueError("gamma_joint=True requires both include_semantic_gamma and include_keywords_gamma to be True.")
+        if query_diagonal_gate and not gamma_joint:
+            raise ValueError("query_diagonal_gate=True requires gamma_joint=True.")
 
         self.gamma_joint = gamma_joint
         self.include_semantic_gamma = include_semantic_gamma
         self.include_keywords_gamma = include_keywords_gamma
         self.activation_fn = activation_fn
         self.activation = self._resolve_activation(activation_fn)
+        self.alpha_residual = bool(alpha_residual)
+        self.alpha_prior = float(alpha_prior)
+        self.alpha_residual_scale = float(alpha_residual_scale)
+        if not 0.0 < self.alpha_prior < 1.0:
+            raise ValueError(f"alpha_prior must be strictly between 0 and 1, got {self.alpha_prior}")
+        if self.alpha_residual_scale < 0.0:
+            raise ValueError(f"alpha_residual_scale must be >= 0, got {self.alpha_residual_scale}")
+        self.alpha_prior_logit = math.log(self.alpha_prior / (1.0 - self.alpha_prior))
+        self.query_diagonal_gate = query_diagonal_gate
+        self.query_diagonal_gate_scale = float(query_diagonal_gate_scale)
+        self.query_diagonal_gate_mode = self._resolve_query_diagonal_gate_mode(query_diagonal_gate_mode)
         if self.model is None:
             raise RuntimeError("GammaHybridRunner model has not been initialised")
         alpha_hidden_dim = max(32, min(256, int(self.model.output_dims) // 2))
@@ -293,6 +313,15 @@ class GammaHybridRunner(EncoderRunner):
             torch.nn.Linear(alpha_hidden_dim, 1),
         )
         self.alpha_head.to(device)
+        self.query_diagonal_head_hidden_dim = alpha_hidden_dim if self.query_diagonal_gate else None
+        self.query_diagonal_head = None
+        if self.query_diagonal_gate:
+            self.query_diagonal_head = torch.nn.Sequential(
+                torch.nn.Linear(int(self.model.output_dims), alpha_hidden_dim),
+                torch.nn.GELU(),
+                torch.nn.Linear(alpha_hidden_dim, int(self.model.output_dims)),
+            )
+            self.query_diagonal_head.to(device)
 
         self.gamma1 = torch.nn.Parameter(
             torch.tensor([semantic_gamma], dtype=torch.float32, device=device),
@@ -316,6 +345,14 @@ class GammaHybridRunner(EncoderRunner):
             raise ValueError(f"Unsupported gamma activation_fn={name}. Use one of {','.join(mapping.keys())}")
         return mapping[normalized]
 
+    @staticmethod
+    def _resolve_query_diagonal_gate_mode(name: str) -> str:
+        normalized = str(name).strip().lower()
+        allowed = {"raw", "mean-one"}
+        if normalized not in allowed:
+            raise ValueError(f"Unsupported query_diagonal_gate_mode={name}. Use one of {','.join(sorted(allowed))}")
+        return normalized
+
     def gamma_parameters(self) -> list[torch.nn.Parameter]:
         if self.gamma_joint:
             return []
@@ -331,9 +368,17 @@ class GammaHybridRunner(EncoderRunner):
             return []
         return list(self.alpha_head.parameters())
 
+    def query_diagonal_parameters(self) -> list[torch.nn.Parameter]:
+        if not self.gamma_joint or not self.query_diagonal_gate or self.query_diagonal_head is None:
+            return []
+        return list(self.query_diagonal_head.parameters())
+
     def mixing_parameters(self) -> list[torch.nn.Parameter]:
         if self.gamma_joint:
-            return self.alpha_parameters()
+            return [
+                *self.alpha_parameters(),
+                *self.query_diagonal_parameters(),
+            ]
         return self.gamma_parameters()
 
     def gamma_weights(self) -> tuple[float, float]:
@@ -344,11 +389,31 @@ class GammaHybridRunner(EncoderRunner):
     def gamma_payload(self) -> dict:
         semantic_weight, keywords_weight = self.gamma_weights()
         return {
-            "mode": "query-alpha" if self.gamma_joint else "scalar-gamma",
+            "mode": (
+                f"query-alpha{'-residual' if self.alpha_residual else ''}+diag-{self.query_diagonal_gate_mode}"
+                if self.gamma_joint and self.query_diagonal_gate
+                else (
+                    "query-alpha-residual"
+                    if self.gamma_joint and self.alpha_residual
+                    else ("query-alpha" if self.gamma_joint else "scalar-gamma")
+                )
+            ),
             "gamma_joint": self.gamma_joint,
             "activation_fn": self.activation_fn,
             "alpha_head": {
                 "hidden_dim": self.alpha_head_hidden_dim,
+                "residual": {
+                    "enabled": self.alpha_residual,
+                    "prior": self.alpha_prior,
+                    "scale": self.alpha_residual_scale,
+                    "parameterization": "sigmoid(logit(alpha_prior)+scale*tanh(delta(q)))",
+                },
+            },
+            "query_diagonal_gate": {
+                "enabled": self.query_diagonal_gate,
+                "hidden_dim": self.query_diagonal_head_hidden_dim,
+                "scale": self.query_diagonal_gate_scale,
+                "mode": self.query_diagonal_gate_mode,
             },
             "semantic_gamma": {
                 "enabled": self.include_semantic_gamma,
@@ -362,10 +427,81 @@ class GammaHybridRunner(EncoderRunner):
             },
         }
 
+    def _alpha_from_query(self, query_vectors: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+        raw_alpha = self.alpha_head(query_vectors)
+        details: dict[str, float] = {}
+        if self.alpha_residual:
+            alpha_delta = self.alpha_residual_scale * torch.tanh(raw_alpha)
+            alpha = torch.sigmoid(alpha_delta + self.alpha_prior_logit)
+            details = {
+                "AlphaPrior": self.alpha_prior,
+                "AlphaResidualScale": self.alpha_residual_scale,
+                "AlphaResidualDeltaMean": float(alpha_delta.detach().mean().item()),
+                "AlphaResidualDeltaStd": float(alpha_delta.detach().std(unbiased=False).item()),
+            }
+            return alpha, details
+
+        alpha = torch.sigmoid(raw_alpha)
+        return alpha, details
+
     def alpha_weights(self, query_vectors: torch.Tensor) -> torch.Tensor:
         if not self.gamma_joint:
             raise RuntimeError("alpha_weights() is only available when gamma_joint=True")
-        return torch.sigmoid(self.alpha_head(query_vectors))
+        alpha, _ = self._alpha_from_query(query_vectors)
+        return alpha
+
+    def query_diagonal_weights(self, query_vectors: torch.Tensor) -> torch.Tensor:
+        if not self.query_diagonal_gate or self.query_diagonal_head is None:
+            return torch.ones_like(query_vectors)
+
+        raw_gate = 1.0 + self.query_diagonal_gate_scale * torch.tanh(self.query_diagonal_head(query_vectors))
+        if self.query_diagonal_gate_mode == "raw":
+            return raw_gate
+
+        # Keep the gate query-adaptive while structurally enforcing an average weight of 1.0 per query.
+        norm = raw_gate.mean(dim=1, keepdim=True).clamp_min(1e-6)
+        return raw_gate / norm
+
+    def adaptive_semantic_pair_scores(
+        self,
+        query_vectors: torch.Tensor,
+        doc_vectors: torch.Tensor,
+        negative_doc_vectors: torch.Tensor | None = None,
+        return_details: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, float | torch.Tensor]]:
+        gate = self.query_diagonal_weights(query_vectors)
+        gated_queries = query_vectors * gate
+        pair_scores = [torch.sum(gated_queries * doc_vectors, dim=1)]
+        if negative_doc_vectors is not None:
+            pair_scores.append(torch.sum(gated_queries * negative_doc_vectors, dim=1))
+
+        stacked_scores = torch.stack(pair_scores, dim=1)
+        details: dict[str, float | torch.Tensor] = {}
+        if self.query_diagonal_gate:
+            identity_penalty = torch.mean((gate - 1.0) ** 2)
+            scale = max(float(self.query_diagonal_gate_scale), 1e-6)
+            saturation_penalty = torch.mean(torch.abs((gate - 1.0) / scale) ** 4)
+            details = {
+                "DiagGateMean": float(gate.detach().mean().item()),
+                "DiagGateStd": float(gate.detach().std(unbiased=False).item()),
+                "DiagGateMin": float(gate.detach().min().item()),
+                "DiagGateMax": float(gate.detach().max().item()),
+                "DiagGateIdentityPenalty": identity_penalty,
+                "DiagGateSaturationPenalty": saturation_penalty,
+            }
+            if self.query_diagonal_gate_mode == "mean-one":
+                raw_gate = 1.0 + self.query_diagonal_gate_scale * torch.tanh(self.query_diagonal_head(query_vectors))
+                norm = raw_gate.mean(dim=1, keepdim=True)
+                details.update(
+                    {
+                        "DiagGateRawMean": float(raw_gate.detach().mean().item()),
+                        "DiagGateRawStd": float(raw_gate.detach().std(unbiased=False).item()),
+                        "DiagGateRawMin": float(raw_gate.detach().min().item()),
+                        "DiagGateRawMax": float(raw_gate.detach().max().item()),
+                        "DiagGateNormMean": float(norm.detach().mean().item()),
+                    }
+                )
+        return (stacked_scores, details) if return_details else stacked_scores
 
     def mix_scores(
         self,
@@ -378,13 +514,14 @@ class GammaHybridRunner(EncoderRunner):
         if self.gamma_joint:
             if query_vectors is None:
                 raise ValueError("query_vectors must be provided when gamma_joint=True")
-            alpha = self.alpha_weights(query_vectors)
+            alpha, alpha_details = self._alpha_from_query(query_vectors)
             mixed_scores = alpha * semantic_scores + (1.0 - alpha) * lexical_scores
             details = {
                 "AlphaMean": float(alpha.detach().mean().item()),
                 "AlphaStd": float(alpha.detach().std(unbiased=False).item()),
                 "AlphaMin": float(alpha.detach().min().item()),
                 "AlphaMax": float(alpha.detach().max().item()),
+                **alpha_details,
             }
             return (mixed_scores, details) if return_details else mixed_scores
 
@@ -401,6 +538,8 @@ class GammaHybridRunner(EncoderRunner):
         super().save(save_dir)
         if self.gamma_joint:
             torch.save(self.alpha_head.state_dict(), Path(save_dir) / "alpha_gate.pt")
+        if self.query_diagonal_gate and self.query_diagonal_head is not None:
+            torch.save(self.query_diagonal_head.state_dict(), Path(save_dir) / "query_diagonal_gate.pt")
 
     @classmethod
     def load(cls, data_dir: Path | str, config=None, **props):
@@ -426,6 +565,9 @@ class GammaHybridRunner(EncoderRunner):
         gamma_hybrid = config.get("gamma_hybrid", {}) if isinstance(config, dict) else {}
         semantic_cfg = gamma_hybrid.get("semantic_gamma", {})
         keywords_cfg = gamma_hybrid.get("keywords_gamma", {})
+        alpha_cfg = gamma_hybrid.get("alpha_head", {})
+        alpha_residual_cfg = alpha_cfg.get("residual", {}) if isinstance(alpha_cfg, dict) else {}
+        query_diagonal_cfg = gamma_hybrid.get("query_diagonal_gate", {})
         runner = cls(
             model=model,
             prediction_heads=heads,
@@ -435,8 +577,17 @@ class GammaHybridRunner(EncoderRunner):
             semantic_gamma=semantic_cfg.get("raw", 0.5),
             keywords_gamma=keywords_cfg.get("raw", 1.5),
             activation_fn=gamma_hybrid.get("activation_fn", "sigmoid"),
+            alpha_residual=alpha_residual_cfg.get("enabled", False),
+            alpha_prior=alpha_residual_cfg.get("prior", 0.5),
+            alpha_residual_scale=alpha_residual_cfg.get("scale", 0.25),
+            query_diagonal_gate=query_diagonal_cfg.get("enabled", False),
+            query_diagonal_gate_scale=query_diagonal_cfg.get("scale", 0.25),
+            query_diagonal_gate_mode=query_diagonal_cfg.get("mode", "raw"),
         )
         alpha_gate_path = Path(data_dir) / "alpha_gate.pt"
         if runner.gamma_joint and alpha_gate_path.exists():
             runner.alpha_head.load_state_dict(torch.load(alpha_gate_path, map_location="cpu"))
+        query_diagonal_gate_path = Path(data_dir) / "query_diagonal_gate.pt"
+        if runner.query_diagonal_gate and runner.query_diagonal_head is not None and query_diagonal_gate_path.exists():
+            runner.query_diagonal_head.load_state_dict(torch.load(query_diagonal_gate_path, map_location="cpu"))
         return runner

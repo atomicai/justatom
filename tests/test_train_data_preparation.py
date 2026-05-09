@@ -133,6 +133,37 @@ def test_prepare_training_data_preserves_chunk_identity_for_duplicate_content():
     assert lexical_by_content == {"same-doc": "same-doc"}
 
 
+def test_rebalance_rows_by_content_reduces_within_batch_duplicates_when_possible():
+    rows = [
+        {"chunk_id": "a1", "content": "same-doc", "queries": "q1", "lexical_text": "same-doc"},
+        {"chunk_id": "a2", "content": "same-doc", "queries": "q2", "lexical_text": "same-doc"},
+        {"chunk_id": "b1", "content": "doc-b", "queries": "q3", "lexical_text": "doc-b"},
+        {"chunk_id": "c1", "content": "doc-c", "queries": "q4", "lexical_text": "doc-c"},
+    ]
+
+    before = train_api.count_batches_with_duplicate_content(rows, batch_size=3)
+    rebalanced = train_api.rebalance_rows_by_content(rows, batch_size=3)
+    after = train_api.count_batches_with_duplicate_content(rebalanced, batch_size=3)
+
+    assert before == 1
+    assert after == 0
+    assert sorted(row["chunk_id"] for row in rebalanced) == ["a1", "a2", "b1", "c1"]
+
+
+def test_rebalance_rows_by_content_keeps_all_rows_when_duplicates_are_unavoidable():
+    rows = [
+        {"chunk_id": "a1", "content": "same-doc", "queries": "q1", "lexical_text": "same-doc"},
+        {"chunk_id": "a2", "content": "same-doc", "queries": "q2", "lexical_text": "same-doc"},
+        {"chunk_id": "a3", "content": "same-doc", "queries": "q3", "lexical_text": "same-doc"},
+        {"chunk_id": "b1", "content": "doc-b", "queries": "q4", "lexical_text": "doc-b"},
+    ]
+
+    rebalanced = train_api.rebalance_rows_by_content(rows, batch_size=3)
+
+    assert sorted(row["chunk_id"] for row in rebalanced) == ["a1", "a2", "a3", "b1"]
+    assert train_api.count_batches_with_duplicate_content(rebalanced, batch_size=3) == 1
+
+
 def test_iterate_training_rows_applies_limit_after_query_expansion():
     rows = [
         {"chunk_id": "a", "content": "doc-a", "queries": ["q1", "q2"]},
@@ -203,7 +234,7 @@ def test_create_training_job_selects_gamma_only_mode():
     assert isinstance(job, train_api.GammaOnlyTrainingJob)
     assert job.training_mode == "gamma-only"
     assert job.gamma_joint is True
-    assert job.loss == "soft-contrastive"
+    assert job.loss == "contrastive"
     assert job.temperature == 0.07
     assert job.grad_acc_steps == 4
 

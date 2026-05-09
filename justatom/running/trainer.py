@@ -11,6 +11,7 @@ from transformers.optimization import Adafactor, AdafactorSchedule
 from justatom.logging.io import CSVLogger
 from justatom.running.encoders import EncoderRunner, GammaHybridRunner
 from justatom.tooling import stl
+from justatom.training.diagnostics import embedding_geometry_metrics
 from justatom.training.loss import ContrastiveLoss, FocalLoss, SoftContrastiveLoss, TripletLoss
 
 
@@ -20,6 +21,7 @@ def _normalize_optimizer_name(name: str | None, *, default: str) -> str:
         "auto": "auto",
         "adamw": "adamw",
         "adam": "adamw",
+        "adagrad": "adagrad",
         "adafactor": "adafactor",
     }
     if normalized not in aliases:
@@ -52,6 +54,9 @@ def _sample_safe_negative_indices(
     lexical_text_by_content: dict[str, str] | None = None,
     inverse_idf_recall_fn: Callable[[str, list[str] | str], float] | None = None,
     max_negative_inverse_idf_recall: float | None = None,
+    min_negative_inverse_idf_recall: float | None = None,
+    negative_sampling_mode: str = "safe-random",
+    hard_negative_top_k: int | None = None,
 ) -> tuple[torch.Tensor, int]:
     batch_size = int(doc_key_ids.shape[0])
     device = doc_key_ids.device
@@ -61,6 +66,14 @@ def _sample_safe_negative_indices(
     negative_indices = torch.empty(batch_size, dtype=torch.long, device=device)
     fallback_count = 0
     all_indices = torch.arange(batch_size, device=device)
+    allowed_sampling_modes = {"safe-random", "semi-hard-idf", "hard-idf"}
+    if negative_sampling_mode not in allowed_sampling_modes:
+        raise ValueError(
+            f"Unsupported negative_sampling_mode={negative_sampling_mode!r}. "
+            f"Expected one of: {', '.join(sorted(allowed_sampling_modes))}"
+        )
+    if hard_negative_top_k is not None and hard_negative_top_k < 1:
+        raise ValueError(f"hard_negative_top_k must be >= 1 when provided, got {hard_negative_top_k}")
 
     for idx in range(batch_size):
         valid_mask = all_indices != idx
@@ -83,29 +96,78 @@ def _sample_safe_negative_indices(
             candidate_indices = all_indices[all_indices != idx]
 
         if (
-            max_negative_inverse_idf_recall is not None
+            (
+                max_negative_inverse_idf_recall is not None
+                or min_negative_inverse_idf_recall is not None
+                or negative_sampling_mode != "safe-random"
+            )
             and queries is not None
             and docs is not None
             and inverse_idf_recall_fn is not None
         ):
             query = queries[idx]
-            thresholded_candidates: list[int] = []
+            scored_candidates: list[tuple[int, float]] = []
             for candidate_idx in candidate_indices.detach().cpu().tolist():
                 candidate_doc = docs[candidate_idx]
                 candidate_sparse_text = (
                     lexical_text_by_content.get(candidate_doc, candidate_doc) if lexical_text_by_content else candidate_doc
                 )
                 candidate_score = inverse_idf_recall_fn(query, candidate_sparse_text)
-                if candidate_score <= max_negative_inverse_idf_recall:
-                    thresholded_candidates.append(candidate_idx)
+                scored_candidates.append((candidate_idx, candidate_score))
 
-            if thresholded_candidates:
-                candidate_indices = torch.tensor(thresholded_candidates, dtype=torch.long, device=device)
+            safe_candidates = [
+                (candidate_idx, candidate_score)
+                for candidate_idx, candidate_score in scored_candidates
+                if max_negative_inverse_idf_recall is None or candidate_score <= max_negative_inverse_idf_recall
+            ]
+            preferred_candidates = [
+                (candidate_idx, candidate_score)
+                for candidate_idx, candidate_score in safe_candidates
+                if min_negative_inverse_idf_recall is None or candidate_score >= min_negative_inverse_idf_recall
+            ]
+
+            if negative_sampling_mode == "safe-random":
+                chosen_candidates = safe_candidates
+            else:
+                ranked_candidates = preferred_candidates if preferred_candidates else safe_candidates
+                ranked_candidates = sorted(ranked_candidates, key=lambda item: item[1], reverse=True)
+                if hard_negative_top_k is not None:
+                    ranked_candidates = ranked_candidates[:hard_negative_top_k]
+                chosen_candidates = ranked_candidates
+
+            if chosen_candidates:
+                candidate_indices = torch.tensor(
+                    [candidate_idx for candidate_idx, _ in chosen_candidates],
+                    dtype=torch.long,
+                    device=device,
+                )
 
         sampled_offset = int(torch.randint(0, int(candidate_indices.numel()), (1,), device=device).item())
         negative_indices[idx] = candidate_indices[sampled_offset]
 
     return negative_indices, fallback_count
+
+
+def _inverse_idf_recall(
+    query: str,
+    doc_text: list[str] | str,
+    *,
+    stopsyms: str | None = None,
+) -> float:
+    stopsyms = stopsyms or "«»:\"'"
+    stopsyms = string.punctuation if stopsyms is None else stopsyms + string.punctuation
+
+    if isinstance(doc_text, list):
+        k_words = Counter(
+            stl.flatten_list(["".join([w for w in txt.lower().strip() if w not in stopsyms]).split() for txt in doc_text])
+        )
+    else:
+        k_words = Counter(["".join([ch for ch in w.lower().strip() if ch not in stopsyms]) for w in doc_text.split()])
+
+    q_words = "".join(w for w in query if w not in stopsyms).lower().strip().split()
+    numerator = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words if w in k_words])
+    denominator = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words])
+    return numerator / denominator if denominator > 0 else 0.0
 
 
 def _pairwise_focal_loss(loss_fn: FocalLoss, positive_scores: torch.Tensor, negative_scores: torch.Tensor) -> torch.Tensor:
@@ -200,12 +262,25 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         alpha_entropy_weight: float = 0.0,
         alpha_train_only: bool = False,
         alpha_mix_weight: float = 0.3,
+        alpha_mix_weight_warmup_steps: int = 0,
+        negative_sampling_mode: str = "safe-random",
+        min_negative_inverse_idf_recall: float | None = None,
+        hard_negative_top_k: int | None = None,
+        query_diagonal_identity_weight: float = 0.0,
+        query_diagonal_saturation_weight: float = 0.0,
         margin: float = 0.5,
         contrastive_temperature: float = 0.1,
         soft_contrastive_temperature: float = 1.0,
         grad_acc_steps: int = 6,
         optimizer_name: str = "auto",
         max_negative_inverse_idf_recall: float | None = None,
+        contrastive_learnable_temperature: bool = True,
+        contrastive_decoupled: bool = True,
+        contrastive_simcse_dropout_weight: float = 0.0,
+        contrastive_soft_fn_attract_weight: float = 0.0,
+        contrastive_soft_fn_topk: int = 1,
+        contrastive_loss_alpha_gate: bool = False,
+        contrastive_loss_alpha_gate_mode: str = "augment",
         lexical_text_by_content: dict[str, str] | None = None,
         save_dir: str | Path | None = None,
         metrics_path: str | Path | None = None,
@@ -222,12 +297,32 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         self.alpha_entropy_weight = alpha_entropy_weight
         self.alpha_train_only = alpha_train_only
         self.alpha_mix_weight = alpha_mix_weight
+        self.alpha_mix_weight_warmup_steps = max(int(alpha_mix_weight_warmup_steps), 0)
+        self.negative_sampling_mode = negative_sampling_mode
+        self.min_negative_inverse_idf_recall = min_negative_inverse_idf_recall
+        self.hard_negative_top_k = hard_negative_top_k
+        self.query_diagonal_identity_weight = query_diagonal_identity_weight
+        self.query_diagonal_saturation_weight = query_diagonal_saturation_weight
         self.margin = margin
         self.contrastive_temperature = contrastive_temperature
         self.soft_contrastive_temperature = soft_contrastive_temperature
         self.grad_acc_steps = grad_acc_steps
         self.optimizer_name = _normalize_optimizer_name(optimizer_name, default="adamw")
         self.max_negative_inverse_idf_recall = max_negative_inverse_idf_recall
+        self.contrastive_learnable_temperature = bool(contrastive_learnable_temperature)
+        self.contrastive_decoupled = bool(contrastive_decoupled)
+        self.contrastive_simcse_dropout_weight = float(contrastive_simcse_dropout_weight)
+        self.contrastive_soft_fn_attract_weight = float(contrastive_soft_fn_attract_weight)
+        self.contrastive_soft_fn_topk = max(int(contrastive_soft_fn_topk), 1)
+        self.contrastive_loss_alpha_gate = bool(contrastive_loss_alpha_gate)
+        mode = str(contrastive_loss_alpha_gate_mode).lower()
+        if mode not in {"augment", "convex"}:
+            raise ValueError("contrastive_loss_alpha_gate_mode must be one of: augment, convex")
+        self.contrastive_loss_alpha_gate_mode = mode
+        if self.contrastive_simcse_dropout_weight < 0.0:
+            raise ValueError("contrastive_simcse_dropout_weight must be >= 0")
+        if self.contrastive_soft_fn_attract_weight < 0.0:
+            raise ValueError("contrastive_soft_fn_attract_weight must be >= 0")
         self.lexical_text_by_content = lexical_text_by_content or {}
         self.save_dir = Path(save_dir) if save_dir is not None else None
         self.metrics_path = Path(metrics_path) if metrics_path is not None else None
@@ -239,7 +334,12 @@ class _BaseGammaLightningTrainer(L.LightningModule):
 
     def _build_loss_fn(self):
         if self.loss_name == "contrastive":
-            return ContrastiveLoss(temperature=self.contrastive_temperature, reduction="mean")
+            return ContrastiveLoss(
+                temperature=self.contrastive_temperature,
+                reduction="mean",
+                learnable_temperature=self.contrastive_learnable_temperature,
+                decoupled=self.contrastive_decoupled,
+            )
         if self.loss_name == "soft-contrastive":
             return SoftContrastiveLoss(
                 margin=self.margin,
@@ -276,6 +376,9 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             lexical_text_by_content=self.lexical_text_by_content,
             inverse_idf_recall_fn=self._fn_inverse_idf_recall,
             max_negative_inverse_idf_recall=self.max_negative_inverse_idf_recall,
+            min_negative_inverse_idf_recall=self.min_negative_inverse_idf_recall,
+            negative_sampling_mode=self.negative_sampling_mode,
+            hard_negative_top_k=self.hard_negative_top_k,
         )
 
     def _pairwise_similarity_loss(
@@ -308,20 +411,7 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         doc_text: list[str] | str,
         stopsyms: str | None = None,
     ) -> float:
-        stopsyms = stopsyms or self.stopsyms
-        stopsyms = string.punctuation if stopsyms is None else stopsyms + string.punctuation
-
-        if isinstance(doc_text, list):
-            k_words = Counter(
-                stl.flatten_list(["".join([w for w in txt.lower().strip() if w not in stopsyms]).split() for txt in doc_text])
-            )
-        else:
-            k_words = Counter(["".join([ch for ch in w.lower().strip() if ch not in stopsyms]) for w in doc_text.split()])
-
-        q_words = "".join(w for w in query if w not in stopsyms).lower().strip().split()
-        numerator = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words if w in k_words])
-        denominator = sum([1.0 / math.log(1 + k_words.get(w, 1)) for w in q_words])
-        return numerator / denominator if denominator > 0 else 0.0
+        return _inverse_idf_recall(query, doc_text, stopsyms=stopsyms or self.stopsyms)
 
     def _decode_content_from_batches(self, batch) -> tuple[list[str], list[str]]:
         tokenizer = self.runner.processor.tokenizer
@@ -388,7 +478,10 @@ class _BaseGammaLightningTrainer(L.LightningModule):
 
     def _gamma_grad_metrics(self) -> dict[str, float]:
         if self.runner.gamma_joint:
-            return {"Grad_norm_alpha_head": self._grad_norm(self.runner.alpha_parameters())}
+            metrics = {"Grad_norm_alpha_head": self._grad_norm(self.runner.alpha_parameters())}
+            if self.runner.query_diagonal_gate:
+                metrics["Grad_norm_query_diagonal_head"] = self._grad_norm(self.runner.query_diagonal_parameters())
+            return metrics
         return {
             "Grad_norm_gamma1": (self._grad_norm([self.runner.gamma1]) if self.runner.include_semantic_gamma else 0.0),
             "Grad_norm_gamma2": (self._grad_norm([self.runner.gamma2]) if self.runner.include_keywords_gamma else 0.0),
@@ -447,6 +540,8 @@ class _BaseGammaLightningTrainer(L.LightningModule):
                 lr=None,
             )
             return [optimizer], [AdafactorSchedule(optimizer)]
+        if self.optimizer_name == "adagrad":
+            return torch.optim.Adagrad(param_groups)
 
         return torch.optim.AdamW(param_groups)
 
@@ -455,6 +550,13 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         if self.grad_acc_steps > 1:
             mean_loss = mean_loss / self.grad_acc_steps
         return mean_loss
+
+    def _effective_alpha_mix_weight(self) -> float:
+        if self.alpha_mix_weight_warmup_steps <= 0:
+            return float(self.alpha_mix_weight)
+
+        warmup_progress = min(max(float(self.global_step), 0.0) / float(self.alpha_mix_weight_warmup_steps), 1.0)
+        return float(self.alpha_mix_weight) * warmup_progress
 
     def forward(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         model_batch = self._model_batch(batch)
@@ -466,11 +568,86 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         scores = q_vecs @ d_vecs.T
         return q_vecs, d_vecs, scores
 
+    def _compute_contrastive_loss(
+        self,
+        *,
+        batch: dict[str, torch.Tensor],
+        q_vecs: torch.Tensor,
+        d_vecs: torch.Tensor,
+        metrics: dict[str, float],
+    ) -> torch.Tensor:
+        """Build the InfoNCE-family loss with optional SimCSE / soft-FN / alpha-gate.
+
+        Per-row terms are aggregated as
+        ``loss = main + simcse_w * simcse + soft_fn_w * soft_fn`` by default,
+        or as ``(alpha(q) * main + (1 - alpha(q)) * aux).mean()`` when
+        ``contrastive_loss_alpha_gate`` is enabled and ``runner.gamma_joint``
+        provides a per-query alpha head, with ``aux`` being the *per-row*
+        weighted sum of the SimCSE and soft-FN components.
+        """
+        loss_fn: ContrastiveLoss = self.loss_fn
+        main_per_row = loss_fn.info_nce(q_vecs, d_vecs, reduction="none")
+
+        simcse_per_row = None
+        if self.contrastive_simcse_dropout_weight > 0.0 and not self.freeze_encoder:
+            # Second forward of the *queries* with a fresh dropout mask.
+            model_batch = self._model_batch(batch)
+            q_alt_vecs, _ = self.runner(model_batch, norm=True)
+            simcse_per_row = loss_fn.simcse_term(q_vecs, q_alt_vecs, reduction="none")
+
+        soft_fn_per_row = None
+        if self.contrastive_soft_fn_attract_weight > 0.0 and q_vecs.shape[0] > 1:
+            soft_fn_per_row = loss_fn.soft_fn_term(q_vecs, d_vecs, topk=self.contrastive_soft_fn_topk, reduction="none")
+
+        aux_per_row = None
+        if simcse_per_row is not None or soft_fn_per_row is not None:
+            aux_per_row = main_per_row.new_zeros(main_per_row.shape)
+            if simcse_per_row is not None:
+                aux_per_row = aux_per_row + self.contrastive_simcse_dropout_weight * simcse_per_row
+            if soft_fn_per_row is not None:
+                aux_per_row = aux_per_row + self.contrastive_soft_fn_attract_weight * soft_fn_per_row
+
+        if self.contrastive_loss_alpha_gate and self.runner.gamma_joint and aux_per_row is not None:
+            alpha_q = self.runner.alpha_weights(q_vecs).clamp(min=1e-6, max=1.0 - 1e-6)
+            if alpha_q.dim() > 1:
+                alpha_q = alpha_q.view(-1)
+            if self.contrastive_loss_alpha_gate_mode == "convex":
+                # alpha * main + (1 - alpha) * aux  (legacy; both terms per-row).
+                per_row = alpha_q * main_per_row + (1.0 - alpha_q) * aux_per_row
+            else:
+                # "augment" (default): main + (1 - alpha) * aux.
+                # alpha(q) ~ 1 -> trust main fully (semantic-confident query);
+                # alpha(q) ~ 0 -> apply full SimCSE/soft-FN regularization.
+                per_row = main_per_row + (1.0 - alpha_q) * aux_per_row
+            loss = per_row.mean()
+            metrics["ContrastiveLossAlphaGate"] = 1.0
+            metrics["ContrastiveLossAlphaGateAlphaMean"] = float(alpha_q.detach().mean().item())
+            metrics["ContrastiveLossAlphaGateMode"] = 1.0 if self.contrastive_loss_alpha_gate_mode == "augment" else 0.0
+        else:
+            loss = main_per_row.mean()
+            if aux_per_row is not None:
+                loss = loss + aux_per_row.mean()
+            metrics["ContrastiveLossAlphaGate"] = float(int(self.contrastive_loss_alpha_gate))
+
+        with torch.no_grad():
+            metrics["ContrastiveMainLoss"] = float(main_per_row.mean().item())
+            if simcse_per_row is not None:
+                metrics["ContrastiveSimCSELoss"] = float(simcse_per_row.mean().item())
+            if soft_fn_per_row is not None:
+                metrics["ContrastiveSoftFNLoss"] = float(soft_fn_per_row.mean().item())
+            metrics["ContrastiveSimCSEWeight"] = float(self.contrastive_simcse_dropout_weight)
+            metrics["ContrastiveSoftFNWeight"] = float(self.contrastive_soft_fn_attract_weight)
+            metrics["ContrastiveSoftFNTopK"] = float(self.contrastive_soft_fn_topk)
+            metrics["ContrastiveLearnableTau"] = float(int(self.contrastive_learnable_temperature))
+            metrics["ContrastiveDecoupled"] = float(int(self.contrastive_decoupled))
+        return loss
+
     def training_step(self, batch, batch_idx):
         optimizer = self.optimizers()
         if isinstance(optimizer, list):
             optimizer = optimizer[0]
         q_vecs, d_vecs, semantic_scores = self.forward(batch)
+        contrastive_aux_metrics: dict[str, float] = {}
         negative_indices, safe_negative_fallbacks = self._sample_negative_indices(batch)
         negative_d_vecs = d_vecs[negative_indices]
         semantic_pair_scores = torch.stack(
@@ -481,7 +658,12 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             dim=1,
         )
         if self.loss_name == "contrastive":
-            semantic_loss = self.loss_fn(q_vecs, d_vecs)
+            semantic_loss = self._compute_contrastive_loss(
+                batch=batch,
+                q_vecs=q_vecs,
+                d_vecs=d_vecs,
+                metrics=contrastive_aux_metrics,
+            )
         elif self.loss_name == "focal-contrastive":
             semantic_loss = _pairwise_focal_loss(self.loss_fn, semantic_pair_scores[:, 0], semantic_pair_scores[:, 1])
         else:
@@ -490,11 +672,21 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             semantic_loss = self.loss_fn(q_vecs, d_vecs, positive_labels) + self.loss_fn(q_vecs, negative_d_vecs, negative_labels)
 
         positive_sparse_scores, negative_sparse_scores = self._build_sparse_pair_scores(batch, negative_indices)
+        adaptive_output = self.runner.adaptive_semantic_pair_scores(
+            q_vecs,
+            d_vecs,
+            negative_doc_vectors=negative_d_vecs,
+            return_details=True,
+        )
+        assert isinstance(adaptive_output, tuple)
+        adaptive_semantic_pair_scores, adaptive_metrics = adaptive_output
+        diag_identity_penalty = adaptive_metrics.pop("DiagGateIdentityPenalty", None)
+        diag_saturation_penalty = adaptive_metrics.pop("DiagGateSaturationPenalty", None)
         if self.loss_name == "soft-contrastive":
-            semantic_pair_scores = self._scale_soft_contrastive_scores(semantic_pair_scores)
+            adaptive_semantic_pair_scores = self._scale_soft_contrastive_scores(adaptive_semantic_pair_scores)
         sparse_pair_scores = torch.stack([positive_sparse_scores, negative_sparse_scores], dim=1)
         mixed_output = self.runner.mix_scores(
-            semantic_pair_scores,
+            adaptive_semantic_pair_scores,
             sparse_pair_scores,
             query_vectors=q_vecs,
             return_details=True,
@@ -512,6 +704,15 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         main_loss = semantic_loss if self.alpha_train_only and self.runner.gamma_joint else mix_loss
         aux_metrics: dict[str, float] = {}
         entropy_bonus = None
+        diag_identity_bonus = semantic_loss.new_zeros(())
+        diag_saturation_bonus = semantic_loss.new_zeros(())
+        effective_alpha_mix_weight = self._effective_alpha_mix_weight()
+        if diag_identity_penalty is not None:
+            assert isinstance(diag_identity_penalty, torch.Tensor)
+            diag_identity_bonus = self.query_diagonal_identity_weight * diag_identity_penalty
+        if diag_saturation_penalty is not None:
+            assert isinstance(diag_saturation_penalty, torch.Tensor)
+            diag_saturation_bonus = self.query_diagonal_saturation_weight * diag_saturation_penalty
         if self.runner.gamma_joint:
             alpha = self.runner.alpha_weights(q_vecs)
             alpha_clamped = alpha.clamp(min=1e-6, max=1.0 - 1e-6)
@@ -520,9 +721,10 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             ).mean()
             entropy_bonus = self.alpha_entropy_weight * alpha_entropy
             if self.alpha_train_only:
-                loss = semantic_loss + self.alpha_mix_weight * mix_loss - entropy_bonus
+                loss = semantic_loss + effective_alpha_mix_weight * mix_loss - entropy_bonus
             else:
                 loss = mix_loss - entropy_bonus
+            loss = loss + diag_identity_bonus + diag_saturation_bonus
             with torch.no_grad():
                 aux_metrics["alpha_aux_loss"] = float(semantic_loss.detach().item())
                 aux_metrics["alpha_mix_loss"] = float(mix_loss.detach().item())
@@ -531,6 +733,19 @@ class _BaseGammaLightningTrainer(L.LightningModule):
                 aux_metrics["alpha_entropy_weight"] = float(self.alpha_entropy_weight)
                 aux_metrics["alpha_train_only"] = float(int(self.alpha_train_only))
                 aux_metrics["alpha_mix_weight"] = float(self.alpha_mix_weight)
+                aux_metrics["alpha_mix_weight_effective"] = float(effective_alpha_mix_weight)
+                aux_metrics["alpha_mix_weight_warmup_steps"] = float(self.alpha_mix_weight_warmup_steps)
+                aux_metrics["DiagGateIdentityPenalty"] = (
+                    float(diag_identity_penalty.detach().item()) if diag_identity_penalty is not None else 0.0
+                )
+                aux_metrics["DiagGateSaturationPenalty"] = (
+                    float(diag_saturation_penalty.detach().item()) if diag_saturation_penalty is not None else 0.0
+                )
+                aux_metrics["DiagGateIdentityBonus"] = float(diag_identity_bonus.detach().item())
+                aux_metrics["DiagGateSaturationBonus"] = float(diag_saturation_bonus.detach().item())
+                aux_metrics["DiagGateIdentityWeight"] = float(self.query_diagonal_identity_weight)
+                aux_metrics["DiagGateSaturationWeight"] = float(self.query_diagonal_saturation_weight)
+                aux_metrics.update(adaptive_metrics)
         else:
             loss = main_loss
 
@@ -540,6 +755,11 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         grad_metrics = self._gamma_grad_metrics()
         grad_metrics["Grad_Norm_model"] = self._grad_norm(self.runner.model.parameters())
         batch_metrics = self._batch_retrieval_metrics(semantic_scores.detach())
+        geom_metrics = embedding_geometry_metrics(
+            q_vecs.detach(),
+            d_vecs.detach(),
+            tau=self.loss_fn.tau if isinstance(self.loss_fn, ContrastiveLoss) else None,
+        )
         optimizer.step()
         scheduler = self.lr_schedulers()
         if scheduler is not None:
@@ -553,17 +773,27 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             "MainLoss": float(main_loss.detach().item()),
             "FreezeEncoder": int(self.freeze_encoder),
             "GammaJoint": int(self.runner.gamma_joint),
+            "NegativeSamplingMode": self.negative_sampling_mode,
+            "MinNegativeIDFRecall": (
+                float(self.min_negative_inverse_idf_recall) if self.min_negative_inverse_idf_recall is not None else -1.0
+            ),
+            "MaxNegativeIDFRecall": (
+                float(self.max_negative_inverse_idf_recall) if self.max_negative_inverse_idf_recall is not None else -1.0
+            ),
+            "HardNegativeTopK": float(self.hard_negative_top_k) if self.hard_negative_top_k is not None else -1.0,
             "ActivationFn": self.runner.activation_fn,
             "Optimizer": self.optimizer_name,
             "LossName": self.loss_name,
             "FocalGamma": self.focal_gamma,
             "ContrastiveTemperature": self.contrastive_temperature,
             "SoftContrastiveTemperature": self.soft_contrastive_temperature,
+            **contrastive_aux_metrics,
             **self._gamma_metrics(),
             **aux_metrics,
             **mix_metrics,
             **batch_metrics,
             **grad_metrics,
+            **geom_metrics,
             "SafeNegativeFallbacks": float(safe_negative_fallbacks),
             "SafeNegativeFallbackRate": float(safe_negative_fallbacks / max(int(q_vecs.shape[0]), 1)),
         }
@@ -622,6 +852,12 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
         weight_decay: float = 0.01,
         grad_acc_steps: int = 6,
         optimizer_name: str = "auto",
+        contrastive_learnable_temperature: bool = True,
+        contrastive_decoupled: bool = True,
+        contrastive_simcse_dropout_weight: float = 0.0,
+        contrastive_soft_fn_attract_weight: float = 0.0,
+        contrastive_soft_fn_topk: int = 1,
+        lexical_text_by_content: dict[str, str] | None = None,
         save_dir: str | Path | None = None,
         metrics_path: str | Path | None = None,
     ):
@@ -637,6 +873,16 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
         self.grad_acc_steps = grad_acc_steps
         default_optimizer = "adafactor" if loss_name == "contrastive" else "adamw"
         self.optimizer_name = _normalize_optimizer_name(optimizer_name, default=default_optimizer)
+        self.contrastive_learnable_temperature = bool(contrastive_learnable_temperature)
+        self.contrastive_decoupled = bool(contrastive_decoupled)
+        self.contrastive_simcse_dropout_weight = float(contrastive_simcse_dropout_weight)
+        self.contrastive_soft_fn_attract_weight = float(contrastive_soft_fn_attract_weight)
+        self.contrastive_soft_fn_topk = max(int(contrastive_soft_fn_topk), 1)
+        if self.contrastive_simcse_dropout_weight < 0.0:
+            raise ValueError("contrastive_simcse_dropout_weight must be >= 0")
+        if self.contrastive_soft_fn_attract_weight < 0.0:
+            raise ValueError("contrastive_soft_fn_attract_weight must be >= 0")
+        self.lexical_text_by_content = lexical_text_by_content or {}
         self.save_dir = Path(save_dir) if save_dir is not None else None
         self.metrics_path = Path(metrics_path) if metrics_path is not None else None
         self.metrics_logger = CSVLogger(self.metrics_path) if self.metrics_path is not None else None
@@ -648,7 +894,12 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
 
     def _build_loss_fn(self):
         if self.loss_name == "contrastive":
-            return ContrastiveLoss(temperature=self.contrastive_temperature, reduction="mean")
+            return ContrastiveLoss(
+                temperature=self.contrastive_temperature,
+                reduction="mean",
+                learnable_temperature=self.contrastive_learnable_temperature,
+                decoupled=self.contrastive_decoupled,
+            )
         if self.loss_name == "soft-contrastive":
             return SoftContrastiveLoss(
                 margin=self.margin,
@@ -674,6 +925,23 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
             content_key_ids=batch.get("content_key_id"),
             query_key_ids=batch.get("query_key_id"),
         )
+
+    def _decode_content_from_batches(self, batch) -> tuple[list[str], list[str]]:
+        tokenizer = self.runner.processor.tokenizer
+        query_prefix = self.runner.processor.queries_prefix
+        doc_prefix = self.runner.processor.pos_queries_prefix
+
+        queries = [
+            tokenizer.decode(q_tokens, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+            .removeprefix(query_prefix)
+            .strip()
+            for q_tokens in batch["input_ids"]
+        ]
+        docs = [
+            tokenizer.decode(d_tokens, skip_special_tokens=True, clean_up_tokenization_spaces=True).removeprefix(doc_prefix).strip()
+            for d_tokens in batch["pos_input_ids"]
+        ]
+        return queries, docs
 
     @staticmethod
     def _grad_norm(parameters) -> float:
@@ -721,6 +989,16 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
                 lr=None,
             )
             return [optimizer], [AdafactorSchedule(optimizer)]
+        if self.optimizer_name == "adagrad":
+            return torch.optim.Adagrad(
+                [
+                    {
+                        "params": encoder_params,
+                        "lr": self.lr_encoder,
+                        "weight_decay": self.weight_decay,
+                    }
+                ]
+            )
 
         return torch.optim.AdamW(
             [
@@ -748,6 +1026,7 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
             optimizer = optimizer[0]
         q_vecs, d_vecs = self.runner(self._model_batch(batch), norm=True)
         output = q_vecs @ d_vecs.T
+        contrastive_aux_metrics: dict[str, float] = {}
 
         if self.loss_name == "soft-contrastive":
             negative_indices, safe_negative_fallbacks = self._sample_negative_indices(batch)
@@ -765,13 +1044,41 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
             loss = _pairwise_focal_loss(self.loss_fn, positive_scores, negative_scores)
         else:
             safe_negative_fallbacks = 0
-            loss = self.loss_fn(q_vecs, d_vecs)
+            loss_fn: ContrastiveLoss = self.loss_fn
+            main_per_row = loss_fn.info_nce(q_vecs, d_vecs, reduction="none")
+            extra = main_per_row.new_zeros(())
+            simcse_per_row = None
+            soft_fn_per_row = None
+            if self.contrastive_simcse_dropout_weight > 0.0:
+                q_alt_vecs, _ = self.runner(self._model_batch(batch), norm=True)
+                simcse_per_row = loss_fn.simcse_term(q_vecs, q_alt_vecs, reduction="none")
+                extra = extra + self.contrastive_simcse_dropout_weight * simcse_per_row.mean()
+            if self.contrastive_soft_fn_attract_weight > 0.0 and q_vecs.shape[0] > 1:
+                soft_fn_per_row = loss_fn.soft_fn_term(q_vecs, d_vecs, topk=self.contrastive_soft_fn_topk, reduction="none")
+                extra = extra + self.contrastive_soft_fn_attract_weight * soft_fn_per_row.mean()
+            loss = main_per_row.mean() + extra
+            with torch.no_grad():
+                contrastive_aux_metrics["ContrastiveMainLoss"] = float(main_per_row.mean().item())
+                if simcse_per_row is not None:
+                    contrastive_aux_metrics["ContrastiveSimCSELoss"] = float(simcse_per_row.mean().item())
+                if soft_fn_per_row is not None:
+                    contrastive_aux_metrics["ContrastiveSoftFNLoss"] = float(soft_fn_per_row.mean().item())
+                contrastive_aux_metrics["ContrastiveSimCSEWeight"] = float(self.contrastive_simcse_dropout_weight)
+                contrastive_aux_metrics["ContrastiveSoftFNWeight"] = float(self.contrastive_soft_fn_attract_weight)
+                contrastive_aux_metrics["ContrastiveSoftFNTopK"] = float(self.contrastive_soft_fn_topk)
+                contrastive_aux_metrics["ContrastiveLearnableTau"] = float(int(self.contrastive_learnable_temperature))
+                contrastive_aux_metrics["ContrastiveDecoupled"] = float(int(self.contrastive_decoupled))
 
         optimizer.zero_grad()
         self.manual_backward(self._adjust_loss(loss))
 
         grad_norm_model = self._grad_norm(self.runner.model.parameters())
         batch_metrics = self._batch_retrieval_metrics(output.detach())
+        geom_metrics = embedding_geometry_metrics(
+            q_vecs.detach(),
+            d_vecs.detach(),
+            tau=self.loss_fn.tau if isinstance(self.loss_fn, ContrastiveLoss) else None,
+        )
         optimizer.step()
 
         if self.loss_name == "contrastive":
@@ -790,10 +1097,12 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
             "FocalGamma": self.focal_gamma,
             "ContrastiveTemperature": self.contrastive_temperature,
             "SoftContrastiveTemperature": self.soft_contrastive_temperature,
+            **contrastive_aux_metrics,
             "Grad_Norm_model": grad_norm_model,
             "SafeNegativeFallbacks": float(safe_negative_fallbacks),
             "SafeNegativeFallbackRate": float(safe_negative_fallbacks / max(int(q_vecs.shape[0]), 1)),
             **batch_metrics,
+            **geom_metrics,
         }
         for key, value in payload.items():
             if isinstance(value, str):
