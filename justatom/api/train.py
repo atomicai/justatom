@@ -13,8 +13,9 @@ import dotenv
 import polars as pl
 from loguru import logger
 
-from justatom.configuring.scenarios import load_scenario_config, parse_unknown_overrides
+from justatom.configuring.scenarios import deep_merge, load_scenario_config, parse_unknown_overrides
 from justatom.running.trainer_jobs import (
+    AtomGateTrainingJob,
     BaseTrainingJob,
     EncoderGammaTrainingJob,
     EncoderOnlyTrainingJob,
@@ -44,7 +45,197 @@ def load_train_config(
     )
 
 
+def _normalize_recipe_name(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "atom": "atom_gate",
+        "atom_gate": "atom_gate",
+        "justatom_gate": "atom_gate",
+    }
+    return aliases.get(text, text)
+
+
+def _enabled(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _auto_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() in {"", "auto", "none", "null"}:
+        return None
+    return int(value)
+
+
+def _apply_alpha_gate_config(cfg: dict[str, Any], *, force_enabled: bool = False) -> dict[str, Any]:
+    alpha_cfg = cfg.get("alpha_gate") or {}
+    training_cfg = cfg.get("training") or {}
+    enabled = force_enabled or _enabled(cfg.get("add_alpha_gate")) or _enabled(alpha_cfg.get("enabled"))
+    if not enabled:
+        return cfg
+
+    aux_cfg = alpha_cfg.get("auxiliary") or alpha_cfg.get("aux") or {}
+    query_cfg = alpha_cfg.get("alpha_query") or alpha_cfg.get("head") or {}
+    residual_cfg = query_cfg.get("residual") or alpha_cfg.get("residual") or {}
+    input_mode = str(query_cfg.get("input", training_cfg.get("alpha_head_input", "query"))).strip().lower()
+    if input_mode in {"q", "alpha_q", "alpha(q)"}:
+        input_mode = "query"
+    if input_mode in {"pair", "query_doc", "query_document", "q_doc", "q_d", "alpha(q,d+)"}:
+        input_mode = "query_doc"
+
+    alpha_training = {
+        "gamma_joint": True,
+        "include_semantic_gamma": True,
+        "include_keywords_gamma": True,
+        "alpha_train_only": _enabled(alpha_cfg.get("train_only", training_cfg.get("alpha_train_only", True))),
+        "alpha_mix_weight": float(alpha_cfg.get("mix_weight", training_cfg.get("alpha_mix_weight", 0.3))),
+        "alpha_mix_weight_warmup_steps": int(
+            alpha_cfg.get("mix_weight_warmup_steps", training_cfg.get("alpha_mix_weight_warmup_steps", 0))
+        ),
+        "alpha_residual": _enabled(residual_cfg.get("enabled", training_cfg.get("alpha_residual", False))),
+        "alpha_prior": float(residual_cfg.get("prior", training_cfg.get("alpha_prior", 0.5))),
+        "alpha_residual_scale": float(residual_cfg.get("scale", training_cfg.get("alpha_residual_scale", 0.25))),
+        "alpha_head_input": input_mode,
+        "alpha_head_include_doc": input_mode in {"query_doc", "pair"},
+        "alpha_head_layers": int(query_cfg.get("layers", training_cfg.get("alpha_head_layers", 1))),
+        "alpha_head_hidden_dim": query_cfg.get("hidden_dim", training_cfg.get("alpha_head_hidden_dim")),
+        "alpha_head_dropout": float(query_cfg.get("dropout", training_cfg.get("alpha_head_dropout", 0.0))),
+        "alpha_head_activation": str(query_cfg.get("activation", training_cfg.get("alpha_head_activation", "gelu"))),
+        "contrastive_simcse_dropout_weight": float(
+            aux_cfg.get("simcse_dropout_weight", training_cfg.get("contrastive_simcse_dropout_weight", 0.1))
+        ),
+        "contrastive_soft_fn_attract_weight": float(
+            aux_cfg.get("soft_fn_attract_weight", training_cfg.get("contrastive_soft_fn_attract_weight", 0.0))
+        ),
+        "contrastive_soft_fn_topk": int(aux_cfg.get("soft_fn_topk", training_cfg.get("contrastive_soft_fn_topk", 1))),
+        "contrastive_loss_alpha_gate": True,
+        "contrastive_loss_alpha_gate_mode": str(alpha_cfg.get("mode", training_cfg.get("contrastive_loss_alpha_gate_mode", "augment"))),
+    }
+
+    out = dict(cfg)
+    out["add_alpha_gate"] = True
+    out["training"] = deep_merge(training_cfg, alpha_training)
+    return out
+
+
+def _normalize_atom_gate_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Map the production Atom Gate recipe schema onto the legacy training fields.
+
+    This is the compatibility bridge for the cleanup: external configs can use
+    compact, product-level names while the existing trainer still receives the
+    explicit internal knobs it already understands.
+    """
+    recipe = _normalize_recipe_name(cfg.get("recipe") or (cfg.get("training") or {}).get("recipe"))
+    if recipe != "atom_gate":
+        return cfg
+
+    training_cfg = cfg.get("training") or {}
+    atom_cfg = cfg.get("atom_gate") or {}
+    bank_cfg = cfg.get("memory_bank") if "memory_bank" in cfg else None
+    alpha_cfg = cfg.get("alpha_gate") or {}
+
+    if atom_cfg.get("temperature") is not None:
+        contrastive_temperature = float(atom_cfg["temperature"])
+    elif training_cfg.get("contrastive_temperature") not in {None, 0.03, 0.1}:
+        contrastive_temperature = float(training_cfg["contrastive_temperature"])
+    elif training_cfg.get("temperature") is not None:
+        contrastive_temperature = float(training_cfg["temperature"])
+    else:
+        contrastive_temperature = 0.05
+
+    recipe_training = {
+        "loss": "contrastive",
+        "freeze_encoder": False,
+        "gamma_joint": True,
+        "include_semantic_gamma": True,
+        "include_keywords_gamma": True,
+        "alpha_train_only": True,
+        "alpha_mix_weight": float(
+            atom_cfg.get("alpha_mix_weight", atom_cfg.get("mix_weight", training_cfg.get("alpha_mix_weight", 0.3)))
+        ),
+        "optimizer": "adamw",
+        "contrastive_temperature": contrastive_temperature,
+        "contrastive_learnable_temperature": bool(
+            atom_cfg.get("learnable_temperature", training_cfg.get("contrastive_learnable_temperature", True))
+        ),
+        "contrastive_decoupled": bool(atom_cfg.get("decoupled", training_cfg.get("contrastive_decoupled", True))),
+    }
+
+    if bank_cfg is not None:
+        bank_cfg = bank_cfg or {}
+        bank_size = int(bank_cfg.get("size", training_cfg.get("memory_bank_size", 0)) or 0)
+        bank_enabled = bool(bank_cfg.get("enabled", bank_size > 0))
+        recipe_training.update(
+            {
+                "memory_bank_size": bank_size if bank_enabled else 0,
+                "memory_bank_warmup_steps": int(
+                    bank_cfg.get("warmup_steps", training_cfg.get("memory_bank_warmup_steps", 0))
+                ),
+                "memory_bank_mining_mode": str(
+                    bank_cfg.get(
+                        "mining",
+                        bank_cfg.get("mining_mode", training_cfg.get("memory_bank_mining_mode", "mixed")),
+                    )
+                ),
+                "memory_bank_hard_negatives": int(
+                    bank_cfg.get("hard_negatives", training_cfg.get("memory_bank_hard_negatives", 0))
+                ),
+                "memory_bank_random_negatives": int(
+                    bank_cfg.get("random_negatives", training_cfg.get("memory_bank_random_negatives", 0))
+                ),
+                "memory_bank_hard_warmup_steps": int(
+                    bank_cfg.get("hard_warmup_steps", training_cfg.get("memory_bank_hard_warmup_steps", 0))
+                ),
+                "memory_bank_hard_ramp_steps": int(
+                    bank_cfg.get("hard_ramp_steps", training_cfg.get("memory_bank_hard_ramp_steps", 1))
+                ),
+                "memory_bank_too_hard_margin": bank_cfg.get(
+                    "too_hard_margin",
+                    training_cfg.get("memory_bank_too_hard_margin"),
+                ),
+            }
+        )
+
+    out = dict(cfg)
+    out["training"] = deep_merge(training_cfg, recipe_training)
+    out["add_alpha_gate"] = True
+    out["alpha_gate"] = deep_merge(
+        {
+            "enabled": True,
+            "mode": atom_cfg.get("alpha_gate_mode", "augment"),
+            "train_only": True,
+            "mix_weight": atom_cfg.get("alpha_mix_weight", atom_cfg.get("mix_weight", 0.3)),
+            "mix_weight_warmup_steps": 0,
+            "auxiliary": {
+                "simcse_dropout_weight": atom_cfg.get("simcse_weight", 0.1),
+                "soft_fn_attract_weight": 0.0,
+                "soft_fn_topk": 1,
+            },
+            "alpha_query": {
+                "input": "query",
+                "layers": 1,
+                "hidden_dim": "auto",
+                "dropout": 0.0,
+                "activation": "gelu",
+                "residual": {
+                    "enabled": False,
+                    "prior": 0.5,
+                    "scale": 0.25,
+                },
+            },
+        },
+        alpha_cfg,
+    )
+    out["alpha_gate"]["enabled"] = True
+    return _apply_alpha_gate_config(out, force_enabled=True)
+
+
 def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
+    cfg = _normalize_atom_gate_config(cfg)
+    cfg = _apply_alpha_gate_config(cfg)
+    recipe = _normalize_recipe_name(cfg.get("recipe") or (cfg.get("training") or {}).get("recipe"))
     collection = cfg.get("collection") or {}
     dataset = cfg.get("dataset") or {}
     model = cfg.get("model") or {}
@@ -67,6 +258,7 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         model_name_or_path=model.get("name", "intfloat/multilingual-e5-small"),
         dataset_name_or_path=dataset.get("name_or_path") or dataset.get("id"),
         auto_generate=True,
+        recipe=recipe or None,
         loss=training.get("loss", "soft-contrastive"),
         temperature=contrastive_temperature,
         grad_acc_steps=grad_acc_steps,
@@ -79,6 +271,7 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         lr_gamma=float(training.get("lr_gamma", 1e-2)),
         lr_encoder=float(training.get("lr_encoder", 2e-5)),
         weight_decay=float(training.get("weight_decay", 0.01)),
+        add_alpha_gate=bool(cfg.get("add_alpha_gate", False)),
         alpha_entropy_weight=float(training.get("alpha_entropy_weight", 0.0)),
         alpha_train_only=bool(training.get("alpha_train_only", False)),
         alpha_mix_weight=float(training.get("alpha_mix_weight", 0.3)),
@@ -86,16 +279,43 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         alpha_residual=bool(training.get("alpha_residual", False)),
         alpha_prior=float(training.get("alpha_prior", 0.5)),
         alpha_residual_scale=float(training.get("alpha_residual_scale", 0.25)),
+        alpha_head_input=str(training.get("alpha_head_input", "query")),
+        alpha_head_layers=int(training.get("alpha_head_layers", 1)),
+        alpha_head_hidden_dim=_auto_int(training.get("alpha_head_hidden_dim")),
+        alpha_head_dropout=float(training.get("alpha_head_dropout", 0.0)),
+        alpha_head_activation=str(training.get("alpha_head_activation", "gelu")),
+        alpha_head_include_doc=bool(training.get("alpha_head_include_doc", False)),
         query_diagonal_gate=bool(training.get("query_diagonal_gate", False)),
         query_diagonal_gate_scale=float(training.get("query_diagonal_gate_scale", 0.25)),
         query_diagonal_gate_mode=str(training.get("query_diagonal_gate_mode", "raw")),
         query_diagonal_identity_weight=float(training.get("query_diagonal_identity_weight", 0.0)),
         query_diagonal_saturation_weight=float(training.get("query_diagonal_saturation_weight", 0.0)),
+        contrastive_learnable_temperature=bool(training.get("contrastive_learnable_temperature", True)),
+        contrastive_decoupled=bool(training.get("contrastive_decoupled", True)),
+        contrastive_simcse_dropout_weight=float(training.get("contrastive_simcse_dropout_weight", 0.0)),
+        contrastive_soft_fn_attract_weight=float(training.get("contrastive_soft_fn_attract_weight", 0.0)),
+        contrastive_soft_fn_topk=int(training.get("contrastive_soft_fn_topk", 1)),
+        contrastive_loss_alpha_gate=bool(training.get("contrastive_loss_alpha_gate", False)),
+        contrastive_loss_alpha_gate_mode=str(training.get("contrastive_loss_alpha_gate_mode", "augment")),
+        memory_bank_size=int(training.get("memory_bank_size", 0)),
+        memory_bank_warmup_steps=int(training.get("memory_bank_warmup_steps", 0)),
+        memory_bank_mining_mode=str(training.get("memory_bank_mining_mode", "all")),
+        memory_bank_hard_negatives=int(training.get("memory_bank_hard_negatives", 0)),
+        memory_bank_random_negatives=int(training.get("memory_bank_random_negatives", 0)),
+        memory_bank_hard_warmup_steps=int(training.get("memory_bank_hard_warmup_steps", 0)),
+        memory_bank_hard_ramp_steps=int(training.get("memory_bank_hard_ramp_steps", 1)),
+        memory_bank_too_hard_margin=(
+            None
+            if training.get("memory_bank_too_hard_margin") is None
+            else float(training.get("memory_bank_too_hard_margin"))
+        ),
         focal_gamma=float(training.get("focal_gamma", 2.0)),
     )
 
     return {
-        "dataset_name_or_path": dataset.get("name_or_path"),
+        "recipe": recipe or None,
+        "add_alpha_gate": bool(cfg.get("add_alpha_gate", False)),
+        "dataset_name_or_path": dataset.get("name_or_path") or dataset.get("id"),
         "model_name_or_path": model.get("name", "intfloat/multilingual-e5-small"),
         "collection_name": resolve_collection_name(
             collection.get("name", "Document"),
@@ -120,6 +340,12 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "alpha_residual": bool(training.get("alpha_residual", False)),
         "alpha_prior": float(training.get("alpha_prior", 0.5)),
         "alpha_residual_scale": float(training.get("alpha_residual_scale", 0.25)),
+        "alpha_head_input": str(training.get("alpha_head_input", "query")),
+        "alpha_head_layers": int(training.get("alpha_head_layers", 1)),
+        "alpha_head_hidden_dim": _auto_int(training.get("alpha_head_hidden_dim")),
+        "alpha_head_dropout": float(training.get("alpha_head_dropout", 0.0)),
+        "alpha_head_activation": str(training.get("alpha_head_activation", "gelu")),
+        "alpha_head_include_doc": bool(training.get("alpha_head_include_doc", False)),
         "query_diagonal_gate": bool(training.get("query_diagonal_gate", False)),
         "query_diagonal_gate_scale": float(training.get("query_diagonal_gate_scale", 0.25)),
         "query_diagonal_gate_mode": str(training.get("query_diagonal_gate_mode", "raw")),
@@ -143,6 +369,18 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "contrastive_soft_fn_topk": int(training.get("contrastive_soft_fn_topk", 1)),
         "contrastive_loss_alpha_gate": bool(training.get("contrastive_loss_alpha_gate", False)),
         "contrastive_loss_alpha_gate_mode": str(training.get("contrastive_loss_alpha_gate_mode", "augment")),
+        "memory_bank_size": int(training.get("memory_bank_size", 0)),
+        "memory_bank_warmup_steps": int(training.get("memory_bank_warmup_steps", 0)),
+        "memory_bank_mining_mode": str(training.get("memory_bank_mining_mode", "all")),
+        "memory_bank_hard_negatives": int(training.get("memory_bank_hard_negatives", 0)),
+        "memory_bank_random_negatives": int(training.get("memory_bank_random_negatives", 0)),
+        "memory_bank_hard_warmup_steps": int(training.get("memory_bank_hard_warmup_steps", 0)),
+        "memory_bank_hard_ramp_steps": int(training.get("memory_bank_hard_ramp_steps", 1)),
+        "memory_bank_too_hard_margin": (
+            None
+            if training.get("memory_bank_too_hard_margin") is None
+            else float(training.get("memory_bank_too_hard_margin"))
+        ),
         "min_negative_inverse_idf_recall": (
             None
             if training.get("min_negative_inverse_idf_recall") is None
@@ -602,6 +840,7 @@ __all__ = [
     "BaseTrainingJob",
     "GammaOnlyTrainingJob",
     "EncoderGammaTrainingJob",
+    "AtomGateTrainingJob",
     "EncoderOnlyTrainingJob",
     "DatasetApi",
     "DatasetRecordAdapter",

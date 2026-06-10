@@ -254,6 +254,47 @@ class GammaHybridRunner(EncoderRunner):
     Implementation for `GammaHybrid` forward pass.
     """
 
+    @staticmethod
+    def _activation_module(name: str) -> nn.Module:
+        normalized = str(name).strip().lower()
+        if normalized == "gelu":
+            return nn.GELU()
+        if normalized == "relu":
+            return nn.ReLU()
+        if normalized in {"silu", "swish"}:
+            return nn.SiLU()
+        if normalized == "tanh":
+            return nn.Tanh()
+        raise ValueError("alpha_head_activation must be one of: gelu, relu, silu, tanh")
+
+    @classmethod
+    def _build_scalar_head(
+        cls,
+        *,
+        input_dim: int,
+        hidden_dim: int,
+        hidden_layers: int,
+        dropout: float,
+        activation: str,
+    ) -> nn.Sequential:
+        layers: list[nn.Module] = []
+        current_dim = int(input_dim)
+        for _ in range(max(int(hidden_layers), 0)):
+            layers.append(nn.Linear(current_dim, int(hidden_dim)))
+            layers.append(cls._activation_module(activation))
+            if float(dropout) > 0.0:
+                layers.append(nn.Dropout(float(dropout)))
+            current_dim = int(hidden_dim)
+        layers.append(nn.Linear(current_dim, 1))
+        return nn.Sequential(*layers)
+
+    @staticmethod
+    def _last_linear(module: nn.Sequential) -> nn.Linear:
+        for layer in reversed(module):
+            if isinstance(layer, nn.Linear):
+                return layer
+        raise RuntimeError("scalar head has no Linear layer")
+
     def __init__(
         self,
         model: ILanguageModel,
@@ -269,6 +310,11 @@ class GammaHybridRunner(EncoderRunner):
         alpha_residual: bool = False,
         alpha_prior: float = 0.5,
         alpha_residual_scale: float = 0.25,
+        alpha_head_hidden_dim: int | None = None,
+        alpha_head_layers: int = 1,
+        alpha_head_dropout: float = 0.0,
+        alpha_head_activation: str = "gelu",
+        alpha_include_doc: bool | None = None,
         query_diagonal_gate: bool = False,
         query_diagonal_gate_scale: float = 0.25,
         query_diagonal_gate_mode: str = "raw",
@@ -305,13 +351,55 @@ class GammaHybridRunner(EncoderRunner):
         self.query_diagonal_gate_mode = self._resolve_query_diagonal_gate_mode(query_diagonal_gate_mode)
         if self.model is None:
             raise RuntimeError("GammaHybridRunner model has not been initialised")
-        alpha_hidden_dim = max(32, min(256, int(self.model.output_dims) // 2))
-        self.alpha_head_hidden_dim = alpha_hidden_dim
-        self.alpha_head = torch.nn.Sequential(
-            torch.nn.Linear(int(self.model.output_dims), alpha_hidden_dim),
-            torch.nn.GELU(),
-            torch.nn.Linear(alpha_hidden_dim, 1),
+        alpha_hidden_dim = (
+            max(32, min(256, int(self.model.output_dims) // 2))
+            if alpha_head_hidden_dim is None
+            else int(alpha_head_hidden_dim)
         )
+        if alpha_hidden_dim < 1:
+            raise ValueError(f"alpha_head_hidden_dim must be >= 1, got {alpha_hidden_dim}")
+        self.alpha_head_hidden_dim = alpha_hidden_dim
+        self.alpha_head_layers = max(int(alpha_head_layers), 0)
+        self.alpha_head_dropout = float(alpha_head_dropout)
+        if not 0.0 <= self.alpha_head_dropout < 1.0:
+            raise ValueError(f"alpha_head_dropout must be in [0, 1), got {self.alpha_head_dropout}")
+        self.alpha_head_activation = str(alpha_head_activation).strip().lower()
+        # N1 (Per-Pair Adaptive Auxiliary Gating): when enabled, alpha_head consumes
+        # the joint pair feature [q ; d+ ; q*d+] (3*D) instead of just q (D). This
+        # turns alpha into a per-(q,d+) confidence rather than a per-query average.
+        # Backwards compatible: the head is callable with q only; pos_doc is optional.
+        self.alpha_include_doc = (
+            bool(int(os.environ.get("ALPHA_GATE_INCLUDE_DOC", "0")))
+            if alpha_include_doc is None
+            else bool(alpha_include_doc)
+        )
+        _alpha_in_dim = int(self.model.output_dims) * (3 if self.alpha_include_doc else 1)
+        self.alpha_head = self._build_scalar_head(
+            input_dim=_alpha_in_dim,
+            hidden_dim=alpha_hidden_dim,
+            hidden_layers=self.alpha_head_layers,
+            dropout=self.alpha_head_dropout,
+            activation=self.alpha_head_activation,
+        )
+        # Optional bias init on the final linear (plain-sigmoid mode only;
+        # alpha_residual already centers on alpha_prior).
+        # Prefer ALPHA_GATE_PRIOR_INIT (probability in (0,1)) which is converted
+        # to the corresponding logit; ALPHA_GATE_BIAS_LOGIT_INIT sets the raw
+        # bias directly.
+        if not self.alpha_residual:
+            _bias_logit: float | None = None
+            _prior_env = os.environ.get("ALPHA_GATE_PRIOR_INIT")
+            _logit_env = os.environ.get("ALPHA_GATE_BIAS_LOGIT_INIT")
+            if _prior_env is not None:
+                _p = float(_prior_env)
+                if not 0.0 < _p < 1.0:
+                    raise ValueError(f"ALPHA_GATE_PRIOR_INIT must be in (0,1), got {_p}")
+                _bias_logit = math.log(_p / (1.0 - _p))
+            elif _logit_env is not None:
+                _bias_logit = float(_logit_env)
+            if _bias_logit is not None:
+                with torch.no_grad():
+                    self._last_linear(self.alpha_head).bias.fill_(_bias_logit)
         self.alpha_head.to(device)
         self.query_diagonal_head_hidden_dim = alpha_hidden_dim if self.query_diagonal_gate else None
         self.query_diagonal_head = None
@@ -331,6 +419,31 @@ class GammaHybridRunner(EncoderRunner):
             torch.tensor([keywords_gamma], dtype=torch.float32, device=device),
             requires_grad=include_keywords_gamma,
         )
+        # Optional warmup override: when set to a float in (0,1) by the trainer,
+        # _alpha_from_query bypasses alpha_head and returns a constant tensor,
+        # blocking gradient flow into alpha_head from every call site.
+        self.alpha_override: float | None = None
+
+        # N3: query-conditional temperature tau(q) = tau_0 * exp(s * tanh(head(q))).
+        # Head consumes the query vector and outputs a scalar log-deviation; the
+        # multiplicative deviation is bounded to [exp(-s), exp(+s)].
+        # Discarded at eval (loss-only path, dot product unchanged).
+        self.tau_query_conditional = bool(int(os.environ.get("TAU_QUERY_CONDITIONAL", "0")))
+        self.tau_query_log_scale = float(os.environ.get("TAU_QUERY_LOG_SCALE", "0.5"))
+        self.tau_head = None
+        self.tau_head_hidden_dim: int | None = None
+        if self.tau_query_conditional:
+            tau_hidden = max(32, min(256, int(self.model.output_dims) // 2))
+            self.tau_head_hidden_dim = tau_hidden
+            self.tau_head = torch.nn.Sequential(
+                torch.nn.Linear(int(self.model.output_dims), tau_hidden),
+                torch.nn.GELU(),
+                torch.nn.Linear(tau_hidden, 1),
+            )
+            with torch.no_grad():
+                self.tau_head[-1].weight.zero_()
+                self.tau_head[-1].bias.zero_()
+            self.tau_head.to(device)
 
     @staticmethod
     def _resolve_activation(name: str):
@@ -373,13 +486,19 @@ class GammaHybridRunner(EncoderRunner):
             return []
         return list(self.query_diagonal_head.parameters())
 
+    def tau_parameters(self) -> list[torch.nn.Parameter]:
+        if self.tau_head is None:
+            return []
+        return list(self.tau_head.parameters())
+
     def mixing_parameters(self) -> list[torch.nn.Parameter]:
         if self.gamma_joint:
             return [
                 *self.alpha_parameters(),
                 *self.query_diagonal_parameters(),
+                *self.tau_parameters(),
             ]
-        return self.gamma_parameters()
+        return [*self.gamma_parameters(), *self.tau_parameters()]
 
     def gamma_weights(self) -> tuple[float, float]:
         semantic_weight = float(self.activation(self.gamma1).detach().item()) if self.include_semantic_gamma else 1.0
@@ -402,6 +521,11 @@ class GammaHybridRunner(EncoderRunner):
             "activation_fn": self.activation_fn,
             "alpha_head": {
                 "hidden_dim": self.alpha_head_hidden_dim,
+                "layers": self.alpha_head_layers,
+                "dropout": self.alpha_head_dropout,
+                "activation": self.alpha_head_activation,
+                "include_doc": self.alpha_include_doc,
+                "input_features": "[q;d+;q*d+]" if self.alpha_include_doc else "[q]",
                 "residual": {
                     "enabled": self.alpha_residual,
                     "prior": self.alpha_prior,
@@ -415,6 +539,12 @@ class GammaHybridRunner(EncoderRunner):
                 "scale": self.query_diagonal_gate_scale,
                 "mode": self.query_diagonal_gate_mode,
             },
+            "tau_query_conditional": {
+                "enabled": self.tau_query_conditional,
+                "hidden_dim": self.tau_head_hidden_dim,
+                "log_scale": self.tau_query_log_scale,
+                "parameterization": "tau_base * exp(log_scale * tanh(head(q)))",
+            },
             "semantic_gamma": {
                 "enabled": self.include_semantic_gamma,
                 "raw": float(self.gamma1.item()),
@@ -427,8 +557,38 @@ class GammaHybridRunner(EncoderRunner):
             },
         }
 
-    def _alpha_from_query(self, query_vectors: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
-        raw_alpha = self.alpha_head(query_vectors)
+    def _alpha_from_query(
+        self,
+        query_vectors: torch.Tensor,
+        pos_doc_vectors: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        # When alpha_override is set, bypass alpha_head entirely so no gradient
+        # reaches it from any call site (SimCSE-gate, gamma-mixer, mix_scores).
+        if self.alpha_override is not None:
+            override = float(self.alpha_override)
+            alpha = torch.full(
+                (query_vectors.shape[0], 1),
+                override,
+                dtype=query_vectors.dtype,
+                device=query_vectors.device,
+            )
+            return alpha, {}
+        # N1 per-pair input: feed [q ; d+ ; q*d+] when enabled and a positive
+        # document is available. Falls back to q-only when pos_doc is None or
+        # alpha_include_doc is off (keeps eval / mix_scores call sites working).
+        if self.alpha_include_doc and pos_doc_vectors is not None:
+            if pos_doc_vectors.shape != query_vectors.shape:
+                raise ValueError(
+                    f"alpha_include_doc requires matching shapes, got q={tuple(query_vectors.shape)} "
+                    f"d+={tuple(pos_doc_vectors.shape)}"
+                )
+            alpha_input = torch.cat(
+                (query_vectors, pos_doc_vectors, query_vectors * pos_doc_vectors),
+                dim=-1,
+            )
+        else:
+            alpha_input = query_vectors
+        raw_alpha = self.alpha_head(alpha_input)
         details: dict[str, float] = {}
         if self.alpha_residual:
             alpha_delta = self.alpha_residual_scale * torch.tanh(raw_alpha)
@@ -444,10 +604,14 @@ class GammaHybridRunner(EncoderRunner):
         alpha = torch.sigmoid(raw_alpha)
         return alpha, details
 
-    def alpha_weights(self, query_vectors: torch.Tensor) -> torch.Tensor:
+    def alpha_weights(
+        self,
+        query_vectors: torch.Tensor,
+        pos_doc_vectors: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if not self.gamma_joint:
             raise RuntimeError("alpha_weights() is only available when gamma_joint=True")
-        alpha, _ = self._alpha_from_query(query_vectors)
+        alpha, _ = self._alpha_from_query(query_vectors, pos_doc_vectors)
         return alpha
 
     def query_diagonal_weights(self, query_vectors: torch.Tensor) -> torch.Tensor:
@@ -461,6 +625,26 @@ class GammaHybridRunner(EncoderRunner):
         # Keep the gate query-adaptive while structurally enforcing an average weight of 1.0 per query.
         norm = raw_gate.mean(dim=1, keepdim=True).clamp_min(1e-6)
         return raw_gate / norm
+
+    def tau_weights(
+        self,
+        query_vectors: torch.Tensor,
+        tau_base: torch.Tensor | float,
+    ) -> torch.Tensor:
+        """N3: per-query temperature tau(q) = tau_base * exp(s * tanh(head(q))).
+
+        Returns shape [B]. Head is initialised to zero so tau(q) == tau_base at
+        step 0 (additive deviation only). Bounded multiplicative range:
+        [exp(-s), exp(+s)] around tau_base.
+        """
+        if self.tau_head is None:
+            raise RuntimeError("tau_weights() requires tau_query_conditional=True")
+        delta = torch.tanh(self.tau_head(query_vectors)).view(-1) * self.tau_query_log_scale
+        if isinstance(tau_base, torch.Tensor):
+            base = tau_base.to(delta.device).to(delta.dtype)
+        else:
+            base = torch.tensor(float(tau_base), device=delta.device, dtype=delta.dtype)
+        return base * torch.exp(delta)
 
     def adaptive_semantic_pair_scores(
         self,
@@ -508,13 +692,14 @@ class GammaHybridRunner(EncoderRunner):
         semantic_scores: torch.Tensor,
         lexical_scores: torch.Tensor,
         query_vectors: torch.Tensor | None = None,
+        pos_doc_vectors: torch.Tensor | None = None,
         return_details: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
         details: dict[str, float] = {}
         if self.gamma_joint:
             if query_vectors is None:
                 raise ValueError("query_vectors must be provided when gamma_joint=True")
-            alpha, alpha_details = self._alpha_from_query(query_vectors)
+            alpha, alpha_details = self._alpha_from_query(query_vectors, pos_doc_vectors)
             mixed_scores = alpha * semantic_scores + (1.0 - alpha) * lexical_scores
             details = {
                 "AlphaMean": float(alpha.detach().mean().item()),
@@ -580,6 +765,11 @@ class GammaHybridRunner(EncoderRunner):
             alpha_residual=alpha_residual_cfg.get("enabled", False),
             alpha_prior=alpha_residual_cfg.get("prior", 0.5),
             alpha_residual_scale=alpha_residual_cfg.get("scale", 0.25),
+            alpha_head_hidden_dim=alpha_cfg.get("hidden_dim"),
+            alpha_head_layers=alpha_cfg.get("layers", 1),
+            alpha_head_dropout=alpha_cfg.get("dropout", 0.0),
+            alpha_head_activation=alpha_cfg.get("activation", "gelu"),
+            alpha_include_doc=alpha_cfg.get("include_doc"),
             query_diagonal_gate=query_diagonal_cfg.get("enabled", False),
             query_diagonal_gate_scale=query_diagonal_cfg.get("scale", 0.25),
             query_diagonal_gate_mode=query_diagonal_cfg.get("mode", "raw"),

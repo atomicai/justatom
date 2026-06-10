@@ -6,8 +6,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from justatom.running.trainer import _pairwise_focal_loss, _sample_negative_derangement
+from justatom.running.trainer import (
+    EncoderOnlyLightningTrainer,
+    _pairwise_focal_loss,
+    _sample_negative_derangement,
+)
 from justatom.training.loss import ContrastiveLoss, FocalLoss, SoftContrastiveLoss
+from justatom.training.memory_bank import ContrastiveMemoryBank
 
 
 def test_soft_contrastive_loss_matches_expected_formula():
@@ -83,6 +88,122 @@ def test_contrastive_loss_decoupled_matches_closed_form():
     assert torch.allclose(per_row, expected, atol=1e-6)
 
 
+def test_contrastive_loss_decoupled_accepts_masked_memory_negatives():
+    loss_fn = ContrastiveLoss(temperature=1.0, learnable_temperature=False, decoupled=True, reduction="none")
+    q = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+    p = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+    memory = torch.tensor([[-1.0, 0.0], [0.0, -1.0], [1.0, 0.0]], dtype=torch.float32)
+    memory_mask = torch.tensor([[True, False, False], [False, True, True]])
+
+    per_row = loss_fn.info_nce(q, p, memory_negatives=memory, memory_negative_mask=memory_mask)
+
+    sim = q @ p.t()
+    memory_sim = (q @ memory.t()).masked_fill(~memory_mask, float("-inf"))
+    eye = torch.eye(2, dtype=torch.bool)
+    neg = torch.cat([sim.masked_fill(eye, float("-inf")), memory_sim], dim=1)
+    expected = -sim.diagonal() + torch.logsumexp(neg, dim=-1)
+    assert torch.allclose(per_row, expected, atol=1e-6)
+
+
+def test_contrastive_loss_masked_memory_backward_keeps_temperature_grad_finite():
+    loss_fn = ContrastiveLoss(temperature=0.05, learnable_temperature=True, decoupled=True, reduction="mean")
+    torch.manual_seed(0)
+    q = F.normalize(torch.randn(4, 8), dim=-1).requires_grad_()
+    p = F.normalize(torch.randn(4, 8), dim=-1).requires_grad_()
+    memory = F.normalize(torch.randn(128, 8), dim=-1)
+    memory_mask = torch.zeros(4, 128, dtype=torch.bool)
+    memory_mask[:, :8] = True
+
+    loss = loss_fn.info_nce(q, p, memory_negatives=memory, memory_negative_mask=memory_mask)
+    loss.backward()
+
+    assert torch.isfinite(loss.detach())
+    assert loss_fn.log_tau.grad is not None
+    assert torch.isfinite(loss_fn.log_tau.grad).all()
+    assert torch.isfinite(q.grad).all()
+    assert torch.isfinite(p.grad).all()
+
+
+def test_contrastive_loss_clamps_nonfinite_temperature_parameter():
+    loss_fn = ContrastiveLoss(temperature=0.05, learnable_temperature=True)
+    with torch.no_grad():
+        loss_fn.log_tau.fill_(float("nan"))
+
+    changed = loss_fn.clamp_temperature_()
+
+    assert changed
+    assert torch.isfinite(loss_fn.log_tau)
+    assert math.isclose(float(loss_fn.tau.item()), 0.05, rel_tol=1e-6)
+
+
+def test_contrastive_loss_decoupled_no_negatives_returns_zero_row():
+    loss_fn = ContrastiveLoss(temperature=1.0, learnable_temperature=False, decoupled=True, reduction="none")
+    q = torch.tensor([[1.0, 0.0]], dtype=torch.float32)
+    p = torch.tensor([[1.0, 0.0]], dtype=torch.float32)
+
+    per_row = loss_fn.info_nce(q, p)
+
+    assert torch.allclose(per_row, torch.zeros(1))
+
+
+def test_memory_bank_mixed_mining_warms_up_and_filters_too_hard():
+    bank = ContrastiveMemoryBank(
+        4,
+        warmup_steps=2,
+        mining_mode="mixed",
+        hard_negatives=2,
+        random_negatives=1,
+        hard_warmup_steps=2,
+        hard_ramp_steps=2,
+        too_hard_margin=0.01,
+    )
+    bank.enqueue(
+        F.normalize(
+            torch.tensor(
+                [
+                    [1.0, 0.0],
+                    [0.8, 0.2],
+                    [0.0, 1.0],
+                    [-1.0, 0.0],
+                ],
+                dtype=torch.float32,
+            ),
+            dim=-1,
+        ),
+        {
+            "doc_key_id": torch.tensor([1, 2, 3, 4]),
+            "content_key_id": torch.tensor([10, 20, 30, 40]),
+            "query_key_id": torch.tensor([100, 200, 300, 400]),
+        },
+    )
+    batch = {
+        "input_ids": torch.ones(1, 1, dtype=torch.long),
+        "doc_key_id": torch.tensor([99]),
+        "content_key_id": torch.tensor([999]),
+        "query_key_id": torch.tensor([9999]),
+    }
+    q = F.normalize(torch.tensor([[1.0, 0.0]], dtype=torch.float32), dim=-1)
+    p = F.normalize(torch.tensor([[1.0, 0.0]], dtype=torch.float32), dim=-1)
+
+    _, warmup_mask, warmup_metrics = bank.get(batch, device=torch.device("cpu"), dtype=torch.float32, step=1)
+    assert warmup_mask is None
+    assert warmup_metrics["MemoryBankActiveNegativesMean"] == 0.0
+
+    _, active_mask, metrics = bank.get(
+        batch,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        query_vectors=q,
+        positive_vectors=p,
+        step=4,
+    )
+
+    assert active_mask is not None
+    assert not active_mask[0, 0]
+    assert 1 <= int(active_mask.sum().item()) <= 3
+    assert metrics["MemoryBankActiveHardK"] == 2.0
+
+
 def test_contrastive_loss_simcse_term_equals_info_nce_on_alt_view():
     loss_fn = ContrastiveLoss(temperature=0.1, learnable_temperature=False, decoupled=True, reduction="mean")
     torch.manual_seed(1)
@@ -108,6 +229,46 @@ def test_contrastive_loss_soft_fn_term_attracts_top_k():
     expected = -expected_top
     assert torch.allclose(per_row, expected, atol=1e-6)
     assert per_row[0] < per_row[1]
+
+
+class _DummyEncoderRunner(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.model = nn.Linear(2, 2)
+
+
+def _optimizer_param_ids(optimizer):
+    return {id(param) for group in optimizer.param_groups for param in group["params"]}
+
+
+def test_encoder_only_optimizer_includes_learnable_temperature_parameter():
+    runner = _DummyEncoderRunner()
+    trainer = EncoderOnlyLightningTrainer(
+        runner=runner,
+        loss_name="contrastive",
+        contrastive_temperature=0.05,
+        contrastive_learnable_temperature=True,
+        optimizer_name="adamw",
+    )
+
+    optimizer = trainer.configure_optimizers()
+
+    assert id(trainer.loss_fn.log_tau) in _optimizer_param_ids(optimizer)
+
+
+def test_manual_grad_accumulation_steps_only_on_boundary():
+    trainer = EncoderOnlyLightningTrainer(
+        runner=_DummyEncoderRunner(),
+        loss_name="contrastive",
+        grad_acc_steps=3,
+        optimizer_name="adamw",
+    )
+
+    assert trainer._is_accumulation_start(0)
+    assert not trainer._should_step_optimizer(0)
+    assert not trainer._should_step_optimizer(1)
+    assert trainer._should_step_optimizer(2)
+    assert trainer._is_accumulation_start(3)
 
 
 def test_pairwise_focal_loss_uses_positive_class_as_target():

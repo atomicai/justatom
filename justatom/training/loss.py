@@ -499,6 +499,14 @@ class ContrastiveLoss(nn.Module):
     _TAU_MIN: float = 1e-3
     _TAU_MAX: float = 1.0
 
+    @staticmethod
+    def _masked_logit_value(dtype: torch.dtype) -> float:
+        # Keep masked logits finite. MPS backward is much happier with large
+        # finite negatives than with many ``-inf`` entries from a memory bank.
+        if dtype in {torch.float16, torch.bfloat16}:
+            return -1e4
+        return -1e9
+
     def __init__(
         self,
         temperature: float = 0.05,
@@ -524,7 +532,34 @@ class ContrastiveLoss(nn.Module):
 
     @property
     def tau(self) -> torch.Tensor:
-        return self.log_tau.exp().clamp(min=self._TAU_MIN, max=self._TAU_MAX)
+        min_log_tau = math.log(self._TAU_MIN)
+        max_log_tau = math.log(self._TAU_MAX)
+        log_tau = torch.nan_to_num(
+            self.log_tau,
+            nan=math.log(float(self.temperature)),
+            posinf=max_log_tau,
+            neginf=min_log_tau,
+        )
+        return log_tau.clamp(min=min_log_tau, max=max_log_tau).exp()
+
+    def clamp_temperature_(self) -> bool:
+        """Clamp the stored temperature parameter/buffer in-place.
+
+        The ``tau`` property is already safe for reads, but optimizer state can
+        still push ``log_tau`` outside the intended range. Calling this after an
+        optimizer step keeps the actual parameter finite too.
+        """
+        min_log_tau = math.log(self._TAU_MIN)
+        max_log_tau = math.log(self._TAU_MAX)
+        with torch.no_grad():
+            before = self.log_tau.detach().clone()
+            self.log_tau.nan_to_num_(
+                nan=math.log(float(self.temperature)),
+                posinf=max_log_tau,
+                neginf=min_log_tau,
+            )
+            self.log_tau.clamp_(min=min_log_tau, max=max_log_tau)
+            return not bool(torch.equal(before, self.log_tau.detach()))
 
     @staticmethod
     def normalize(*xs):
@@ -550,11 +585,22 @@ class ContrastiveLoss(nn.Module):
         pos_queries: torch.Tensor,
         neg_queries: torch.Tensor | None = None,
         reduction: str | None = None,
+        tau_per_query: torch.Tensor | None = None,
+        memory_negatives: torch.Tensor | None = None,
+        memory_negative_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """InfoNCE / DCL on (queries, pos_queries) with in-batch negatives.
 
         If ``neg_queries`` is supplied (paired or unpaired), the legacy
         explicit-negative path is used and ``decoupled`` is ignored.
+
+        ``tau_per_query`` (shape ``[B]`` or ``[B, 1]``) overrides the scalar
+        ``self.tau`` with a per-query temperature (N3: query-conditional τ).
+        When supplied, the scaling is row-wise: ``logits / tau_q[:, None]``.
+
+        ``memory_negatives`` can add a detached FIFO bank of document vectors to
+        the denominator. ``memory_negative_mask`` has shape ``[B, M]`` and marks
+        which bank entries are safe negatives for each current query.
         """
         if queries.dim() != 2 or pos_queries.dim() != 2:
             raise ValueError("queries and pos_queries must be 2D")
@@ -564,30 +610,98 @@ class ContrastiveLoss(nn.Module):
             )
 
         reduction = reduction or self.reduction
-        q, p, n = self.normalize(queries, pos_queries, neg_queries)
+        q, p, n, m = self.normalize(queries, pos_queries, neg_queries, memory_negatives)
+        memory_logits = None
+        memory_mask = None
+        # NEW: NaN/Inf guard. If the bank contains corrupted embeddings
+        # (e.g. a stale all-zeros row from a frozen encoder), drop the
+        # bank entirely for this step rather than poisoning the denominator.
+        if m is not None:
+            if m.dim() != 2:
+                raise ValueError(f"memory_negatives must be 2D, got shape={tuple(m.shape)}")
+            if m.shape[1] != q.shape[1]:
+                raise ValueError(
+                    f"memory_negatives dim must match queries, got {tuple(m.shape)} vs query dim={q.shape[1]}"
+                )
+            memory_logits = q @ self.transpose(m)
+            if torch.isnan(memory_logits).any() or torch.isinf(memory_logits).any():
+                logger.warning("info_nce: memory_logits contain NaN/Inf, dropping memory bank this step")
+                memory_logits = None
+                m = None
+            if memory_negative_mask is not None and memory_logits is not None:
+                if memory_negative_mask.shape != memory_logits.shape:
+                    raise ValueError(
+                        "memory_negative_mask must have shape [batch, memory_size], "
+                        f"got {tuple(memory_negative_mask.shape)} vs {tuple(memory_logits.shape)}"
+                    )
+                memory_mask = memory_negative_mask.to(device=q.device, dtype=torch.bool)
+
+        if tau_per_query is None:
+            tau_scale = self.tau
+        else:
+            if tau_per_query.shape[0] != q.shape[0]:
+                raise ValueError(
+                    f"tau_per_query batch dim must match queries, got {tuple(tau_per_query.shape)} vs B={q.shape[0]}"
+                )
+            tau_scale = tau_per_query.view(-1, 1).clamp(min=self._TAU_MIN, max=self._TAU_MAX)
 
         if n is not None:
-            positive_logit = torch.sum(q * p, dim=1, keepdim=True)
+            positive_logit = torch.sum(q * p, dim=1, keepdim=True) / tau_scale
             if self.negative_mode == "paired":
                 if n.dim() != 3:
                     raise ValueError("paired negatives require neg_queries with 3 dims")
                 negative_logits = (q.unsqueeze(1) @ self.transpose(n)).squeeze(1)
             else:
                 negative_logits = q @ self.transpose(n)
+            negative_logits = negative_logits / tau_scale
+            if memory_logits is not None:
+                memory_logits = memory_logits / tau_scale
+                if memory_mask is not None:
+                    memory_logits = memory_logits.masked_fill(
+                        ~memory_mask,
+                        self._masked_logit_value(memory_logits.dtype),
+                    )
+                negative_logits = torch.cat([negative_logits, memory_logits], dim=1)
             logits = torch.cat([positive_logit, negative_logits], dim=1)
             labels = torch.zeros(logits.shape[0], dtype=torch.long, device=q.device)
-            per_row = F.cross_entropy(logits / self.tau, labels, reduction="none")
+            per_row = F.cross_entropy(logits, labels, reduction="none")
             return self._reduce(per_row, reduction)
 
         # In-batch negatives path
-        sim = q @ self.transpose(p) / self.tau  # [B, B]
+        sim = q @ self.transpose(p) / tau_scale  # [B, B]
+        if memory_logits is not None:
+            memory_logits = memory_logits / tau_scale
+            if memory_mask is None:
+                memory_mask = torch.ones(memory_logits.shape, dtype=torch.bool, device=memory_logits.device)
+            else:
+                memory_mask = memory_mask.to(device=memory_logits.device, dtype=torch.bool)
+            memory_logits = memory_logits.masked_fill(
+                ~memory_mask,
+                self._masked_logit_value(memory_logits.dtype),
+            )
+        # NEW: post-scale NaN/Inf guard for both sim and memory_logits
+        if torch.isnan(sim).any() or torch.isinf(sim).any():
+            logger.warning("info_nce: in-batch sim contains NaN/Inf; replacing with zeros")
+            sim = torch.nan_to_num(sim, nan=0.0, posinf=0.0, neginf=0.0)
+        if memory_logits is not None and (torch.isnan(memory_logits).any() or torch.isinf(memory_logits).any()):
+            logger.warning("info_nce: memory_logits contain NaN/Inf after scale; dropping memory bank")
+            memory_logits = None
         batch_size = sim.shape[0]
         eye = torch.eye(batch_size, dtype=torch.bool, device=sim.device)
         pos_logits = sim.diagonal()
         if self.decoupled:
-            neg_logits = sim.masked_fill(eye, float("-inf"))
-            per_row = -pos_logits + torch.logsumexp(neg_logits, dim=-1)
+            in_batch_neg_mask = ~eye
+            neg_mask = in_batch_neg_mask
+            neg_logits = sim.masked_fill(~in_batch_neg_mask, self._masked_logit_value(sim.dtype))
+            if memory_logits is not None:
+                neg_logits = torch.cat([neg_logits, memory_logits], dim=1)
+                neg_mask = torch.cat([neg_mask, memory_mask], dim=1)
+            neg_lse = torch.logsumexp(neg_logits, dim=-1)
+            has_negatives = neg_mask.any(dim=-1)
+            per_row = torch.where(has_negatives, -pos_logits + neg_lse, torch.zeros_like(pos_logits))
         else:
+            if memory_logits is not None:
+                sim = torch.cat([sim, memory_logits], dim=1)
             labels = torch.arange(batch_size, device=sim.device)
             per_row = F.cross_entropy(sim, labels, reduction="none")
         return self._reduce(per_row, reduction)

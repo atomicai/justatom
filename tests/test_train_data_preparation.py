@@ -274,6 +274,10 @@ def test_create_training_job_preserves_optimizer_and_legacy_style_params():
         grad_acc_steps=6,
         contrastive_temperature=0.1,
         soft_contrastive_temperature=10.0,
+        memory_bank_size=1024,
+        memory_bank_mining_mode="mixed",
+        memory_bank_hard_negatives=32,
+        memory_bank_random_negatives=16,
     )
 
     assert isinstance(job, train_api.EncoderGammaTrainingJob)
@@ -281,6 +285,10 @@ def test_create_training_job_preserves_optimizer_and_legacy_style_params():
     assert job.grad_acc_steps == 6
     assert job.contrastive_temperature == 0.1
     assert job.soft_contrastive_temperature == 10.0
+    assert job.memory_bank_size == 1024
+    assert job.memory_bank_mining_mode == "mixed"
+    assert job.memory_bank_hard_negatives == 32
+    assert job.memory_bank_random_negatives == 16
 
 
 def test_resolve_train_kwargs_reads_optimizer_and_legacy_style_params():
@@ -292,6 +300,11 @@ def test_resolve_train_kwargs_reads_optimizer_and_legacy_style_params():
                 "grad_acc_steps": 6,
                 "contrastive_temperature": 0.1,
                 "soft_contrastive_temperature": 10.0,
+                "memory_bank_size": 2048,
+                "memory_bank_mining_mode": "mixed",
+                "memory_bank_hard_negatives": 32,
+                "memory_bank_random_negatives": 16,
+                "memory_bank_too_hard_margin": 0.01,
             },
         }
     )
@@ -300,6 +313,178 @@ def test_resolve_train_kwargs_reads_optimizer_and_legacy_style_params():
     assert kwargs["grad_acc_steps"] == 6
     assert kwargs["contrastive_temperature"] == 0.1
     assert kwargs["soft_contrastive_temperature"] == 10.0
+    assert kwargs["memory_bank_size"] == 2048
+    assert kwargs["memory_bank_mining_mode"] == "mixed"
+    assert kwargs["memory_bank_hard_negatives"] == 32
+    assert kwargs["memory_bank_random_negatives"] == 16
+    assert kwargs["memory_bank_too_hard_margin"] == 0.01
+
+
+def test_resolve_train_kwargs_maps_atom_gate_production_recipe():
+    kwargs = train_api.resolve_train_kwargs(
+        config={
+            "recipe": "atom_gate",
+            "dataset": {"name_or_path": "dummy"},
+            "training": {
+                "batch_size": 32,
+                "grad_acc_steps": 1,
+                "n_epochs": 2,
+            },
+            "atom_gate": {
+                "temperature": 0.05,
+            },
+            "alpha_gate": {
+                "mix_weight": 0.3,
+                "auxiliary": {
+                    "simcse_dropout_weight": 0.1,
+                },
+                "alpha_query": {
+                    "layers": 1,
+                    "hidden_dim": "auto",
+                    "dropout": 0.0,
+                    "activation": "gelu",
+                },
+            },
+            "memory_bank": {
+                "enabled": True,
+                "size": 256,
+                "warmup_steps": 30,
+                "mining": "mixed",
+                "hard_negatives": 4,
+                "random_negatives": 4,
+            },
+        }
+    )
+
+    assert kwargs["recipe"] == "atom_gate"
+    assert kwargs["add_alpha_gate"] is True
+    assert kwargs["loss"] == "contrastive"
+    assert kwargs["freeze_encoder"] is False
+    assert kwargs["gamma_joint"] is True
+    assert kwargs["include_semantic_gamma"] is True
+    assert kwargs["include_keywords_gamma"] is True
+    assert kwargs["alpha_train_only"] is True
+    assert kwargs["alpha_mix_weight"] == 0.3
+    assert kwargs["optimizer"] == "adamw"
+    assert kwargs["contrastive_temperature"] == 0.05
+    assert kwargs["contrastive_learnable_temperature"] is True
+    assert kwargs["contrastive_decoupled"] is True
+    assert kwargs["contrastive_simcse_dropout_weight"] == 0.1
+    assert kwargs["contrastive_loss_alpha_gate"] is True
+    assert kwargs["contrastive_loss_alpha_gate_mode"] == "augment"
+    assert kwargs["alpha_head_input"] == "query"
+    assert kwargs["alpha_head_layers"] == 1
+    assert kwargs["alpha_head_hidden_dim"] is None
+    assert kwargs["alpha_head_dropout"] == 0.0
+    assert kwargs["alpha_head_activation"] == "gelu"
+    assert kwargs["memory_bank_size"] == 256
+    assert kwargs["memory_bank_warmup_steps"] == 30
+    assert kwargs["memory_bank_mining_mode"] == "mixed"
+    assert kwargs["memory_bank_hard_negatives"] == 4
+    assert kwargs["memory_bank_random_negatives"] == 4
+
+
+def test_atom_gate_recipe_has_canonical_defaults_without_separate_config():
+    kwargs = train_api.resolve_train_kwargs(
+        config={
+            "recipe": "atom_gate",
+            "dataset": {"id": "justatom"},
+        }
+    )
+
+    assert kwargs["recipe"] == "atom_gate"
+    assert kwargs["add_alpha_gate"] is True
+    assert kwargs["contrastive_temperature"] == 0.05
+    assert kwargs["contrastive_simcse_dropout_weight"] == 0.1
+    assert kwargs["alpha_mix_weight"] == 0.3
+    assert kwargs["alpha_head_layers"] == 1
+    assert kwargs["alpha_head_hidden_dim"] is None
+    assert kwargs["alpha_head_dropout"] == 0.0
+
+
+def test_create_training_job_selects_atom_gate_recipe_mode():
+    job = train_api.create_training_job(
+        recipe="atom_gate",
+        dataset_name_or_path="dummy",
+        batch_size=32,
+        grad_acc_steps=1,
+        n_epochs=2,
+    )
+
+    assert isinstance(job, train_api.AtomGateTrainingJob)
+    assert job.training_mode == "atom-gate"
+    assert job.add_alpha_gate is True
+    assert job.loss == "contrastive"
+    assert job.freeze_encoder is False
+    assert job.gamma_joint is True
+    assert job.alpha_train_only is True
+    assert job.contrastive_temperature == 0.05
+    assert job.contrastive_simcse_dropout_weight == 0.1
+    assert job.contrastive_loss_alpha_gate is True
+    assert job.contrastive_loss_alpha_gate_mode == "augment"
+
+
+def test_add_alpha_gate_feature_maps_to_legacy_knobs_and_head_config():
+    kwargs = train_api.resolve_train_kwargs(
+        config={
+            "dataset": {"name_or_path": "dummy"},
+            "add_alpha_gate": True,
+            "alpha_gate": {
+                "mode": "augment",
+                "train_only": True,
+                "mix_weight": 0.35,
+                "auxiliary": {
+                    "simcse_dropout_weight": 0.2,
+                },
+                "alpha_query": {
+                    "input": "query_doc",
+                    "layers": 2,
+                    "hidden_dim": 96,
+                    "dropout": 0.15,
+                    "activation": "silu",
+                },
+            },
+        }
+    )
+
+    assert kwargs["recipe"] is None
+    assert kwargs["add_alpha_gate"] is True
+    assert kwargs["gamma_joint"] is True
+    assert kwargs["alpha_train_only"] is True
+    assert kwargs["alpha_mix_weight"] == 0.35
+    assert kwargs["contrastive_loss_alpha_gate"] is True
+    assert kwargs["contrastive_loss_alpha_gate_mode"] == "augment"
+    assert kwargs["contrastive_simcse_dropout_weight"] == 0.2
+    assert kwargs["alpha_head_input"] == "query_doc"
+    assert kwargs["alpha_head_include_doc"] is True
+    assert kwargs["alpha_head_layers"] == 2
+    assert kwargs["alpha_head_hidden_dim"] == 96
+    assert kwargs["alpha_head_dropout"] == 0.15
+    assert kwargs["alpha_head_activation"] == "silu"
+
+
+def test_atom_gate_recipe_preserves_legacy_training_bank_overrides():
+    kwargs = train_api.resolve_train_kwargs(
+        config={
+            "recipe": "atom_gate",
+            "dataset": {"id": "justatom"},
+            "training": {
+                "contrastive_temperature": 0.07,
+                "memory_bank_size": 256,
+                "memory_bank_mining_mode": "mixed",
+                "memory_bank_hard_negatives": 4,
+                "memory_bank_random_negatives": 4,
+            },
+        }
+    )
+
+    assert kwargs["recipe"] == "atom_gate"
+    assert kwargs["dataset_name_or_path"] == "justatom"
+    assert kwargs["contrastive_temperature"] == 0.07
+    assert kwargs["memory_bank_size"] == 256
+    assert kwargs["memory_bank_mining_mode"] == "mixed"
+    assert kwargs["memory_bank_hard_negatives"] == 4
+    assert kwargs["memory_bank_random_negatives"] == 4
 
 
 def test_create_training_job_allows_temperature_contrastive_for_gamma_modes():

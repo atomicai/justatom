@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
 from loguru import logger
 
 from justatom.tooling.collections import (
@@ -14,12 +15,22 @@ from justatom.tooling.collections import (
 )
 
 
+def _normalize_recipe_name(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "atom": "atom_gate",
+        "atom_gate": "atom_gate",
+        "justatom_gate": "atom_gate",
+    }
+    return aliases.get(text, text)
+
+
 def maybe_cuda_or_mps() -> str:
     import torch
 
     if torch.cuda.is_available():
         return "cuda:0"
-    if torch.has_mps:
+    if torch.backends.mps.is_available():
         return "mps"
     return "cpu"
 
@@ -45,6 +56,7 @@ class BaseTrainingJob:
     dataset_name_or_path: str | Path
     prepare_training_data_fn: Any
     roll_metrics_path_fn: Any
+    recipe: str | None = None
     model_name_or_path: str = "intfloat/multilingual-e5-small"
     collection_name: str | None = None
     collection_tag: str | None = None
@@ -57,6 +69,7 @@ class BaseTrainingJob:
     gamma_joint: bool = False
     include_semantic_gamma: bool = True
     include_keywords_gamma: bool = True
+    add_alpha_gate: bool = False
     alpha_entropy_weight: float = 0.0
     alpha_train_only: bool = False
     alpha_mix_weight: float = 0.3
@@ -64,6 +77,12 @@ class BaseTrainingJob:
     alpha_residual: bool = False
     alpha_prior: float = 0.5
     alpha_residual_scale: float = 0.25
+    alpha_head_input: str = "query"
+    alpha_head_layers: int = 1
+    alpha_head_hidden_dim: int | str | None = None
+    alpha_head_dropout: float = 0.0
+    alpha_head_activation: str = "gelu"
+    alpha_head_include_doc: bool | None = None
     query_diagonal_gate: bool = False
     query_diagonal_gate_scale: float = 0.25
     query_diagonal_gate_mode: str = "raw"
@@ -83,6 +102,14 @@ class BaseTrainingJob:
     contrastive_soft_fn_topk: int = 1
     contrastive_loss_alpha_gate: bool = False
     contrastive_loss_alpha_gate_mode: str = "augment"
+    memory_bank_size: int = 0
+    memory_bank_warmup_steps: int = 0
+    memory_bank_mining_mode: str = "all"
+    memory_bank_hard_negatives: int = 0
+    memory_bank_random_negatives: int = 0
+    memory_bank_hard_warmup_steps: int = 0
+    memory_bank_hard_ramp_steps: int = 1
+    memory_bank_too_hard_margin: float | None = None
     min_negative_inverse_idf_recall: float | None = None
     negative_sampling_mode: str = "safe-random"
     hard_negative_top_k: int | None = None
@@ -108,6 +135,8 @@ class BaseTrainingJob:
     sample_training_rows_fn: Any | None = None
 
     def __post_init__(self):
+        recipe = _normalize_recipe_name(self.recipe)
+        self.recipe = recipe or None
         if self.temperature is None:
             self.temperature = float(self.contrastive_temperature)
         else:
@@ -128,8 +157,37 @@ class BaseTrainingJob:
             raise ValueError(f"alpha_prior must be strictly between 0 and 1, got {self.alpha_prior}")
         if float(self.alpha_residual_scale) < 0.0:
             raise ValueError(f"alpha_residual_scale must be >= 0, got {self.alpha_residual_scale}")
+        self.alpha_head_input = str(self.alpha_head_input).strip().lower()
+        if self.alpha_head_input in {"q", "alpha_q", "alpha(q)"}:
+            self.alpha_head_input = "query"
+        if self.alpha_head_input in {"pair", "query_doc", "query_document", "q_doc", "q_d", "alpha(q,d+)"}:
+            self.alpha_head_input = "query_doc"
+        if self.alpha_head_input not in {"query", "query_doc"}:
+            raise ValueError("alpha_head_input must be one of: query, query_doc")
+        self.alpha_head_include_doc = self.alpha_head_input == "query_doc" if self.alpha_head_include_doc is None else bool(self.alpha_head_include_doc)
+        self.alpha_head_layers = max(int(self.alpha_head_layers), 0)
+        if isinstance(self.alpha_head_hidden_dim, str):
+            hidden_text = self.alpha_head_hidden_dim.strip().lower()
+            self.alpha_head_hidden_dim = None if hidden_text in {"", "auto", "none", "null"} else int(hidden_text)
+        elif self.alpha_head_hidden_dim is not None:
+            self.alpha_head_hidden_dim = int(self.alpha_head_hidden_dim)
+        self.alpha_head_dropout = float(self.alpha_head_dropout)
+        if not 0.0 <= self.alpha_head_dropout < 1.0:
+            raise ValueError(f"alpha_head_dropout must be in [0, 1), got {self.alpha_head_dropout}")
+        self.alpha_head_activation = str(self.alpha_head_activation).strip().lower()
         if self.query_diagonal_gate and not self.gamma_joint:
             raise ValueError("query_diagonal_gate=True requires gamma_joint=True")
+        self.memory_bank_size = int(self.memory_bank_size)
+        if self.memory_bank_size < 0:
+            raise ValueError(f"memory_bank_size must be >= 0, got {self.memory_bank_size}")
+        self.memory_bank_warmup_steps = max(int(self.memory_bank_warmup_steps), 0)
+        self.memory_bank_hard_negatives = max(int(self.memory_bank_hard_negatives), 0)
+        self.memory_bank_random_negatives = max(int(self.memory_bank_random_negatives), 0)
+        self.memory_bank_hard_warmup_steps = max(int(self.memory_bank_hard_warmup_steps), 0)
+        self.memory_bank_hard_ramp_steps = max(int(self.memory_bank_hard_ramp_steps), 1)
+        self.memory_bank_mining_mode = str(self.memory_bank_mining_mode).strip().lower()
+        if self.memory_bank_mining_mode not in {"all", "random", "hard", "mixed"}:
+            raise ValueError("memory_bank_mining_mode must be one of: all, random, hard, mixed")
 
     @property
     def training_mode(self) -> str:
@@ -164,6 +222,7 @@ class BaseTrainingJob:
 
     def _collection_payload(self) -> dict[str, object]:
         return build_collection_tag_payload(
+            recipe=self.recipe,
             model_name_or_path=self.model_name_or_path,
             dataset_name_or_path=self.dataset_name_or_path,
             loss=self.loss,
@@ -178,6 +237,7 @@ class BaseTrainingJob:
             lr_gamma=self.lr_gamma,
             lr_encoder=self.lr_encoder,
             weight_decay=self.weight_decay,
+            add_alpha_gate=self.add_alpha_gate,
             alpha_entropy_weight=self.alpha_entropy_weight,
             alpha_train_only=self.alpha_train_only,
             alpha_mix_weight=self.alpha_mix_weight,
@@ -185,11 +245,32 @@ class BaseTrainingJob:
             alpha_residual=self.alpha_residual,
             alpha_prior=self.alpha_prior,
             alpha_residual_scale=self.alpha_residual_scale,
+            alpha_head_input=self.alpha_head_input,
+            alpha_head_layers=self.alpha_head_layers,
+            alpha_head_hidden_dim=self.alpha_head_hidden_dim,
+            alpha_head_dropout=self.alpha_head_dropout,
+            alpha_head_activation=self.alpha_head_activation,
+            alpha_head_include_doc=self.alpha_head_include_doc,
             query_diagonal_gate=self.query_diagonal_gate,
             query_diagonal_gate_scale=self.query_diagonal_gate_scale,
             query_diagonal_gate_mode=self.query_diagonal_gate_mode,
             query_diagonal_identity_weight=self.query_diagonal_identity_weight,
             query_diagonal_saturation_weight=self.query_diagonal_saturation_weight,
+            contrastive_learnable_temperature=self.contrastive_learnable_temperature,
+            contrastive_decoupled=self.contrastive_decoupled,
+            contrastive_simcse_dropout_weight=self.contrastive_simcse_dropout_weight,
+            contrastive_soft_fn_attract_weight=self.contrastive_soft_fn_attract_weight,
+            contrastive_soft_fn_topk=self.contrastive_soft_fn_topk,
+            contrastive_loss_alpha_gate=self.contrastive_loss_alpha_gate,
+            contrastive_loss_alpha_gate_mode=self.contrastive_loss_alpha_gate_mode,
+            memory_bank_size=self.memory_bank_size,
+            memory_bank_warmup_steps=self.memory_bank_warmup_steps,
+            memory_bank_mining_mode=self.memory_bank_mining_mode,
+            memory_bank_hard_negatives=self.memory_bank_hard_negatives,
+            memory_bank_random_negatives=self.memory_bank_random_negatives,
+            memory_bank_hard_warmup_steps=self.memory_bank_hard_warmup_steps,
+            memory_bank_hard_ramp_steps=self.memory_bank_hard_ramp_steps,
+            memory_bank_too_hard_margin=self.memory_bank_too_hard_margin,
             focal_gamma=self.focal_gamma,
             min_negative_inverse_idf_recall=self.min_negative_inverse_idf_recall,
             negative_sampling_mode=self.negative_sampling_mode,
@@ -272,6 +353,7 @@ class BaseTrainingJob:
         run_name = self.wandb_run_name or self.collection_name
         pl_logger = WandbLogger(project=self.wandb_project, name=run_name)
         wandb_config = {
+            "recipe": self.recipe,
             "dataset_name_or_path": str(self.dataset_name_or_path),
             "model_name_or_path": self.model_name_or_path,
             "collection_name": self.collection_name,
@@ -286,10 +368,17 @@ class BaseTrainingJob:
             "gamma_joint": self.gamma_joint,
             "include_semantic_gamma": self.include_semantic_gamma,
             "include_keywords_gamma": self.include_keywords_gamma,
+            "add_alpha_gate": self.add_alpha_gate,
             "alpha_entropy_weight": self.alpha_entropy_weight,
             "alpha_train_only": self.alpha_train_only,
             "alpha_mix_weight": self.alpha_mix_weight,
             "alpha_mix_weight_warmup_steps": self.alpha_mix_weight_warmup_steps,
+            "alpha_head_input": self.alpha_head_input,
+            "alpha_head_layers": self.alpha_head_layers,
+            "alpha_head_hidden_dim": self.alpha_head_hidden_dim,
+            "alpha_head_dropout": self.alpha_head_dropout,
+            "alpha_head_activation": self.alpha_head_activation,
+            "alpha_head_include_doc": self.alpha_head_include_doc,
             "query_diagonal_gate": self.query_diagonal_gate,
             "query_diagonal_gate_scale": self.query_diagonal_gate_scale,
             "query_diagonal_gate_mode": self.query_diagonal_gate_mode,
@@ -309,6 +398,14 @@ class BaseTrainingJob:
             "contrastive_soft_fn_topk": self.contrastive_soft_fn_topk,
             "contrastive_loss_alpha_gate": self.contrastive_loss_alpha_gate,
             "contrastive_loss_alpha_gate_mode": self.contrastive_loss_alpha_gate_mode,
+            "memory_bank_size": self.memory_bank_size,
+            "memory_bank_warmup_steps": self.memory_bank_warmup_steps,
+            "memory_bank_mining_mode": self.memory_bank_mining_mode,
+            "memory_bank_hard_negatives": self.memory_bank_hard_negatives,
+            "memory_bank_random_negatives": self.memory_bank_random_negatives,
+            "memory_bank_hard_warmup_steps": self.memory_bank_hard_warmup_steps,
+            "memory_bank_hard_ramp_steps": self.memory_bank_hard_ramp_steps,
+            "memory_bank_too_hard_margin": self.memory_bank_too_hard_margin,
             "min_negative_inverse_idf_recall": self.min_negative_inverse_idf_recall,
             "negative_sampling_mode": self.negative_sampling_mode,
             "hard_negative_top_k": self.hard_negative_top_k,
@@ -403,6 +500,11 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
             alpha_residual=self.alpha_residual,
             alpha_prior=self.alpha_prior,
             alpha_residual_scale=self.alpha_residual_scale,
+            alpha_head_hidden_dim=self.alpha_head_hidden_dim,
+            alpha_head_layers=self.alpha_head_layers,
+            alpha_head_dropout=self.alpha_head_dropout,
+            alpha_head_activation=self.alpha_head_activation,
+            alpha_include_doc=self.alpha_head_include_doc,
         )
         enabled_count = int(self.include_semantic_gamma) + int(self.include_keywords_gamma)
         trainer_cls = BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
@@ -433,6 +535,14 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
             contrastive_soft_fn_topk=self.contrastive_soft_fn_topk,
             contrastive_loss_alpha_gate=self.contrastive_loss_alpha_gate,
             contrastive_loss_alpha_gate_mode=self.contrastive_loss_alpha_gate_mode,
+            memory_bank_size=self.memory_bank_size,
+            memory_bank_warmup_steps=self.memory_bank_warmup_steps,
+            memory_bank_mining_mode=self.memory_bank_mining_mode,
+            memory_bank_hard_negatives=self.memory_bank_hard_negatives,
+            memory_bank_random_negatives=self.memory_bank_random_negatives,
+            memory_bank_hard_warmup_steps=self.memory_bank_hard_warmup_steps,
+            memory_bank_hard_ramp_steps=self.memory_bank_hard_ramp_steps,
+            memory_bank_too_hard_margin=self.memory_bank_too_hard_margin,
             min_negative_inverse_idf_recall=self.min_negative_inverse_idf_recall,
             negative_sampling_mode=self.negative_sampling_mode,
             hard_negative_top_k=self.hard_negative_top_k,
@@ -479,6 +589,11 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             alpha_residual=self.alpha_residual,
             alpha_prior=self.alpha_prior,
             alpha_residual_scale=self.alpha_residual_scale,
+            alpha_head_hidden_dim=self.alpha_head_hidden_dim,
+            alpha_head_layers=self.alpha_head_layers,
+            alpha_head_dropout=self.alpha_head_dropout,
+            alpha_head_activation=self.alpha_head_activation,
+            alpha_include_doc=self.alpha_head_include_doc,
         )
         enabled_count = int(self.include_semantic_gamma) + int(self.include_keywords_gamma)
         trainer_cls = BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
@@ -509,6 +624,14 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             contrastive_soft_fn_topk=self.contrastive_soft_fn_topk,
             contrastive_loss_alpha_gate=self.contrastive_loss_alpha_gate,
             contrastive_loss_alpha_gate_mode=self.contrastive_loss_alpha_gate_mode,
+            memory_bank_size=self.memory_bank_size,
+            memory_bank_warmup_steps=self.memory_bank_warmup_steps,
+            memory_bank_mining_mode=self.memory_bank_mining_mode,
+            memory_bank_hard_negatives=self.memory_bank_hard_negatives,
+            memory_bank_random_negatives=self.memory_bank_random_negatives,
+            memory_bank_hard_warmup_steps=self.memory_bank_hard_warmup_steps,
+            memory_bank_hard_ramp_steps=self.memory_bank_hard_ramp_steps,
+            memory_bank_too_hard_margin=self.memory_bank_too_hard_margin,
             min_negative_inverse_idf_recall=self.min_negative_inverse_idf_recall,
             negative_sampling_mode=self.negative_sampling_mode,
             hard_negative_top_k=self.hard_negative_top_k,
@@ -516,6 +639,34 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             save_dir=save_dir,
             metrics_path=metrics_path,
         )
+
+
+class AtomGateTrainingJob(EncoderGammaTrainingJob):
+    @property
+    def training_mode(self) -> str:
+        return "atom-gate"
+
+    def __post_init__(self):
+        self.recipe = "atom_gate"
+        self.add_alpha_gate = True
+        self.loss = "contrastive"
+        self.freeze_encoder = False
+        self.gamma_joint = True
+        self.include_semantic_gamma = True
+        self.include_keywords_gamma = True
+        self.alpha_train_only = True
+        self.optimizer = "adamw"
+        self.contrastive_learnable_temperature = True
+        self.contrastive_decoupled = True
+        self.contrastive_soft_fn_attract_weight = 0.0
+        self.contrastive_soft_fn_topk = 1
+        self.contrastive_loss_alpha_gate = True
+        self.contrastive_loss_alpha_gate_mode = "augment"
+        if self.temperature is None and float(self.contrastive_temperature) == 0.03:
+            self.contrastive_temperature = 0.05
+        if float(self.contrastive_simcse_dropout_weight) == 0.0:
+            self.contrastive_simcse_dropout_weight = 0.1
+        super().__post_init__()
 
 
 class EncoderOnlyTrainingJob(BaseTrainingJob):
@@ -559,6 +710,14 @@ class EncoderOnlyTrainingJob(BaseTrainingJob):
             contrastive_simcse_dropout_weight=self.contrastive_simcse_dropout_weight,
             contrastive_soft_fn_attract_weight=self.contrastive_soft_fn_attract_weight,
             contrastive_soft_fn_topk=self.contrastive_soft_fn_topk,
+            memory_bank_size=self.memory_bank_size,
+            memory_bank_warmup_steps=self.memory_bank_warmup_steps,
+            memory_bank_mining_mode=self.memory_bank_mining_mode,
+            memory_bank_hard_negatives=self.memory_bank_hard_negatives,
+            memory_bank_random_negatives=self.memory_bank_random_negatives,
+            memory_bank_hard_warmup_steps=self.memory_bank_hard_warmup_steps,
+            memory_bank_hard_ramp_steps=self.memory_bank_hard_ramp_steps,
+            memory_bank_too_hard_margin=self.memory_bank_too_hard_margin,
             lexical_text_by_content=lexical_text_by_content,
             save_dir=save_dir,
             metrics_path=metrics_path,
@@ -566,6 +725,13 @@ class EncoderOnlyTrainingJob(BaseTrainingJob):
 
 
 def create_training_job(**kwargs) -> BaseTrainingJob:
+    recipe = _normalize_recipe_name(kwargs.get("recipe"))
+    if recipe:
+        if recipe != "atom_gate":
+            raise ValueError(f"Unsupported training recipe={kwargs.get('recipe')!r}. Expected atom_gate")
+        kwargs["recipe"] = recipe
+        return AtomGateTrainingJob(**kwargs)
+
     mode = _resolve_training_mode(
         freeze_encoder=bool(kwargs.get("freeze_encoder", True)),
         include_semantic_gamma=bool(kwargs.get("include_semantic_gamma", True)),
@@ -583,6 +749,7 @@ __all__ = [
     "BaseTrainingJob",
     "GammaOnlyTrainingJob",
     "EncoderGammaTrainingJob",
+    "AtomGateTrainingJob",
     "EncoderOnlyTrainingJob",
     "create_training_job",
 ]

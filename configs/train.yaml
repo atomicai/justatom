@@ -14,6 +14,29 @@ dataset:
 filters:
   fields: null
 
+add_alpha_gate: false
+
+alpha_gate:
+  enabled: false
+  mode: augment
+  train_only: true
+  mix_weight: 0.3
+  mix_weight_warmup_steps: 0
+  auxiliary:
+    simcse_dropout_weight: 0.1
+    soft_fn_attract_weight: 0.0
+    soft_fn_topk: 1
+  alpha_query:
+    input: query
+    layers: 1
+    hidden_dim: auto
+    dropout: 0.0
+    activation: gelu
+    residual:
+      enabled: false
+      prior: 0.5
+      scale: 0.25
+
 model:
   name: intfloat/multilingual-e5-small
 
@@ -43,6 +66,14 @@ training:
   grad_acc_steps: 6
   optimizer: adamw
   max_negative_inverse_idf_recall: null
+  memory_bank_size: 0
+  memory_bank_warmup_steps: 0
+  memory_bank_mining_mode: all
+  memory_bank_hard_negatives: 0
+  memory_bank_random_negatives: 0
+  memory_bank_hard_warmup_steps: 0
+  memory_bank_hard_ramp_steps: 1
+  memory_bank_too_hard_margin: null
   min_negative_inverse_idf_recall: null
   negative_sampling_mode: safe-random
   hard_negative_top_k: null

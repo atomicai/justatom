@@ -19,6 +19,8 @@ WEAVIATE_HOST_VALUE="${WEAVIATE_HOST:-localhost}"
 WEAVIATE_PORT_VALUE="${WEAVIATE_PORT:-2211}"
 COLLECTION_PREFIX="${COLLECTION_PREFIX:-Pipeline}"
 RUN_BASELINE=1
+BASELINE_CACHE_DIR="${BASELINE_CACHE_DIR:-$REPO_ROOT/.tmp_runs/baseline_cache}"
+BASELINE_REFRESH="${BASELINE_REFRESH:-0}"
 NSAMPLES="${NSAMPLES:-}"
 BATCH_SIZE="${BATCH_SIZE:-96}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-64}"
@@ -27,12 +29,50 @@ EPOCHS="${EPOCHS:-1}"
 GRAD_ACC_STEPS="${GRAD_ACC_STEPS:-6}"
 LR_ENCODER="${LR_ENCODER:-2e-5}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.01}"
+MEMORY_BANK_SIZE="${MEMORY_BANK_SIZE:-0}"
+MEMORY_BANK_WARMUP_STEPS="${MEMORY_BANK_WARMUP_STEPS:-0}"
+MEMORY_BANK_MINING_MODE="${MEMORY_BANK_MINING_MODE:-all}"
+MEMORY_BANK_HARD_NEGATIVES="${MEMORY_BANK_HARD_NEGATIVES:-0}"
+MEMORY_BANK_RANDOM_NEGATIVES="${MEMORY_BANK_RANDOM_NEGATIVES:-0}"
+MEMORY_BANK_HARD_WARMUP_STEPS="${MEMORY_BANK_HARD_WARMUP_STEPS:-0}"
+MEMORY_BANK_HARD_RAMP_STEPS="${MEMORY_BANK_HARD_RAMP_STEPS:-1}"
+MEMORY_BANK_TOO_HARD_MARGIN="${MEMORY_BANK_TOO_HARD_MARGIN:-}"
+ADD_ALPHA_GATE="${ADD_ALPHA_GATE:-0}"
+ALPHA_GATE_LAYERS="${ALPHA_GATE_LAYERS:-}"
+ALPHA_GATE_HIDDEN_DIM="${ALPHA_GATE_HIDDEN_DIM:-}"
+ALPHA_GATE_DROPOUT="${ALPHA_GATE_DROPOUT:-}"
+ALPHA_GATE_INPUT="${ALPHA_GATE_INPUT:-}"
 LOSS_NAME="${LOSS_NAME:-contrastive}"
 OPTIMIZER_NAME="${OPTIMIZER_NAME:-}"
+# Capture which recipe-controlled knobs the user explicitly passed via env
+# BEFORE we apply any defaults. Recipe blocks (e.g. `atom_gate`) below
+# only set their canonical values when the user did NOT override.
+__USER_SET_TEMPERATURE=${TEMPERATURE+1}
+__USER_SET_ALPHA_MIX_WEIGHT=${ALPHA_MIX_WEIGHT+1}
+__USER_SET_CONTRASTIVE_LEARNABLE_TAU=${CONTRASTIVE_LEARNABLE_TAU+1}
+__USER_SET_CONTRASTIVE_DECOUPLED=${CONTRASTIVE_DECOUPLED+1}
+__USER_SET_CONTRASTIVE_SIMCSE_WEIGHT=${CONTRASTIVE_SIMCSE_WEIGHT+1}
+__USER_SET_CONTRASTIVE_LOSS_ALPHA_GATE=${CONTRASTIVE_LOSS_ALPHA_GATE+1}
+__USER_SET_CONTRASTIVE_LOSS_ALPHA_GATE_MODE=${CONTRASTIVE_LOSS_ALPHA_GATE_MODE+1}
+__USER_SET_LOSS_NAME=${LOSS_NAME+1}
+__USER_SET_OPTIMIZER_NAME=${OPTIMIZER_NAME+1}
+__USER_SET_INCLUDE_ALPHA=${INCLUDE_ALPHA+1}
+__USER_SET_ALPHA_MODE=${ALPHA_MODE+1}
 TEMPERATURE="${TEMPERATURE:-0.03}"
 INCLUDE_ALPHA="${INCLUDE_ALPHA:-0}"
 ALPHA_MODE="${ALPHA_MODE:-}"
 ALPHA_MIX_WEIGHT="${ALPHA_MIX_WEIGHT:-0.4}"
+# --- Atom Gate recipe knobs ---
+# These ship with safe defaults that match a vanilla contrastive run; the
+# `--recipe atom_gate` preset below flips them to the canonical JustAtom values.
+# Everything in this block is a *training-only* stabilizer: at eval time only
+# the encoder weights are loaded by justatom.api.eval, the gamma-mixer and the
+# learnable temperature are discarded.
+CONTRASTIVE_LEARNABLE_TAU="${CONTRASTIVE_LEARNABLE_TAU:-}"
+CONTRASTIVE_DECOUPLED="${CONTRASTIVE_DECOUPLED:-}"
+CONTRASTIVE_SIMCSE_WEIGHT="${CONTRASTIVE_SIMCSE_WEIGHT:-}"
+CONTRASTIVE_LOSS_ALPHA_GATE="${CONTRASTIVE_LOSS_ALPHA_GATE:-}"
+CONTRASTIVE_LOSS_ALPHA_GATE_MODE="${CONTRASTIVE_LOSS_ALPHA_GATE_MODE:-}"
 SEARCH_PIPELINE="${SEARCH_PIPELINE:-}"
 SEARCH_TOP_K="${TOP_K:-}"
 INDEX_BATCH_SIZE_OVERRIDE="${INDEX_BATCH_SIZE:-}"
@@ -64,6 +104,9 @@ Main options:
   --tune-method METHOD       Optional compatibility preset:
                              legacy/classic -> contrastive + no alpha + adafactor + t=0.1
                              new/modern     -> contrastive + alpha + adamw + t=0.03 + mix=0.4
+                             atom_gate      -> JustAtom recipe: DCL + learnable tau +
+                                               SimCSE 0.1 + alpha-gate(augment) + adamw
+                                               (see BEST_TRAINING_RECIPE.md)
                              Alias: --recipe
   --wandb-mode MODE          offline | online | disabled
   --wandb-project NAME       W&B project when wandb is enabled
@@ -79,6 +122,11 @@ Main options:
 Advanced options:
   --alpha-mode MODE          off | train-only | joint
   --alpha-mix-weight VALUE   Same as --mix-weight
+  --add-alpha-gate           Enable structured alpha(q) gate config
+  --alpha-gate-layers N      Hidden layers in alpha(q), default from config
+  --alpha-gate-hidden-dim N  Hidden dim in alpha(q), or auto
+  --alpha-gate-dropout P     Dropout inside alpha(q)
+  --alpha-gate-input MODE    query | query_doc
   --batch-size N             Train batch size
   --eval-batch-size N        Eval batch size
   --max-seq-len N            Max sequence length for eval
@@ -86,6 +134,20 @@ Advanced options:
   --grad-acc-steps N         Gradient accumulation steps
   --lr-encoder VALUE         Encoder learning rate
   --weight-decay VALUE       Weight decay for AdamW/custom
+  --memory-bank-size N       FIFO document embedding bank for extra InfoNCE negatives
+  --memory-bank-warmup-steps N
+                             Training steps before bank negatives are used
+  --memory-bank-mining MODE  all | random | hard | mixed
+  --memory-bank-hard-negatives N
+                             Max hard bank negatives per query after ramp
+  --memory-bank-random-negatives N
+                             Random safe bank negatives per query
+  --memory-bank-hard-warmup-steps N
+                             Steps before hard mining starts
+  --memory-bank-hard-ramp-steps N
+                             Steps to ramp hard negatives to max
+  --memory-bank-too-hard-margin VALUE
+                             Drop bank negatives with sim > pos_sim - VALUE
   --index-batch-size N       Index batch size for eval stages
   --query-prefix TEXT        Query prefix override for eval stages
   --content-prefix TEXT      Content prefix override for eval stages
@@ -164,6 +226,9 @@ canonicalize_recipe() {
     modern|alpha-gamma|new|recommended)
       printf 'modern'
       ;;
+    atom_gate|atom-gate|atom|justatom_gate|justatom-gate)
+      printf 'atom_gate'
+      ;;
     custom)
       printf 'custom'
       ;;
@@ -207,8 +272,13 @@ run_cmd() {
   shift 2
   log "START $label"
   set +e
-  "$@" > "$logfile" 2>&1
-  local code=$?
+  if [[ "${PIPELINE_TEE_OUTPUT:-1}" == "1" ]]; then
+    "$@" 2>&1 | tee "$logfile"
+    local code=${PIPESTATUS[0]}
+  else
+    "$@" > "$logfile" 2>&1
+    local code=$?
+  fi
   set -e
   log "END $label exit=$code"
   return $code
@@ -440,6 +510,26 @@ while [[ $# -gt 0 ]]; do
       ALPHA_MIX_WEIGHT="$2"
       shift 2
       ;;
+    --add-alpha-gate)
+      ADD_ALPHA_GATE=1
+      shift
+      ;;
+    --alpha-gate-layers)
+      ALPHA_GATE_LAYERS="$2"
+      shift 2
+      ;;
+    --alpha-gate-hidden-dim)
+      ALPHA_GATE_HIDDEN_DIM="$2"
+      shift 2
+      ;;
+    --alpha-gate-dropout)
+      ALPHA_GATE_DROPOUT="$2"
+      shift 2
+      ;;
+    --alpha-gate-input)
+      ALPHA_GATE_INPUT="$2"
+      shift 2
+      ;;
     --batch-size)
       BATCH_SIZE="$2"
       shift 2
@@ -466,6 +556,38 @@ while [[ $# -gt 0 ]]; do
       ;;
     --weight-decay)
       WEIGHT_DECAY="$2"
+      shift 2
+      ;;
+    --memory-bank-size)
+      MEMORY_BANK_SIZE="$2"
+      shift 2
+      ;;
+    --memory-bank-warmup-steps)
+      MEMORY_BANK_WARMUP_STEPS="$2"
+      shift 2
+      ;;
+    --memory-bank-mining)
+      MEMORY_BANK_MINING_MODE="$2"
+      shift 2
+      ;;
+    --memory-bank-hard-negatives)
+      MEMORY_BANK_HARD_NEGATIVES="$2"
+      shift 2
+      ;;
+    --memory-bank-random-negatives)
+      MEMORY_BANK_RANDOM_NEGATIVES="$2"
+      shift 2
+      ;;
+    --memory-bank-hard-warmup-steps)
+      MEMORY_BANK_HARD_WARMUP_STEPS="$2"
+      shift 2
+      ;;
+    --memory-bank-hard-ramp-steps)
+      MEMORY_BANK_HARD_RAMP_STEPS="$2"
+      shift 2
+      ;;
+    --memory-bank-too-hard-margin)
+      MEMORY_BANK_TOO_HARD_MARGIN="$2"
       shift 2
       ;;
     --index-batch-size)
@@ -542,6 +664,27 @@ if [[ -n "$RECIPE" ]]; then
       ALPHA_MODE="train-only"
       ALPHA_MIX_WEIGHT="0.4"
       ;;
+    atom_gate)
+      # Atom Gate recipe: JustAtom's alpha-gated contrastive tune.
+      # Main = decoupled InfoNCE with learnable tau, aux = SimCSE dropout-view
+      # alignment whose strength is gated per-query by (1 - alpha(q)) from the
+      # gamma-mixer. None of the gating components survive at eval time -- the
+      # eval path (justatom.api.eval) only loads the encoder weights.
+      # NOTE: each knob below is applied ONLY when the user did not pass it
+      # explicitly via env (see __USER_SET_* sentinels at top of script).
+      [[ -z "$__USER_SET_LOSS_NAME"                       ]] && LOSS_NAME="contrastive"
+      [[ -z "$__USER_SET_OPTIMIZER_NAME"                  ]] && OPTIMIZER_NAME="adamw"
+      [[ -z "$__USER_SET_TEMPERATURE"                     ]] && TEMPERATURE="0.05"
+      [[ -z "$__USER_SET_INCLUDE_ALPHA"                   ]] && INCLUDE_ALPHA=1
+      [[ -z "$__USER_SET_ALPHA_MODE"                      ]] && ALPHA_MODE="train-only"
+      [[ -z "$__USER_SET_ALPHA_MIX_WEIGHT"                ]] && ALPHA_MIX_WEIGHT="0.3"
+      ADD_ALPHA_GATE=1
+      [[ -z "$__USER_SET_CONTRASTIVE_LEARNABLE_TAU"       ]] && CONTRASTIVE_LEARNABLE_TAU="true"
+      [[ -z "$__USER_SET_CONTRASTIVE_DECOUPLED"           ]] && CONTRASTIVE_DECOUPLED="true"
+      [[ -z "$__USER_SET_CONTRASTIVE_SIMCSE_WEIGHT"       ]] && CONTRASTIVE_SIMCSE_WEIGHT="0.1"
+      [[ -z "$__USER_SET_CONTRASTIVE_LOSS_ALPHA_GATE"     ]] && CONTRASTIVE_LOSS_ALPHA_GATE="true"
+      [[ -z "$__USER_SET_CONTRASTIVE_LOSS_ALPHA_GATE_MODE" ]] && CONTRASTIVE_LOSS_ALPHA_GATE_MODE="augment"
+      ;;
     custom)
       ;;
     *)
@@ -595,6 +738,33 @@ if ! [[ "$WEAVIATE_PORT_VALUE" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+if ! [[ "$MEMORY_BANK_SIZE" =~ ^[0-9]+$ ]]; then
+  echo "Unsupported --memory-bank-size: $MEMORY_BANK_SIZE" >&2
+  exit 1
+fi
+
+for numeric_arg in \
+  MEMORY_BANK_WARMUP_STEPS \
+  MEMORY_BANK_HARD_NEGATIVES \
+  MEMORY_BANK_RANDOM_NEGATIVES \
+  MEMORY_BANK_HARD_WARMUP_STEPS \
+  MEMORY_BANK_HARD_RAMP_STEPS; do
+  numeric_value="${!numeric_arg}"
+  if ! [[ "$numeric_value" =~ ^[0-9]+$ ]]; then
+    echo "Unsupported ${numeric_arg}: $numeric_value" >&2
+    exit 1
+  fi
+done
+
+case "$MEMORY_BANK_MINING_MODE" in
+  all|random|hard|mixed)
+    ;;
+  *)
+    echo "Unsupported --memory-bank-mining: $MEMORY_BANK_MINING_MODE" >&2
+    exit 1
+    ;;
+esac
+
 if [[ "$RUN_MODE" == "eval-only" ]]; then
   RUN_STAMP="$(date +%Y%m%d_%H%M%S)_eval_only_$(slugify "$MODEL_NAME_OR_PATH")"
 else
@@ -632,11 +802,11 @@ else
     ALPHA_LABEL="enabled(mode=$ALPHA_MODE,mix=$ALPHA_MIX_WEIGHT)"
   fi
   METHOD_LABEL="$LOSS_LABEL + alpha=$ALPHA_LABEL"
-  METHOD_SUMMARY="optimizer=$OPTIMIZER_NAME, temperature=$TEMPERATURE"
+  METHOD_SUMMARY="optimizer=$OPTIMIZER_NAME, temperature=$TEMPERATURE, memory_bank=$MEMORY_BANK_SIZE/$MEMORY_BANK_MINING_MODE"
   if [[ -n "$RECIPE" ]]; then
     METHOD_SUMMARY="$METHOD_SUMMARY, preset=$RECIPE"
   fi
-  RESOLVED_CONFIG="loss=$LOSS_NAME,opt=$OPTIMIZER_NAME,temp=$TEMPERATURE,alpha=$ALPHA_MODE,mix=$ALPHA_MIX_WEIGHT"
+  RESOLVED_CONFIG="loss=$LOSS_NAME,opt=$OPTIMIZER_NAME,temp=$TEMPERATURE,alpha=$ALPHA_MODE,mix=$ALPHA_MIX_WEIGHT,memory_bank=$MEMORY_BANK_SIZE,bank_mode=$MEMORY_BANK_MINING_MODE,bank_warmup=$MEMORY_BANK_WARMUP_STEPS,bank_hard=$MEMORY_BANK_HARD_NEGATIVES,bank_random=$MEMORY_BANK_RANDOM_NEGATIVES"
   if [[ -n "$NSAMPLES" ]]; then
     RESOLVED_CONFIG="$RESOLVED_CONFIG,nsamples=$NSAMPLES"
   fi
@@ -650,6 +820,8 @@ cat > "$TABLE_RESULTS_PATH" <<EOF
 - Loss: $LOSS_LABEL
 - Temperature: $TEMPERATURE
 - Alpha: $ALPHA_LABEL
+- Memory bank size: $MEMORY_BANK_SIZE
+- Memory bank mining: $MEMORY_BANK_MINING_MODE
 - N samples: ${NSAMPLES:-all}
 - Method summary: $METHOD_SUMMARY
 - Resolved config: $RESOLVED_CONFIG
@@ -665,6 +837,8 @@ log "Model: $MODEL_NAME_OR_PATH"
 log "Loss: $LOSS_LABEL"
 log "Temperature: $TEMPERATURE"
 log "Alpha: $ALPHA_LABEL"
+log "Memory bank size: $MEMORY_BANK_SIZE"
+log "Memory bank mining: mode=$MEMORY_BANK_MINING_MODE warmup=$MEMORY_BANK_WARMUP_STEPS hard=$MEMORY_BANK_HARD_NEGATIVES random=$MEMORY_BANK_RANDOM_NEGATIVES hard_warmup=$MEMORY_BANK_HARD_WARMUP_STEPS hard_ramp=$MEMORY_BANK_HARD_RAMP_STEPS too_hard_margin=${MEMORY_BANK_TOO_HARD_MARGIN:-none}"
 log "Run mode: $RUN_MODE"
 log "N samples: ${NSAMPLES:-all}"
 log "Weaviate: ${WEAVIATE_HOST_VALUE}:${WEAVIATE_PORT_VALUE}"
@@ -727,11 +901,23 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
     else
       baseline_eval_dir="$dataset_dir/baseline_eval"
       mkdir -p "$baseline_eval_dir"
-      if evaluate_model "$config_id baseline" "$baseline_log" "$MODEL_NAME_OR_PATH" "$baseline_collection" "$baseline_eval_dir" "$config_id"; then
-        baseline_csv="$EVAL_LAST_CSV"
-        baseline_status="OK"
+      baseline_cache_key="$(slugify "$MODEL_NAME_OR_PATH")__$(slugify "$config_id").csv"
+      baseline_cache_path="$BASELINE_CACHE_DIR/$baseline_cache_key"
+      if [[ "$BASELINE_REFRESH" -ne 1 && -s "$baseline_cache_path" ]]; then
+        baseline_csv="$baseline_eval_dir/$(basename "$baseline_cache_path")"
+        cp "$baseline_cache_path" "$baseline_csv"
+        baseline_status="CACHED"
+        log "CACHE-HIT $config_id baseline reused from $baseline_cache_path"
       else
-        baseline_status="FAILED"
+        if evaluate_model "$config_id baseline" "$baseline_log" "$MODEL_NAME_OR_PATH" "$baseline_collection" "$baseline_eval_dir" "$config_id"; then
+          baseline_csv="$EVAL_LAST_CSV"
+          baseline_status="OK"
+          mkdir -p "$BASELINE_CACHE_DIR"
+          cp "$baseline_csv" "$baseline_cache_path"
+          log "CACHE-STORE $config_id baseline saved to $baseline_cache_path"
+        else
+          baseline_status="FAILED"
+        fi
       fi
     fi
   fi
@@ -753,9 +939,38 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
     --training.num_samples "$train_sample_count"
     --training.n_epochs "$EPOCHS"
     --training.weight_decay "$WEIGHT_DECAY"
+    --training.memory_bank_size "$MEMORY_BANK_SIZE"
+    --training.memory_bank_warmup_steps "$MEMORY_BANK_WARMUP_STEPS"
+    --training.memory_bank_mining_mode "$MEMORY_BANK_MINING_MODE"
+    --training.memory_bank_hard_negatives "$MEMORY_BANK_HARD_NEGATIVES"
+    --training.memory_bank_random_negatives "$MEMORY_BANK_RANDOM_NEGATIVES"
+    --training.memory_bank_hard_warmup_steps "$MEMORY_BANK_HARD_WARMUP_STEPS"
+    --training.memory_bank_hard_ramp_steps "$MEMORY_BANK_HARD_RAMP_STEPS"
     --output.save_dir "$dataset_dir/tuned"
     --output.metrics_path "$dataset_dir/tuned_metrics.csv"
   )
+  if [[ "$RECIPE" == "atom_gate" ]]; then
+    train_args+=(--recipe atom_gate)
+    train_args+=(--atom-gate.temperature "$TEMPERATURE")
+  fi
+  if [[ "$ADD_ALPHA_GATE" == "1" ]]; then
+    train_args+=(--add-alpha-gate)
+  fi
+  if [[ -n "$ALPHA_GATE_LAYERS" ]]; then
+    train_args+=(--alpha-gate.alpha-query.layers "$ALPHA_GATE_LAYERS")
+  fi
+  if [[ -n "$ALPHA_GATE_HIDDEN_DIM" ]]; then
+    train_args+=(--alpha-gate.alpha-query.hidden-dim "$ALPHA_GATE_HIDDEN_DIM")
+  fi
+  if [[ -n "$ALPHA_GATE_DROPOUT" ]]; then
+    train_args+=(--alpha-gate.alpha-query.dropout "$ALPHA_GATE_DROPOUT")
+  fi
+  if [[ -n "$ALPHA_GATE_INPUT" ]]; then
+    train_args+=(--alpha-gate.alpha-query.input "$ALPHA_GATE_INPUT")
+  fi
+  if [[ -n "$MEMORY_BANK_TOO_HARD_MARGIN" ]]; then
+    train_args+=(--training.memory_bank_too_hard_margin "$MEMORY_BANK_TOO_HARD_MARGIN")
+  fi
   if [[ -n "$NSAMPLES" ]]; then
     train_args+=(--dataset.limit "$NSAMPLES")
   fi
@@ -768,6 +983,25 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
       train_args+=(--training.soft_contrastive_temperature "$TEMPERATURE")
       ;;
   esac
+
+  # Atom Gate training-time stabilizers. Each one is forwarded only
+  # if the recipe / env explicitly set it, so legacy `classic` / `modern`
+  # presets keep their previous behavior.
+  if [[ -n "$CONTRASTIVE_LEARNABLE_TAU" ]]; then
+    train_args+=(--training.contrastive_learnable_temperature "$CONTRASTIVE_LEARNABLE_TAU")
+  fi
+  if [[ -n "$CONTRASTIVE_DECOUPLED" ]]; then
+    train_args+=(--training.contrastive_decoupled "$CONTRASTIVE_DECOUPLED")
+  fi
+  if [[ -n "$CONTRASTIVE_SIMCSE_WEIGHT" ]]; then
+    train_args+=(--training.contrastive_simcse_dropout_weight "$CONTRASTIVE_SIMCSE_WEIGHT")
+  fi
+  if [[ -n "$CONTRASTIVE_LOSS_ALPHA_GATE" ]]; then
+    train_args+=(--training.contrastive_loss_alpha_gate "$CONTRASTIVE_LOSS_ALPHA_GATE")
+  fi
+  if [[ -n "$CONTRASTIVE_LOSS_ALPHA_GATE_MODE" ]]; then
+    train_args+=(--training.contrastive_loss_alpha_gate_mode "$CONTRASTIVE_LOSS_ALPHA_GATE_MODE")
+  fi
 
   checkpoint_rel="BiGamma/epoch1"
   case "$ALPHA_MODE" in
@@ -796,6 +1030,9 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
       )
       ;;
   esac
+  if [[ "$ADD_ALPHA_GATE" == "1" ]]; then
+    checkpoint_rel="BiGamma/epoch1"
+  fi
 
   if [[ "$WANDB_MODE_VALUE" == "disabled" ]]; then
     train_args+=(--logging.backend csv)
