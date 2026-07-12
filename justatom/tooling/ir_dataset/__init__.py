@@ -7,8 +7,10 @@ from justatom.tooling.ir_dataset.chunking import (
 )
 from justatom.tooling.ir_dataset.artifacts import PrepareConfig, PrepareSummary, prepare_passages
 from justatom.tooling.ir_dataset.source import HABR_SOURCE_COLUMNS, HabrSource
+from justatom.tooling.ir_dataset.sparse import BM25Index, SearchHit
 
 __all__ = [
+    "BM25Index",
     "ChunkingConfig",
     "HABR_SOURCE_COLUMNS",
     "HabrSource",
@@ -16,6 +18,7 @@ __all__ = [
     "Passage",
     "PrepareConfig",
     "PrepareSummary",
+    "SearchHit",
     "StructuralUnit",
     "prepare_passages",
     "serialize_passage",
