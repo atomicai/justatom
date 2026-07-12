@@ -7,6 +7,7 @@ source:
 
 chunking:
   tokenizer_name: intfloat/multilingual-e5-small
+  max_section_chars: 240
   min_chars: 600
   target_chars: 1200
   max_chars: 1800

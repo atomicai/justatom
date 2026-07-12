@@ -33,6 +33,7 @@ class TokenizerLike(Protocol):
 @dataclass(frozen=True, slots=True)
 class ChunkingConfig:
     tokenizer_name: str = "intfloat/multilingual-e5-small"
+    max_section_chars: int = 240
     min_chars: int = 600
     target_chars: int = 1200
     max_chars: int = 1800
@@ -41,6 +42,8 @@ class ChunkingConfig:
     safety_reserve_tokens: int = 8
 
     def __post_init__(self) -> None:
+        if self.max_section_chars <= 0:
+            raise ValueError("chunking.max_section_chars must be > 0")
         if self.min_chars <= 0:
             raise ValueError("chunking.min_chars must be > 0")
         if not self.min_chars <= self.target_chars <= self.max_chars:
@@ -131,6 +134,7 @@ class MarkdownPassageChunker:
         return cls(
             config=ChunkingConfig(
                 tokenizer_name=getattr(tokenizer, "name_or_path", "test/tokenizer"),
+                max_section_chars=80,
                 min_chars=40,
                 target_chars=180,
                 max_chars=320,
@@ -216,7 +220,11 @@ class MarkdownPassageChunker:
         units: list[StructuralUnit] = []
         for node in root.children:
             if node.type == "heading":
-                section = _clean_text(self._inline_text(node))
+                heading = _clean_text(self._inline_text(node))
+                if len(heading) <= self.config.max_section_chars:
+                    section = heading
+                elif heading:
+                    units.append(StructuralUnit(section, heading, "paragraph", len(units)))
                 continue
             produced = self._block_units(node, section, len(units))
             units.extend(replace(unit, source_index=len(units) + idx) for idx, unit in enumerate(produced))

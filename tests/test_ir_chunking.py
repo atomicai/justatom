@@ -135,3 +135,19 @@ def test_unbreakable_technical_token_is_split_to_the_character_limit():
 
     assert passages
     assert all(row.char_count <= chunker.config.max_chars for row in passages)
+
+
+def test_oversized_setext_heading_is_treated_as_passage_content():
+    chunker = MarkdownPassageChunker.for_tests(tokenizer=WhitespaceTokenizer())
+    long_intro = "Криптография требует безошибочной реализации. " * 60
+    article = {
+        **sample_article(),
+        "text_markdown": f"{long_intro}\n===\nКороткое примечание автора.",
+    }
+
+    passages = chunker.chunk_article(article)
+
+    assert passages
+    assert any("Криптография требует" in row.content for row in passages)
+    assert all(len(row.section) <= chunker.config.max_section_chars for row in passages)
+    assert all(row.token_count <= chunker.config.accepted_max_tokens for row in passages)
