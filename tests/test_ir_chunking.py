@@ -17,6 +17,19 @@ class WhitespaceTokenizer:
         return {"input_ids": list(range(count))}
 
 
+class VerboseAwareTokenizer(WhitespaceTokenizer):
+    def __init__(self):
+        self.verbose = None
+
+    def __call__(self, text, *, add_special_tokens=True, truncation=False, verbose=True):
+        self.verbose = verbose
+        return super().__call__(
+            text,
+            add_special_tokens=add_special_tokens,
+            truncation=truncation,
+        )
+
+
 def sample_article() -> dict:
     return {
         "id": 101,
@@ -83,4 +96,16 @@ def test_code_content_is_preserved_without_fence_or_language_marker():
     text = "\n".join(row.content for row in passages)
 
     assert "def configure_client(timeout):" in text
+    assert "legacy_call()" in text
+    assert "[code]" not in text
+    assert "[/code]" not in text
     assert "```python" not in text
+
+
+def test_token_count_disables_tokenizer_length_warning():
+    tokenizer = VerboseAwareTokenizer()
+    chunker = MarkdownPassageChunker.for_tests(tokenizer=tokenizer)
+
+    chunker.token_count("длинный текст " * 600)
+
+    assert tokenizer.verbose is False

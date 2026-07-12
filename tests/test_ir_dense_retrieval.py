@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
+import pytest
+import torch
 
 from justatom.tooling.ir_dataset.dense import DenseIndex
 
@@ -91,3 +95,20 @@ def test_dense_rejects_duplicate_ids(tmp_path):
         assert "duplicate passage_id" in str(exc)
     else:
         raise AssertionError("duplicate IDs must be rejected")
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS is unavailable")
+def test_mps_search_does_not_wrap_read_only_memmap(tmp_path):
+    index = dense_fixture(tmp_path)
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        index.search_embeddings(
+            index.embedding_rows([0]),
+            k=2,
+            block_size=2,
+            exclude_ids=["p1"],
+            device="mps",
+        )
+
+    assert not any("not writable" in str(item.message) for item in recorded)

@@ -13,7 +13,7 @@ from typing import Any
 
 import polars as pl
 
-from justatom.tooling.ir_dataset.chunking import MarkdownPassageChunker, Passage
+from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION, MarkdownPassageChunker, Passage
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +59,7 @@ def _preparation_fingerprint(
     return _canonical_hash(
         {
             "version": 1,
+            "chunker_version": CHUNKER_VERSION,
             "source_fingerprint": source_fingerprint,
             "chunking": asdict(chunker.config),
             "preparation": asdict(config),
@@ -222,6 +223,7 @@ def prepare_passages(
             flow_counts.update(normalized_values or ["other"])
         manifest = {
             "version": 1,
+            "chunker_version": CHUNKER_VERSION,
             "fingerprint": fingerprint,
             "source_fingerprint": source_fingerprint,
             "chunking": asdict(chunker.config),

@@ -6,8 +6,9 @@ from pathlib import Path
 import polars as pl
 
 from justatom.tooling.ir_dataset.artifacts import PrepareConfig, prepare_passages
-from justatom.tooling.ir_dataset.chunking import ChunkingConfig, MarkdownPassageChunker
-from justatom.tooling.ir_dataset.source import HABR_SOURCE_COLUMNS, HabrSource
+from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION, ChunkingConfig, MarkdownPassageChunker
+from justatom.tooling.ir_dataset.source import HABR_SOURCE_COLUMNS, HabrSource, promote_hf_token_env
+from justatom.tooling.ir_dataset import source as source_module
 
 
 class WhitespaceTokenizer:
@@ -75,13 +76,46 @@ def synthetic_rows():
 
 def test_habr_source_projects_required_columns_without_comments(tmp_path, monkeypatch):
     source = HabrSource(repo_id="justatom/habr-ds", cache_dir=tmp_path)
-    monkeypatch.setattr(source, "_parquet_paths", lambda: [fixture_parquet(tmp_path)])
+    monkeypatch.setattr(source, "_iter_parquet_paths", lambda: iter([fixture_parquet(tmp_path)]))
 
     row = next(source.iter_rows(limit=1))
 
     assert set(row) == set(HABR_SOURCE_COLUMNS)
     assert "comments" not in row
     assert "text_html" not in row
+
+
+def test_habr_source_downloads_shards_lazily_when_limit_is_reached(tmp_path, monkeypatch):
+    paths = {}
+    for index in range(2):
+        path = tmp_path / f"train-{index:05d}-of-00002.parquet"
+        pl.DataFrame([source_row(index + 1)]).write_parquet(path)
+        paths[f"data/{path.name}"] = path
+    downloads = []
+    source = HabrSource(repo_id="justatom/habr-ds", cache_dir=tmp_path)
+    monkeypatch.setattr(source, "_matching_parquet_files", lambda: list(paths))
+
+    def fake_download(*, filename, **kwargs):
+        downloads.append(filename)
+        return str(paths[filename])
+
+    monkeypatch.setattr(source_module, "hf_hub_download", fake_download)
+
+    rows = list(source.iter_rows(limit=1))
+
+    assert len(rows) == 1
+    assert downloads == ["data/train-00000-of-00002.parquet"]
+
+
+def test_hf_api_key_is_promoted_for_transformers_hub_calls(monkeypatch):
+    for name in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_HUB_TOKEN", "HF_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HF_API_KEY", "hf_test_secret")
+
+    promoted = promote_hf_token_env()
+
+    assert promoted is True
+    assert source_module.os.environ["HF_TOKEN"] == "hf_test_secret"
 
 
 def test_prepare_filters_and_writes_ranked_passages(tmp_path):
@@ -101,6 +135,7 @@ def test_prepare_filters_and_writes_ranked_passages(tmp_path):
     assert set(frame["article_id"].to_list()) == {"1", "2"}
     assert frame.group_by("article_id").len()["len"].max() <= 3
     assert manifest["fingerprint"] == summary.fingerprint
+    assert manifest["chunker_version"] == CHUNKER_VERSION
     assert manifest["counts"]["articles"] == 2
     assert manifest["counts"]["passages"] == frame.height
 

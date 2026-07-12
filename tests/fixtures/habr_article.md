@@ -14,6 +14,8 @@
 
 Клиент вызывает `configure()` перед запуском воркера.
 
+[code]legacy_call()[/code]
+
 ```python
 def configure_client(timeout):
     return {"timeout": timeout}

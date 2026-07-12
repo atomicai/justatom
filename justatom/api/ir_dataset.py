@@ -21,7 +21,7 @@ from justatom.tooling.ir_dataset.neighbors import (
     NeighborSummary,
     build_neighbor_artifact,
 )
-from justatom.tooling.ir_dataset.source import HabrSource
+from justatom.tooling.ir_dataset.source import HabrSource, promote_hf_token_env
 from justatom.tooling.ir_dataset.sparse import BM25Index
 
 
@@ -279,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     env_path = find_dotenv(usecwd=True)
     if env_path:
         load_dotenv(env_path)
+    promote_hf_token_env()
     parsed = parse_cli(argv)
     if parsed.stage == "prepare":
         result = prepare_stage(parsed.config)

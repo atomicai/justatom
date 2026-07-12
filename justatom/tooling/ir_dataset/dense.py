@@ -245,8 +245,8 @@ class DenseIndex:
         if device == "mps":
             import torch
 
-            query_tensor = torch.from_numpy(np.ascontiguousarray(queries)).to("mps")
-            corpus_tensor = torch.from_numpy(np.ascontiguousarray(corpus)).to("mps")
+            query_tensor = torch.from_numpy(np.array(queries, dtype=np.float32, order="C", copy=True)).to("mps")
+            corpus_tensor = torch.from_numpy(np.array(corpus, dtype=np.float32, order="C", copy=True)).to("mps")
             return (query_tensor @ corpus_tensor.T).float().cpu().numpy()
         return queries @ corpus.T
 

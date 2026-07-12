@@ -40,6 +40,17 @@ def resolve_hf_token(env: dict[str, str] | None = None) -> str | None:
     return None
 
 
+def promote_hf_token_env(env: dict[str, str] | None = None) -> bool:
+    active_env = os.environ if env is None else env
+    if active_env.get("HF_TOKEN"):
+        return False
+    token = resolve_hf_token(active_env)
+    if not token:
+        return False
+    active_env["HF_TOKEN"] = token
+    return True
+
+
 class HabrSource:
     def __init__(
         self,
@@ -83,20 +94,24 @@ class HabrSource:
         return matching or parquet_files
 
     def _parquet_paths(self) -> list[Path]:
+        return list(self._iter_parquet_paths())
+
+    def _download_parquet(self, repo_file: str) -> Path:
         token = resolve_hf_token()
-        return [
-            Path(
-                hf_hub_download(
-                    repo_id=self.repo_id,
-                    filename=repo_file,
-                    repo_type="dataset",
-                    revision=self.revision,
-                    token=token,
-                    cache_dir=None if self.cache_dir is None else str(self.cache_dir),
-                )
+        return Path(
+            hf_hub_download(
+                repo_id=self.repo_id,
+                filename=repo_file,
+                repo_type="dataset",
+                revision=self.revision,
+                token=token,
+                cache_dir=None if self.cache_dir is None else str(self.cache_dir),
             )
-            for repo_file in self._matching_parquet_files()
-        ]
+        )
+
+    def _iter_parquet_paths(self) -> Iterator[Path]:
+        for repo_file in self._matching_parquet_files():
+            yield self._download_parquet(repo_file)
 
     def fingerprint(self) -> str:
         files = self._matching_parquet_files()
@@ -116,13 +131,26 @@ class HabrSource:
         if batch_size <= 0:
             raise ValueError("source batch_size must be > 0")
 
-        paths = self._parquet_paths()
-        lazy = pl.scan_parquet(paths).select(list(HABR_SOURCE_COLUMNS))
-        if limit is not None:
-            lazy = lazy.limit(int(limit))
+        remaining = None if limit is None else int(limit)
+        if remaining == 0:
+            return
+        for path in self._iter_parquet_paths():
+            lazy = pl.scan_parquet(path).select(list(HABR_SOURCE_COLUMNS))
+            if remaining is not None:
+                lazy = lazy.limit(remaining)
+            for batch in lazy.collect_batches(chunk_size=batch_size, maintain_order=True):
+                rows = batch.to_dicts()
+                yield from rows
+                if remaining is not None:
+                    remaining -= len(rows)
+                    if remaining <= 0:
+                        return
 
-        for batch in lazy.collect_batches(chunk_size=batch_size, maintain_order=True):
-            yield from batch.iter_rows(named=True)
 
-
-__all__ = ["HABR_SOURCE_COLUMNS", "HF_TOKEN_ENV_NAMES", "HabrSource", "resolve_hf_token"]
+__all__ = [
+    "HABR_SOURCE_COLUMNS",
+    "HF_TOKEN_ENV_NAMES",
+    "HabrSource",
+    "promote_hf_token_env",
+    "resolve_hf_token",
+]

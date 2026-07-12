@@ -13,6 +13,8 @@ from markdown_it.tree import SyntaxTreeNode
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?…])\s+")
 _WHITESPACE_RE = re.compile(r"[ \t\f\v]+")
 _BLANK_LINES_RE = re.compile(r"\n{3,}")
+_HABR_CODE_MARKER_RE = re.compile(r"\[/?(?:code|source)(?:=[^\]\n]*)?\]", re.IGNORECASE)
+CHUNKER_VERSION = 2
 
 
 class TokenizerLike(Protocol):
@@ -24,6 +26,7 @@ class TokenizerLike(Protocol):
         *,
         add_special_tokens: bool,
         truncation: bool,
+        verbose: bool,
     ) -> Mapping[str, Any]: ...
 
 
@@ -145,7 +148,17 @@ class MarkdownPassageChunker:
         return AutoTokenizer.from_pretrained(name)
 
     def token_count(self, text: str) -> int:
-        encoded = self.tokenizer(text, add_special_tokens=True, truncation=False)
+        try:
+            encoded = self.tokenizer(
+                text,
+                add_special_tokens=True,
+                truncation=False,
+                verbose=False,
+            )
+        except TypeError as exc:
+            if "verbose" not in str(exc):
+                raise
+            encoded = self.tokenizer(text, add_special_tokens=True, truncation=False)
         input_ids = encoded.get("input_ids")
         if input_ids is None:
             raise ValueError("Tokenizer did not return input_ids")
@@ -197,7 +210,8 @@ class MarkdownPassageChunker:
         return units
 
     def parse_units(self, markdown: str) -> list[StructuralUnit]:
-        root = SyntaxTreeNode(self._markdown.parse(str(markdown or "")))
+        source = _HABR_CODE_MARKER_RE.sub("", str(markdown or ""))
+        root = SyntaxTreeNode(self._markdown.parse(source))
         section = ""
         units: list[StructuralUnit] = []
         for node in root.children:
@@ -344,6 +358,7 @@ class MarkdownPassageChunker:
 
 
 __all__ = [
+    "CHUNKER_VERSION",
     "ChunkingConfig",
     "MarkdownPassageChunker",
     "Passage",
