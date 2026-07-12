@@ -33,6 +33,8 @@ docx2txt==0.8
 simplejson==3.19.2
 jsonlines==4.0.0
 json_repair==0.30.0
+markdown-it-py>=4.0,<5
+bm25s>=0.2.14,<1
 lazy-imports==0.3.1
 fastnumbers==5.1.0
 datasets==2.18.0
