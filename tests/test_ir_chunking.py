@@ -109,3 +109,29 @@ def test_token_count_disables_tokenizer_length_warning():
     chunker.token_count("длинный текст " * 600)
 
     assert tokenizer.verbose is False
+
+
+def test_long_sentence_is_split_to_the_configured_character_limit():
+    chunker = MarkdownPassageChunker.for_tests(tokenizer=WhitespaceTokenizer())
+    article = {
+        **sample_article(),
+        "text_markdown": "Короткое предложение. " + "элемент; " * 80 + ". Конец.",
+    }
+
+    passages = chunker.chunk_article(article)
+
+    assert passages
+    assert all(row.char_count <= chunker.config.max_chars for row in passages)
+
+
+def test_unbreakable_technical_token_is_split_to_the_character_limit():
+    chunker = MarkdownPassageChunker.for_tests(tokenizer=WhitespaceTokenizer())
+    article = {
+        **sample_article(),
+        "text_markdown": "Короткое предложение. " + "x" * 500 + ". Конец.",
+    }
+
+    passages = chunker.chunk_article(article)
+
+    assert passages
+    assert all(row.char_count <= chunker.config.max_chars for row in passages)

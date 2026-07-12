@@ -14,7 +14,7 @@ _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?…])\s+")
 _WHITESPACE_RE = re.compile(r"[ \t\f\v]+")
 _BLANK_LINES_RE = re.compile(r"\n{3,}")
 _HABR_CODE_MARKER_RE = re.compile(r"\[/?(?:code|source)(?:=[^\]\n]*)?\]", re.IGNORECASE)
-CHUNKER_VERSION = 2
+CHUNKER_VERSION = 3
 
 
 class TokenizerLike(Protocol):
@@ -227,24 +227,57 @@ class MarkdownPassageChunker:
             return False
         return self.token_count(serialize_passage(title, section, content)) <= self.config.accepted_max_tokens
 
+    def _split_unbreakable(self, text: str, title: str, section: str) -> list[str]:
+        output: list[str] = []
+        remaining = text
+        while remaining:
+            low = 1
+            high = min(len(remaining), self.config.max_chars)
+            best = 0
+            while low <= high:
+                middle = (low + high) // 2
+                if self._fits(title, section, remaining[:middle]):
+                    best = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            if best == 0:
+                raise ValueError("Passage header leaves no room for content within the token budget")
+            output.append(remaining[:best])
+            remaining = remaining[best:]
+        return output
+
+    def _split_words(self, text: str, title: str, section: str) -> list[str]:
+        output: list[str] = []
+        current: list[str] = []
+        for word in text.split():
+            word_parts = [word] if self._fits(title, section, word) else self._split_unbreakable(word, title, section)
+            for part in word_parts:
+                candidate = " ".join([*current, part])
+                if current and not self._fits(title, section, candidate):
+                    output.append(" ".join(current))
+                    current = [part]
+                else:
+                    current.append(part)
+        if current:
+            output.append(" ".join(current))
+        return output
+
     def _split_text(self, unit: StructuralUnit, title: str) -> list[StructuralUnit]:
         if self._fits(title, unit.section, unit.text):
             return [unit]
-        pieces = unit.text.splitlines() if unit.kind == "code" else _SENTENCE_BOUNDARY_RE.split(unit.text)
-        pieces = [_clean_text(piece, preserve_newlines=unit.kind == "code") for piece in pieces if _clean_text(piece)]
-        if len(pieces) <= 1:
-            words = unit.text.split()
-            pieces = []
-            current: list[str] = []
-            for word in words:
-                candidate = " ".join([*current, word])
-                if current and not self._fits(title, unit.section, candidate):
-                    pieces.append(" ".join(current))
-                    current = [word]
-                else:
-                    current.append(word)
-            if current:
-                pieces.append(" ".join(current))
+        candidates = unit.text.splitlines() if unit.kind == "code" else _SENTENCE_BOUNDARY_RE.split(unit.text)
+        candidates = [
+            _clean_text(piece, preserve_newlines=unit.kind == "code")
+            for piece in candidates
+            if _clean_text(piece)
+        ]
+        pieces: list[str] = []
+        for candidate in candidates:
+            if self._fits(title, unit.section, candidate):
+                pieces.append(candidate)
+            else:
+                pieces.extend(self._split_words(candidate, title, unit.section))
 
         output: list[StructuralUnit] = []
         current: list[str] = []
