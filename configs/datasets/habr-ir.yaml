@@ -1,0 +1,36 @@
+source:
+  repo_id: justatom/habr-ds
+  config: default
+  split: train
+  revision: main
+  cache_dir: null
+
+chunking:
+  tokenizer_name: intfloat/multilingual-e5-small
+  min_chars: 600
+  target_chars: 1200
+  max_chars: 1800
+  overlap_max_chars: 250
+  model_max_tokens: 512
+  safety_reserve_tokens: 8
+
+preparation:
+  seed: 42
+  max_articles: null
+  max_passages: 100000
+  max_passages_per_article: 8
+  part_rows: 10000
+
+retrieval:
+  model_name: intfloat/multilingual-e5-small
+  device: mps
+  batch_size: 64
+  dense_block_size: 65536
+  bm25_k: 20
+  dense_k: 20
+  union_k: 30
+  rrf_k: 60
+  query_passages: 200
+
+output:
+  root: .tmp_runs/datasets/habr-ir/local-100k

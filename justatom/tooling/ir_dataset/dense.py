@@ -217,6 +217,12 @@ class DenseIndex:
     def embedding_rows(self, indices: Sequence[int]) -> np.ndarray:
         return np.asarray(self._embeddings[list(indices)], dtype=np.float32)
 
+    def indices_for_ids(self, passage_ids: Sequence[str]) -> list[int]:
+        try:
+            return [self._id_to_index[str(passage_id)] for passage_id in passage_ids]
+        except KeyError as exc:
+            raise KeyError(f"Unknown dense passage_id: {exc.args[0]}") from exc
+
     @staticmethod
     def _resolve_device(device: str) -> str:
         if device == "auto":
