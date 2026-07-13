@@ -73,7 +73,6 @@ GENERATOR_SCHEMA: dict[str, Any] = {
 
 _BANNED_CONTEXT_PHRASES = (
     "в статье",
-    "автор",
     "этот подход",
     "эта статья",
     "данная статья",
@@ -83,6 +82,11 @@ _BANNED_CONTEXT_PHRASES = (
     "следующий раздел",
     "выше",
     "ниже",
+)
+_BANNED_CONTEXT_PATTERNS = (
+    re.compile(r"(?<!\w)стат(?:ья|ьи|ье|ью|ьей|ьёй|ей)(?!\w)"),
+    re.compile(r"(?<!\w)автор(?:а|у|ом|е|ы|ов|ам|ами|ах)?(?!\w)"),
+    *(re.compile(rf"(?<!\w){re.escape(phrase)}(?!\w)") for phrase in _BANNED_CONTEXT_PHRASES),
 )
 _STOP_WORDS = frozenset(
     {
@@ -111,6 +115,7 @@ _STOP_WORDS = frozenset(
     }
 )
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
+_CONTENT_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +124,8 @@ class GeneratorConfig:
     reasoning_effort: str = "low"
     attempt: int = 1
     accepted_max_tokens: int = 504
+    max_requests_per_shard: int = 1_000
+    max_shard_bytes: int = 100 * 1024 * 1024
 
     def __post_init__(self) -> None:
         if not self.model:
@@ -129,6 +136,14 @@ class GeneratorConfig:
             raise ValueError("generation.attempt must be >= 1")
         if self.accepted_max_tokens < 1:
             raise ValueError("generation.accepted_max_tokens must be > 0")
+        if not isinstance(self.max_requests_per_shard, int) or isinstance(self.max_requests_per_shard, bool):
+            raise ValueError("generation.max_requests_per_shard must be an integer")
+        if not 1 <= self.max_requests_per_shard <= 1_000:
+            raise ValueError("generation.max_requests_per_shard must be within [1, 1000]")
+        if not isinstance(self.max_shard_bytes, int) or isinstance(self.max_shard_bytes, bool):
+            raise ValueError("generation.max_shard_bytes must be an integer")
+        if not 1 <= self.max_shard_bytes <= 100 * 1024 * 1024:
+            raise ValueError("generation.max_shard_bytes must be within [1, 104857600]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,16 +189,21 @@ def normalize_query(query: object) -> str:
 
 def _content_tokens(value: object) -> list[str]:
     tokens: list[str] = []
-    for original in _WORD_RE.findall(_normalized_text(value)):
+    for original in _CONTENT_TOKEN_RE.findall(_normalized_text(value)):
         normalized = original.casefold()
-        is_identifier = (
-            any(character.isdigit() for character in original)
-            or "_" in original
-            or any("a" <= character.lower() <= "z" for character in original)
-        )
+        is_identifier = _is_identifier_like(original)
         if normalized not in _STOP_WORDS and not is_identifier:
             tokens.append(normalized)
     return tokens
+
+
+def _is_identifier_like(token: str) -> bool:
+    return (
+        any(character.isdigit() for character in token)
+        or "_" in token
+        or (len(token) > 1 and token.isupper())
+        or any(character.isupper() for character in token[1:])
+    )
 
 
 def _has_copied_content_span(query: object, target_content: object, threshold: int = 8) -> bool:
@@ -358,7 +378,7 @@ def _schema_is_valid(output: Mapping[str, Any]) -> bool:
 
 def _contains_banned_context_phrase(query: str) -> bool:
     normalized = _normalized_text(query).casefold()
-    return any(re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", normalized) for phrase in _BANNED_CONTEXT_PHRASES)
+    return any(pattern.search(normalized) for pattern in _BANNED_CONTEXT_PATTERNS)
 
 
 def validate_generator_result(
@@ -379,7 +399,9 @@ def validate_generator_result(
         return GeneratorResult(output=output, accepted=False, reason_codes=("schema_invalid",))
 
     reason_codes: list[str] = []
-    if generation_context is not None:
+    if generation_context is None:
+        reason_codes.append("generation_context_missing")
+    else:
         reason_codes.extend(_context_mismatch_codes(slot, _records(generation_context)))
     token_count = slot.get("token_count")
     if not isinstance(token_count, int) or isinstance(token_count, bool) or token_count > active_config.accepted_max_tokens:

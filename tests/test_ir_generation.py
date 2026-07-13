@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from pathlib import Path
+
+import pytest
+import yaml
 
 from justatom.tooling.ir_dataset.generation import (
     GENERATOR_SCHEMA,
@@ -85,6 +89,20 @@ def test_request_uses_responses_input_text_low_reasoning_and_strict_schema():
     assert request["body"]["text"]["format"]["schema"] == GENERATOR_SCHEMA
 
 
+def test_full_checked_in_generation_mapping_is_accepted_without_relaxing_shard_limits():
+    generation_mapping = yaml.safe_load(
+        (Path(__file__).parents[1] / "configs" / "datasets" / "habr-ir.yaml").read_text(encoding="utf-8")
+    )["generation"]
+
+    request = build_generator_request(slot(), context(), generation_mapping)
+    result = validate_generator_result(good_output(), slot(), context(), config=generation_mapping)
+
+    assert request["body"]["model"] == generation_mapping["model"]
+    assert result.accepted
+    with pytest.raises(ValueError, match="max_requests_per_shard"):
+        GeneratorConfig(max_requests_per_shard=1_001)
+
+
 def test_schema_requires_every_output_field_and_disallows_unknown_properties():
     assert GENERATOR_SCHEMA["additionalProperties"] is False
     assert set(GENERATOR_SCHEMA["required"]) == set(GENERATOR_SCHEMA["properties"])
@@ -146,6 +164,13 @@ def test_gates_accept_grounded_output_without_mutating_model_payload():
     assert output == original
 
 
+def test_gates_reject_missing_generation_context():
+    result = validate_generator_result(good_output(), slot(), config=config())
+
+    assert not result.accepted
+    assert "generation_context_missing" in result.reason_codes
+
+
 def test_gates_require_exact_evidence():
     result = validate_generator_result(good_output(evidence="несуществующая цитата"), slot(), context(), config=config())
 
@@ -181,6 +206,18 @@ def test_gates_reject_empty_fields_word_limits_banned_context_and_intent_mismatc
     assert "empty_answer" in validate_generator_result(good_output(answer=""), slot(), context(), config=config()).reason_codes
 
 
+def test_gates_reject_context_reference_inflections():
+    for reference in ("статье", "автора", "автором"):
+        result = validate_generator_result(
+            good_output(query=f"Как {reference} Redis повторяет запросы после сетевой ошибки в production?"),
+            slot(),
+            context(),
+            config=config(),
+        )
+
+        assert "banned_context_phrase" in result.reason_codes
+
+
 def test_gates_reject_normalized_duplicates_long_copied_spans_and_target_contract_mismatches():
     duplicate = validate_generator_result(
         good_output(),
@@ -209,3 +246,39 @@ def test_gates_reject_normalized_duplicates_long_copied_spans_and_target_contrac
     assert "copied_content_span_gt_8" in copied.reason_codes
     assert "target_length_exceeded" in oversized.reason_codes
     assert "target_identity_mismatch" in identity.reason_codes
+
+
+def test_gates_reject_long_copied_english_prose_but_allow_identifier_only_overlap():
+    english_target = slot(
+        content=("The worker retries failed network requests after timeout and stores job state before each attempt."),
+        serialized_passage=(
+            "passage: Worker\n\nThe worker retries failed network requests after timeout and stores job state before each attempt."
+        ),
+    )
+    copied_english = validate_generator_result(
+        good_output(
+            query="The worker retries failed network requests after timeout and stores job state before each attempt.",
+            answer="The worker retries requests.",
+            evidence="The worker retries failed network requests after timeout and stores job state before each attempt.",
+        ),
+        english_target,
+        context(english_target),
+        config=config(),
+    )
+    identifier_target = slot(
+        content="HTTP_2 v2 API JSON TLS SSH TCP UDP IPv6",
+        serialized_passage="passage: Protocols\n\nHTTP_2 v2 API JSON TLS SSH TCP UDP IPv6",
+    )
+    identifier_overlap = validate_generator_result(
+        good_output(
+            query="How HTTP_2 v2 API JSON TLS SSH TCP UDP IPv6 works?",
+            answer="It works with the listed identifiers.",
+            evidence="HTTP_2 v2 API JSON TLS SSH TCP UDP IPv6",
+        ),
+        identifier_target,
+        context(identifier_target),
+        config=config(),
+    )
+
+    assert "copied_content_span_gt_8" in copied_english.reason_codes
+    assert identifier_overlap.accepted
