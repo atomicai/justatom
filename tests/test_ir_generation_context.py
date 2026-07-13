@@ -8,6 +8,7 @@ import polars as pl
 from justatom.tooling.ir_dataset.dense import DenseIndex
 from justatom.tooling.ir_dataset.generation_context import GenerationContextConfig, build_generation_context
 from justatom.tooling.ir_dataset.sparse import BM25Index
+from justatom.tooling.ir_dataset.targets import TargetSelectionConfig, select_target_slots
 
 
 class ContextEncoder:
@@ -159,3 +160,75 @@ def test_context_processes_target_subsets_without_excluding_other_target_slots(t
 
     assert context.filter(pl.col("target_passage_id") == "target-a")["candidate_passage_id"].to_list()[0] == "target-b"
     assert context.filter(pl.col("target_passage_id") == "target-b")["candidate_passage_id"].to_list()[0] == "target-a"
+
+
+def test_context_accepts_slots_selected_with_noneligible_adjacent_siblings(tmp_path: Path):
+    passage_rows = []
+    for article_id, flow in (("article-a", "develop"), ("article-b", "admin")):
+        passage_rows.extend(
+            [
+                {
+                    "passage_id": f"{article_id}-target-1",
+                    "article_id": article_id,
+                    "content": f"anchor explanation for {article_id} first target " * 20,
+                    "serialized_passage": f"passage: {article_id}\n\nanchor explanation first target",
+                    "token_count": 120,
+                    "flows": [flow],
+                    "hubs": [f"{flow}-hub"],
+                    "start_unit": 0,
+                    "end_unit": 0,
+                },
+                {
+                    "passage_id": f"{article_id}-sibling-1",
+                    "article_id": article_id,
+                    "content": "x = 1",
+                    "serialized_passage": f"passage: {article_id}\n\nx = 1",
+                    "token_count": 3,
+                    "flows": [flow],
+                    "hubs": [f"{flow}-hub"],
+                    "start_unit": 1,
+                    "end_unit": 1,
+                },
+                {
+                    "passage_id": f"{article_id}-sibling-2",
+                    "article_id": article_id,
+                    "content": "x = 2",
+                    "serialized_passage": f"passage: {article_id}\n\nx = 2",
+                    "token_count": 3,
+                    "flows": [flow],
+                    "hubs": [f"{flow}-hub"],
+                    "start_unit": 3,
+                    "end_unit": 3,
+                },
+                {
+                    "passage_id": f"{article_id}-target-2",
+                    "article_id": article_id,
+                    "content": f"anchor explanation for {article_id} second target " * 20,
+                    "serialized_passage": f"passage: {article_id}\n\nanchor explanation second target",
+                    "token_count": 120,
+                    "flows": [flow],
+                    "hubs": [f"{flow}-hub"],
+                    "start_unit": 4,
+                    "end_unit": 4,
+                },
+            ]
+        )
+    passages = pl.DataFrame(passage_rows)
+    targets = select_target_slots(passages, TargetSelectionConfig(article_count=2))
+    rows = list(zip(passages["passage_id"], passages["serialized_passage"], strict=True))
+    bm25 = BM25Index.build(rows, tmp_path / "bm25")
+    dense = DenseIndex.build(rows, tmp_path / "dense", ContextEncoder())
+
+    context = build_generation_context(
+        targets,
+        passages,
+        bm25,
+        dense,
+        GenerationContextConfig(dense_block_size=2),
+    )
+
+    assert targets.height == 4
+    assert context.height == 12
+    assert context.group_by("target_passage_id").len()["len"].min() == 3
+    assert context.filter(pl.col("context_index") == 0)["same_article"].all()
+    assert context.filter(pl.col("context_index") == 0)["adjacent"].all()

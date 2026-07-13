@@ -308,21 +308,43 @@ def _quality_columns(quality: PassageQuality) -> dict[str, Any]:
     }
 
 
+def _has_structural_sibling(passage: Mapping[str, Any], article_passages: Sequence[Mapping[str, Any]]) -> bool:
+    passage_id = str(passage["passage_id"])
+    passage_content = str(passage["content"])
+    passage_start = int(passage["start_unit"])
+    passage_end = int(passage["end_unit"])
+    for sibling in article_passages:
+        if str(sibling["passage_id"]) == passage_id or str(sibling["content"]) == passage_content:
+            continue
+        sibling_start = int(sibling["start_unit"])
+        sibling_end = int(sibling["end_unit"])
+        if max(passage_start - sibling_end, sibling_start - passage_end, 0) <= 1:
+            return True
+    return False
+
+
 def select_target_slots(passages: pl.DataFrame, config: TargetSelectionConfig | None = None) -> pl.DataFrame:
     if not isinstance(passages, pl.DataFrame):
         raise TypeError("passages must be a polars DataFrame")
     active_config = config or TargetSelectionConfig()
-    required_columns = {"article_id", "passage_id", "content", "flows", "hubs"}
+    required_columns = {"article_id", "passage_id", "content", "flows", "hubs", "start_unit", "end_unit"}
     missing_columns = sorted(required_columns - set(passages.columns))
     if missing_columns:
         raise ValueError(f"passages is missing required columns: {', '.join(missing_columns)}")
 
+    passage_rows = passages.to_dicts()
+    full_article_passages: dict[str, list[dict[str, Any]]] = {}
+    for row in passage_rows:
+        full_article_passages.setdefault(str(row["article_id"]), []).append(row)
+
     eligible_by_article: dict[str, list[dict[str, Any]]] = {}
-    for row in passages.to_dicts():
+    for row in passage_rows:
         quality = score_passage_quality(row)
         if not quality.eligible:
             continue
         article_id = str(row["article_id"])
+        if not _has_structural_sibling(row, full_article_passages[article_id]):
+            continue
         enriched = dict(row)
         enriched["quality"] = quality
         enriched["primary_flow"] = _primary_label(row, "flows")

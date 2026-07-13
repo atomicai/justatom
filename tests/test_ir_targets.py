@@ -19,6 +19,8 @@ def prose_row(**overrides: object) -> dict[str, object]:
         "flows": ["develop"],
         "hubs": ["distributed_systems"],
         "tags": ["python"],
+        "start_unit": 0,
+        "end_unit": 0,
     }
     row.update(overrides)
     return row
@@ -43,8 +45,11 @@ def target_frame() -> pl.DataFrame:
                     article_id=article_id,
                     passage_id=f"{article_id}-passage-{passage_index}",
                     section=section,
+                    content=str(prose_row()["content"]) + f" Деталь {article_index}-{passage_index}.",
                     flows=[flow],
                     hubs=[f"{flow}-hub"],
+                    start_unit=passage_index - 1,
+                    end_unit=passage_index - 1,
                 )
             )
     return pl.DataFrame(rows)
@@ -120,7 +125,10 @@ def test_selection_rejects_an_infeasible_primary_flow_cap():
                 prose_row(
                     article_id=f"article-{article_index}",
                     passage_id=f"article-{article_index}-passage-{passage_index}",
+                    content=str(prose_row()["content"]) + f" Деталь {article_index}-{passage_index}.",
                     flows=["develop"],
+                    start_unit=passage_index,
+                    end_unit=passage_index,
                 )
             )
 
@@ -151,3 +159,57 @@ def test_selection_prefers_two_distinct_non_empty_sections_when_available():
     )
 
     assert set(selected["section"]) == {"Implementation", "Validation"}
+
+
+def test_selection_requires_each_target_to_have_a_full_article_structural_sibling():
+    passages = pl.DataFrame(
+        [
+            prose_row(article_id="article-1", passage_id="target-1", content=str(prose_row()["content"]) + " one"),
+            prose_row(
+                article_id="article-1",
+                passage_id="target-2",
+                content=str(prose_row()["content"]) + " two",
+                start_unit=4,
+                end_unit=4,
+            ),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="only 0 have two eligible passages"):
+        select_target_slots(passages, TargetSelectionConfig(article_count=1))
+
+
+def test_selection_accepts_noneligible_full_article_structural_siblings():
+    passages = pl.DataFrame(
+        [
+            prose_row(article_id="article-1", passage_id="target-1", content=str(prose_row()["content"]) + " one"),
+            prose_row(
+                article_id="article-1",
+                passage_id="sibling-1",
+                content="x = 1",
+                token_count=3,
+                start_unit=1,
+                end_unit=1,
+            ),
+            prose_row(
+                article_id="article-1",
+                passage_id="sibling-2",
+                content="x = 2",
+                token_count=3,
+                start_unit=3,
+                end_unit=3,
+            ),
+            prose_row(
+                article_id="article-1",
+                passage_id="target-2",
+                content=str(prose_row()["content"]) + " two",
+                start_unit=4,
+                end_unit=4,
+            ),
+        ]
+    )
+
+    selected = select_target_slots(passages, TargetSelectionConfig(article_count=1))
+
+    assert set(selected["passage_id"]) == {"target-1", "target-2"}
+    assert not score_passage_quality(passages.filter(pl.col("passage_id") == "sibling-1").to_dicts()[0]).eligible
