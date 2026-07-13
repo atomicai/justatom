@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import fcntl
 import hashlib
 import json
 import os
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ DEFAULT_MAX_REQUESTS = 1_000
 DEFAULT_MAX_BYTES = 100_000_000
 STATE_FILE_NAME = "generation_state.json"
 COLLECTED_FILE_NAME = "generation_collected.jsonl"
+DIAGNOSTICS_FILE_NAME = "generation_diagnostics.jsonl"
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,6 +332,8 @@ def _file_operation(shard: Mapping[str, Any], request_path: Path) -> dict[str, A
 
 def _find_remote_file(client: Any, operation: Mapping[str, Any]) -> str | None:
     for item in _remote_items(client.files):
+        if _object_value(item, "purpose") != "batch":
+            continue
         if _object_value(item, "filename") == operation["filename"] and int(_object_value(item, "bytes", -1)) == operation["bytes"]:
             item_id = _object_value(item, "id")
             if item_id:
@@ -357,7 +362,27 @@ def _find_remote_batch(client: Any, operation: Mapping[str, Any]) -> str | None:
     return None
 
 
-def submit_pending_shards(state: Mapping[str, Any], client: Any, output_dir: str | Path) -> dict[str, Any]:
+@contextmanager
+def _submit_lock(output_dir: str | Path):
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / ".generation_submit.lock"
+    try:
+        stream = path.open("a+")
+    except OSError as exc:
+        raise RuntimeError(f"unable to open local generation submission lock: {path}") from exc
+    with stream:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        except OSError as exc:
+            raise RuntimeError(f"unable to acquire local generation submission lock: {path}") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def _submit_pending_shards_unlocked(state: Mapping[str, Any], client: Any, output_dir: str | Path) -> dict[str, Any]:
     """Submit each shard with durable operation identities and remote reconciliation."""
     result = copy.deepcopy(dict(state))
     _validate_state_requests(result, output_dir)
@@ -398,6 +423,12 @@ def submit_pending_shards(state: Mapping[str, Any], client: Any, output_dir: str
             _persist_state(result, output_dir)
     result["counts"] = {"submitted": sum(1 for shard in result["shards"] if shard.get("batch_id"))}
     return _persist_state(result, output_dir)
+
+
+def submit_pending_shards(state: Mapping[str, Any], client: Any, output_dir: str | Path) -> dict[str, Any]:
+    """Serialize local submit/reconcile transitions; this does not provide cross-machine locking."""
+    with _submit_lock(output_dir):
+        return _submit_pending_shards_unlocked(state, client, output_dir)
 
 
 def refresh_batch_status(state: Mapping[str, Any], client: Any, output_dir: str | Path) -> dict[str, Any]:
@@ -455,9 +486,12 @@ def _download_file(shard: dict[str, Any], field: str, client: Any, output_dir: P
         if not path.exists() or _sha256_file(path) != str(existing_checksum):
             raise ValueError(f"downloaded {field} checksum mismatch: {path}")
         return path.read_bytes()
-    content = _content_bytes(client.files.content(str(file_id)))
     path = output_dir / "generation_outputs" / f"{file_id}.jsonl"
-    _write_bytes_atomic(path, content)
+    if path.exists():
+        content = path.read_bytes()
+    else:
+        content = _content_bytes(client.files.content(str(file_id)))
+        _write_bytes_atomic(path, content)
     shard[artifact_field] = _relative_to(path, output_dir)
     shard[checksum_field] = _sha256_bytes(content)
     return content
@@ -499,47 +533,35 @@ def _parse_artifact_rows(
     shard_index: int,
     expected_ids: set[str],
     all_ids: set[str],
-    responses: dict[str, list[dict[str, Any]]],
+    events: dict[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
     for raw_line in content.decode("utf-8", errors="replace").splitlines():
         try:
             row = json.loads(raw_line)
         except json.JSONDecodeError:
-            records.append({"status": "rejected", "reason": "malformed_batch_row", "shard_index": shard_index, "raw": raw_line})
+            diagnostics.append({"reason": "malformed_batch_row", "shard_index": shard_index, "raw": raw_line})
             continue
         if not isinstance(row, Mapping):
-            records.append({"status": "rejected", "reason": "malformed_batch_row", "shard_index": shard_index, "raw": row})
+            diagnostics.append({"reason": "malformed_batch_row", "shard_index": shard_index, "raw": row})
             continue
         custom_id = row.get("custom_id")
         response = row.get("response")
-        if response is None:
-            records.append(
-                {
-                    "status": "rejected",
-                    "reason": "batch_error_row",
-                    "shard_index": shard_index,
-                    "custom_id": custom_id,
-                    "error": _json_value(row.get("error")),
-                    "raw": _json_value(row),
-                }
-            )
-            continue
         if not isinstance(custom_id, str) or custom_id not in all_ids:
-            records.append(
-                {"status": "rejected", "reason": "unknown_custom_id", "shard_index": shard_index, "custom_id": custom_id}
+            diagnostics.append(
+                {"reason": "unknown_custom_id", "shard_index": shard_index, "custom_id": custom_id, "raw": _json_value(row)}
             )
             continue
         if custom_id not in expected_ids:
-            records.append(
-                {"status": "rejected", "reason": "cross_shard_custom_id", "shard_index": shard_index, "custom_id": custom_id}
+            diagnostics.append(
+                {"reason": "cross_shard_custom_id", "shard_index": shard_index, "custom_id": custom_id, "raw": _json_value(row)}
             )
             continue
-        responses.setdefault(custom_id, []).append(dict(row))
-    return records
+        events.setdefault(custom_id, []).append({"kind": "response" if response is not None else "error", "row": dict(row)})
+    return diagnostics
 
 
-def _response_record(shard_index: int, custom_id: str, row: Mapping[str, Any]) -> dict[str, Any]:
+def _response_record(custom_id: str, row: Mapping[str, Any]) -> dict[str, Any]:
     response = row.get("response")
     status_code = _object_value(response, "status_code")
     body = _object_value(response, "body")
@@ -547,7 +569,6 @@ def _response_record(shard_index: int, custom_id: str, row: Mapping[str, Any]) -
         return {
             "status": "rejected",
             "reason": f"response_status_{status_code if status_code is not None else 'missing'}",
-            "shard_index": shard_index,
             "custom_id": custom_id,
             "response_body": _json_value(body),
             "error": _json_value(_object_value(response, "error")),
@@ -559,15 +580,33 @@ def _response_record(shard_index: int, custom_id: str, row: Mapping[str, Any]) -
         parsed = None
     output = _strict_output(parsed)
     if output is None:
-        return {"status": "rejected", "reason": "structured_output_invalid", "shard_index": shard_index, "custom_id": custom_id}
-    return {"status": "accepted", "shard_index": shard_index, "custom_id": custom_id, "output": output}
+        return {"status": "rejected", "reason": "structured_output_invalid", "custom_id": custom_id}
+    return {"status": "accepted", "custom_id": custom_id, "output": output}
+
+
+def _terminal_record(custom_id: str, events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    if not events:
+        return {"status": "rejected", "reason": "missing_custom_id", "custom_id": custom_id}
+    if len(events) > 1:
+        return {"status": "rejected", "reason": "duplicate_custom_id", "custom_id": custom_id}
+    event = events[0]
+    row = event["row"]
+    if event["kind"] == "error":
+        return {
+            "status": "rejected",
+            "reason": "batch_error_row",
+            "custom_id": custom_id,
+            "error": _json_value(row.get("error")),
+            "raw": _json_value(row),
+        }
+    return _response_record(custom_id, row)
 
 
 def _ensure_collection_ready(state: Mapping[str, Any]) -> None:
     incomplete = [
         str(index)
         for index, shard in enumerate(state.get("shards", []))
-        if shard.get("status") != "completed" or not shard.get("output_file_id") or not shard.get("error_file_id")
+        if shard.get("status") != "completed" or not (shard.get("output_file_id") or shard.get("error_file_id"))
     ]
     if incomplete:
         raise ValueError(f"collection is not ready for shards: {', '.join(incomplete)}")
@@ -582,59 +621,59 @@ def collect_completed_shards(state: Mapping[str, Any], client: Any, output_dir: 
     refreshed = refresh_batch_status(result, client, root)
     _ensure_collection_ready(refreshed)
     collected_path = root / COLLECTED_FILE_NAME
+    diagnostics_path = root / DIAGNOSTICS_FILE_NAME
     if refreshed.get("collected_sha256"):
         if not collected_path.exists() or _sha256_file(collected_path) != refreshed["collected_sha256"]:
             raise ValueError(f"collected artifact checksum mismatch: {collected_path}")
+        if not diagnostics_path.exists() or _sha256_file(diagnostics_path) != refreshed.get("diagnostics_sha256"):
+            raise ValueError(f"diagnostics artifact checksum mismatch: {diagnostics_path}")
         if finalized_counts is not None:
             refreshed["counts"] = finalized_counts
         return _persist_state(refreshed, root)
 
     all_ids = {str(custom_id) for shard in refreshed["shards"] for custom_id in shard["custom_ids"]}
-    records: list[dict[str, Any]] = []
+    terminal_records: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
     for shard_index, shard in enumerate(refreshed["shards"]):
         expected_ids = {str(custom_id) for custom_id in shard["custom_ids"]}
-        responses: dict[str, list[dict[str, Any]]] = {}
+        events: dict[str, list[dict[str, Any]]] = {}
         for field in ("output_file_id", "error_file_id"):
+            if not shard.get(field):
+                continue
             content = _download_file(shard, field, client, root)
             refreshed = _persist_state(refreshed, root)
-            records.extend(
+            diagnostics.extend(
                 _parse_artifact_rows(
                     content,
                     shard_index=shard_index,
                     expected_ids=expected_ids,
                     all_ids=all_ids,
-                    responses=responses,
+                    events=events,
                 )
             )
         for error in _object_value(shard.get("batch_errors"), "data", shard.get("batch_errors", [])) or []:
-            records.append(
+            diagnostics.append(
                 {
-                    "status": "rejected",
                     "reason": "top_level_batch_error",
                     "shard_index": shard_index,
                     "error": _json_value(error),
                 }
             )
         for custom_id in sorted(expected_ids):
-            rows = responses.get(custom_id, [])
-            if not rows:
-                records.append(
-                    {"status": "rejected", "reason": "missing_custom_id", "shard_index": shard_index, "custom_id": custom_id}
-                )
-            elif len(rows) > 1:
-                records.extend(
-                    {"status": "rejected", "reason": "duplicate_custom_id", "shard_index": shard_index, "custom_id": custom_id}
-                    for _ in rows
-                )
-            else:
-                records.append(_response_record(shard_index, custom_id, rows[0]))
-    encoded = b"".join((_canonical_json(record) + "\n").encode("utf-8") for record in records)
+            terminal_records.append(_terminal_record(custom_id, events.get(custom_id, [])))
+    encoded = b"".join((_canonical_json(record) + "\n").encode("utf-8") for record in terminal_records)
+    diagnostics_encoded = b"".join((_canonical_json(record) + "\n").encode("utf-8") for record in diagnostics)
+    _write_bytes_atomic(diagnostics_path, diagnostics_encoded)
     _write_bytes_atomic(collected_path, encoded)
     refreshed["collected_path"] = COLLECTED_FILE_NAME
     refreshed["collected_sha256"] = _sha256_bytes(encoded)
+    refreshed["diagnostics_path"] = DIAGNOSTICS_FILE_NAME
+    refreshed["diagnostics_sha256"] = _sha256_bytes(diagnostics_encoded)
     refreshed["counts"] = {
-        "accepted": sum(record["status"] == "accepted" for record in records),
-        "rejected": sum(record["status"] == "rejected" for record in records),
+        "prepared": len(terminal_records),
+        "accepted": sum(record["status"] == "accepted" for record in terminal_records),
+        "rejected": sum(record["status"] == "rejected" for record in terminal_records),
+        "diagnostics": len(diagnostics),
     }
     return _persist_state(refreshed, root)
 
@@ -642,6 +681,7 @@ def collect_completed_shards(state: Mapping[str, Any], client: Any, output_dir: 
 __all__ = [
     "BatchShard",
     "COLLECTED_FILE_NAME",
+    "DIAGNOSTICS_FILE_NAME",
     "REQUIRED_SOURCE_CORPUS_FINGERPRINT",
     "STATE_FILE_NAME",
     "collect_completed_shards",

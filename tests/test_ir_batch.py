@@ -69,6 +69,7 @@ class FakeObject:
     input_file_id: str | None = None
     metadata: dict[str, str] | None = None
     errors: object | None = None
+    purpose: str | None = None
 
 
 class FakeFiles:
@@ -79,7 +80,7 @@ class FakeFiles:
         assert purpose == "batch"
         name, content = Path(file.name).name, file.read()
         self.owner.uploads.append((name, content))
-        item = FakeObject(id=f"file-{len(self.owner.uploads)}", filename=name, bytes=len(content))
+        item = FakeObject(id=f"file-{len(self.owner.uploads)}", filename=name, bytes=len(content), purpose=purpose)
         self.owner.file_objects.append(item)
         return item
 
@@ -226,10 +227,12 @@ def test_collection_accepts_only_http_200_strict_output_text_and_keeps_rejection
     collected = collect_completed_shards(submitted, client, tmp_path)
 
     records = [json.loads(line) for line in (tmp_path / "generation_collected.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert collected["counts"] == {"accepted": 1, "rejected": 3}
-    accepted = [record for record in records if record["status"] == "accepted"]
-    assert accepted[0]["output"] == output
-    assert {record["reason"] for record in records if record["status"] == "rejected"} == {
+    diagnostics = [
+        json.loads(line) for line in (tmp_path / "generation_diagnostics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert collected["counts"] == {"prepared": 1, "accepted": 1, "rejected": 0, "diagnostics": 3}
+    assert records == [{"custom_id": custom_id, "output": output, "status": "accepted"}]
+    assert {record["reason"] for record in diagnostics} == {
         "unknown_custom_id",
         "malformed_batch_row",
         "top_level_batch_error",
@@ -270,9 +273,24 @@ def test_submit_reconciles_remote_success_after_local_state_persistence_failure(
     assert retried["shards"][0]["batch_id"] == "batch-1"
 
 
-@pytest.mark.parametrize("status,output_file_id,error_file_id", (("in_progress", None, None), ("completed", "output-1", None)))
-def test_collection_requires_every_shard_to_finish_with_both_artifacts(
-    tmp_path: Path, status: str, output_file_id: str | None, error_file_id: str | None
+def test_collection_requires_completed_shards_to_expose_at_least_one_artifact(tmp_path: Path):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    client = FakeOpenAI()
+    submitted = submit_pending_shards(state, client, tmp_path)
+    client.batch_objects["batch-1"] = FakeObject(id="batch-1", status="completed")
+
+    with pytest.raises(ValueError, match="collection is not ready"):
+        collect_completed_shards(submitted, client, tmp_path)
+
+    assert not (tmp_path / "generation_collected.jsonl").exists()
+
+
+@pytest.mark.parametrize("output_file_id,error_file_id", (("output-1", None), (None, "error-1")))
+def test_collection_accepts_completed_shards_with_only_one_artifact(
+    tmp_path: Path, output_file_id: str | None, error_file_id: str | None
 ):
     row = target()
     state = prepare_generation_batches(
@@ -280,14 +298,42 @@ def test_collection_requires_every_shard_to_finish_with_both_artifacts(
     )
     client = FakeOpenAI()
     submitted = submit_pending_shards(state, client, tmp_path)
-    client.batch_objects["batch-1"] = FakeObject(
-        id="batch-1", status=status, output_file_id=output_file_id, error_file_id=error_file_id
-    )
+    custom_id = submitted["shards"][0]["custom_ids"][0]
+    client.batch_objects["batch-1"] = FakeObject(id="batch-1", output_file_id=output_file_id, error_file_id=error_file_id)
+    if output_file_id:
+        client.file_contents[output_file_id] = json.dumps(
+            {
+                "custom_id": custom_id,
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "output_text": json.dumps(
+                            {
+                                "usable": False,
+                                "reason": "insufficient_context",
+                                "query": "",
+                                "answer": "",
+                                "evidence": "",
+                                "requested_intent": "how_to",
+                                "actual_intent": "how_to",
+                                "disambiguators": [],
+                            }
+                        )
+                    },
+                },
+            }
+        )
+    if error_file_id:
+        client.file_contents[error_file_id] = json.dumps({"custom_id": custom_id, "error": {"code": "failed"}})
 
-    with pytest.raises(ValueError, match="collection is not ready"):
-        collect_completed_shards(submitted, client, tmp_path)
+    collected = collect_completed_shards(submitted, client, tmp_path)
 
-    assert not (tmp_path / "generation_collected.jsonl").exists()
+    assert collected["counts"] == {
+        "prepared": 1,
+        "accepted": int(bool(output_file_id)),
+        "rejected": int(bool(error_file_id)),
+        "diagnostics": 0,
+    }
 
 
 def test_collection_enforces_per_shard_unique_complete_mapping_and_preserves_error_rows(tmp_path: Path):
@@ -330,13 +376,22 @@ def test_collection_enforces_per_shard_unique_complete_mapping_and_preserves_err
 
     collected = collect_completed_shards(submitted, client, tmp_path)
     records = [json.loads(line) for line in (tmp_path / "generation_collected.jsonl").read_text(encoding="utf-8").splitlines()]
+    diagnostics = [
+        json.loads(line) for line in (tmp_path / "generation_diagnostics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
 
-    assert not any(record["status"] == "accepted" and record.get("custom_id") == custom_ids[0] for record in records)
-    assert any(record["reason"] == "duplicate_custom_id" and record.get("custom_id") == custom_ids[0] for record in records)
-    assert any(record["reason"] == "cross_shard_custom_id" and record.get("custom_id") == custom_ids[0] for record in records)
-    assert any(record.get("reason") == "missing_custom_id" and record.get("custom_id") == custom_ids[2] for record in records)
-    assert any(record["status"] == "accepted" and record.get("custom_id") == custom_ids[1] for record in records)
-    assert any(record["reason"] == "batch_error_row" and record.get("custom_id") == custom_ids[1] for record in records)
+    assert len(records) == len(custom_ids)
+    assert {record["custom_id"] for record in records} == set(custom_ids)
+    assert all(record["status"] == "rejected" for record in records)
+    terminal_by_id = {record["custom_id"]: record["reason"] for record in records}
+    assert terminal_by_id == {
+        custom_ids[0]: "duplicate_custom_id",
+        custom_ids[1]: "duplicate_custom_id",
+        custom_ids[2]: "missing_custom_id",
+    }
+    assert any(record["reason"] == "cross_shard_custom_id" and record.get("custom_id") == custom_ids[0] for record in diagnostics)
+    assert any(record["reason"] == "unknown_custom_id" for record in diagnostics)
+    assert collected["counts"] == {"prepared": 3, "accepted": 0, "rejected": 3, "diagnostics": len(diagnostics)}
     assert collected["shards"][0]["output_sha256"]
     assert collected["shards"][0]["error_sha256"]
 
@@ -382,5 +437,89 @@ def test_collection_persists_downloaded_artifacts_before_final_collection_write(
     resumed = prepare_generation_batches(
         [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
     )
-    assert collect_completed_shards(resumed, client, tmp_path)["counts"] == {"accepted": 1, "rejected": 0}
+    assert collect_completed_shards(resumed, client, tmp_path)["counts"] == {
+        "prepared": 1,
+        "accepted": 1,
+        "rejected": 0,
+        "diagnostics": 0,
+    }
     assert client.downloads == ["output-1", "error-1"]
+
+
+def test_submit_reconciliation_ignores_same_named_file_with_wrong_purpose(tmp_path: Path):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    shard = state["shards"][0]
+    client = FakeOpenAI()
+    client.file_objects.append(
+        FakeObject(
+            id="wrong-purpose-file",
+            filename=Path(shard["request_path"]).name,
+            bytes=shard["request_bytes"],
+            purpose="assistants",
+        )
+    )
+
+    submitted = submit_pending_shards(state, client, tmp_path)
+
+    assert submitted["shards"][0]["input_file_id"] == "file-1"
+    assert len(client.uploads) == 1
+
+
+def test_submit_fails_clearly_when_the_local_process_lock_cannot_be_acquired(tmp_path: Path, monkeypatch):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+
+    def fail_lock(*_args):
+        raise OSError("lock unavailable")
+
+    monkeypatch.setattr(batch_module.fcntl, "flock", fail_lock)
+    with pytest.raises(RuntimeError, match="unable to acquire local generation submission lock"):
+        submit_pending_shards(state, FakeOpenAI(), tmp_path)
+
+
+def test_collection_recovers_orphan_downloaded_artifact_without_redownloading(tmp_path: Path):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    client = FakeOpenAI()
+    submitted = submit_pending_shards(state, client, tmp_path)
+    custom_id = submitted["shards"][0]["custom_ids"][0]
+    client.batch_objects["batch-1"] = FakeObject(id="batch-1", output_file_id="output-1")
+    orphan = tmp_path / "generation_outputs" / "output-1.jsonl"
+    orphan.parent.mkdir()
+    orphan.write_text(
+        json.dumps(
+            {
+                "custom_id": custom_id,
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "output_text": json.dumps(
+                            {
+                                "usable": False,
+                                "reason": "insufficient_context",
+                                "query": "",
+                                "answer": "",
+                                "evidence": "",
+                                "requested_intent": "how_to",
+                                "actual_intent": "how_to",
+                                "disambiguators": [],
+                            }
+                        )
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    collected = collect_completed_shards(submitted, client, tmp_path)
+
+    assert collected["shards"][0]["output_sha256"]
+    assert client.downloads == []
