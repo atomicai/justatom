@@ -50,29 +50,29 @@ Artifact identities:
 | Artifact | SHA-256 |
 | --- | --- |
 | Passages | `603e1e89dc5bfa8966d6182eb2694278be35de69f856f23c9e866c5489ca5435` |
-| BM25 index | `6544610feb9d56f8d369e58becce804ce4b85e474a74c69909f4768e9e26fbe1` |
+| BM25 index | `54b5220475da0f28be91b29c768bcdeca8f28e4535470d8191221241fe8efabc` |
 | Dense index | `da31be52e382e9ec39dc9b58ee640ff4b747accebe5dd7999a502edd68c32ca4` |
 
 ## Retrieval Diagnostic
 
-The diagnostic artifact contains 200 deterministic passage queries and 6,063
+The diagnostic artifact contains 200 deterministic passage queries and 6,019
 RRF-union neighbors.
 
 | Contribution | Rows |
 | --- | ---: |
-| BM25 only | 2,314 |
-| Dense only | 2,481 |
-| Both | 1,163 |
-| Same article / structural | 964 |
-| Adjacent | 162 |
-| Structural only | 105 |
+| BM25 only | 2,271 |
+| Dense only | 2,435 |
+| Both | 1,234 |
+| Same article / structural | 929 |
+| Adjacent | 243 |
+| Structural only | 79 |
 | Self-neighbors | 0 |
 
-Only 19.2% of diagnostic rows occur in both source rankings. BM25 and dense retrieval
+Only 20.5% of diagnostic rows occur in both source rankings. BM25 and dense retrieval
 therefore contribute meaningfully different candidate neighborhoods. Same-article
-neighbors account for 15.9% of rows and are useful collision candidates for
+neighbors account for 15.4% of rows and are useful collision candidates for
 testing whether a generated query is one-to-one with its target passage.
-All 200 diagnostic targets have at least one same-article corpus sibling.
+All 200 diagnostic targets have at least one adjacent same-article corpus sibling.
 
 ## Findings
 

@@ -12,7 +12,8 @@ import bm25s
 from bm25s.tokenization import Tokenizer
 
 
-TECHNICAL_TOKEN_PATTERN = r"(?u)[\w][\w.+#-]*"
+TECHNICAL_TOKEN_PATTERN = r"(?u)[\w](?:[\w+#]|[.-](?=[\w]))*"
+BM25_INDEX_VERSION = 2
 RUSSIAN_STOPWORDS = (
     "а",
     "без",
@@ -109,7 +110,7 @@ class BM25Index:
             (temporary / "retrieval_config.json").write_text(
                 json.dumps(
                     {
-                        "version": 1,
+                        "version": BM25_INDEX_VERSION,
                         "method": "lucene",
                         "k1": 1.2,
                         "b": 0.75,
@@ -179,4 +180,4 @@ class BM25Index:
         return output
 
 
-__all__ = ["BM25Index", "RUSSIAN_STOPWORDS", "SearchHit", "TECHNICAL_TOKEN_PATTERN"]
+__all__ = ["BM25_INDEX_VERSION", "BM25Index", "RUSSIAN_STOPWORDS", "SearchHit", "TECHNICAL_TOKEN_PATTERN"]

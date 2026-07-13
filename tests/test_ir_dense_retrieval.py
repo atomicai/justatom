@@ -33,6 +33,11 @@ class TieEncoder:
         return np.asarray([[1.0, 0.0] for _ in texts], dtype=np.float32)
 
 
+class RevisionedEncoder(TieEncoder):
+    model_name = "test/model-a"
+    model_revision = "revision-a"
+
+
 def sample_rows() -> list[tuple[str, str]]:
     return [("p1", "alpha"), ("p2", "beta"), ("p3", "alpha beta")]
 
@@ -149,3 +154,16 @@ def test_dense_load_rejects_corrupted_embeddings(tmp_path):
 
     with pytest.raises(ValueError, match="checksum"):
         DenseIndex.load(tmp_path / "dense")
+
+
+def test_dense_load_rejects_incompatible_encoder_identity(tmp_path):
+    DenseIndex.build(
+        rows=[("a", "one"), ("b", "two")],
+        output_dir=tmp_path / "dense",
+        encoder=RevisionedEncoder(),
+    )
+    incompatible = RevisionedEncoder()
+    incompatible.model_name = "test/model-b"
+
+    with pytest.raises(ValueError, match="model_name"):
+        DenseIndex.load(tmp_path / "dense", encoder=incompatible)

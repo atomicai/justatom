@@ -96,16 +96,17 @@ class HabrSource:
 
         candidates = parquet_files
         config = self.config.casefold()
-        if config != "default":
-            candidates = [
-                path
-                for path in candidates
-                if config in {part.casefold() for part in Path(path).parts[:-1]}
-            ]
-            if not candidates:
-                raise RuntimeError(
-                    f"No parquet files found for config {self.config!r} in dataset repo {self.repo_id!r}."
-                )
+        explicit_config_files = [
+            path
+            for path in candidates
+            if config in {part.casefold() for part in Path(path).parts[:-1]}
+        ]
+        if explicit_config_files:
+            candidates = explicit_config_files
+        elif config != "default":
+            raise RuntimeError(
+                f"No parquet files found for config {self.config!r} in dataset repo {self.repo_id!r}."
+            )
 
         split = self.split.casefold()
         matching = []

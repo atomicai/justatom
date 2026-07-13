@@ -116,14 +116,34 @@ def include_structural_neighbors(
 def select_query_passages(frame: pl.DataFrame, count: int) -> pl.DataFrame:
     if count <= 0:
         raise ValueError("query passage count must be > 0")
-    eligible_articles = (
-        frame.group_by("article_id")
-        .len(name="article_passages")
-        .filter(pl.col("article_passages") >= 2)
-        .select("article_id")
+    query_rows = frame.select(
+        "article_id",
+        pl.col("passage_id").alias("query_id"),
+        pl.col("start_unit").alias("query_start"),
+        pl.col("end_unit").alias("query_end"),
+    )
+    candidate_rows = frame.select(
+        "article_id",
+        pl.col("passage_id").alias("candidate_id"),
+        pl.col("start_unit").alias("candidate_start"),
+        pl.col("end_unit").alias("candidate_end"),
+    )
+    eligible_query_ids = (
+        query_rows.join(candidate_rows, on="article_id", how="inner")
+        .filter(pl.col("query_id") != pl.col("candidate_id"))
+        .filter(
+            pl.max_horizontal(
+                pl.col("query_start") - pl.col("candidate_end"),
+                pl.col("candidate_start") - pl.col("query_end"),
+                pl.lit(0),
+            )
+            <= 1
+        )
+        .select(pl.col("query_id").alias("passage_id"))
+        .unique()
     )
     return (
-        frame.join(eligible_articles, on="article_id", how="semi")
+        frame.join(eligible_query_ids, on="passage_id", how="semi")
         .sort("corpus_rank")
         .head(count)
     )

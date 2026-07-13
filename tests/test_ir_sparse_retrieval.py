@@ -72,3 +72,4 @@ def test_bm25_does_not_attach_sentence_punctuation_to_terms(tmp_path):
     hits = index.search(["docker"], k=2)[0]
 
     assert hits[0].passage_id == "p-docker"
+    assert hits[0].score > 0.0

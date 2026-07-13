@@ -25,7 +25,7 @@ from justatom.tooling.ir_dataset.neighbors import (
     merge_neighbors,
 )
 from justatom.tooling.ir_dataset.source import HabrSource, promote_hf_token_env
-from justatom.tooling.ir_dataset.sparse import BM25Index
+from justatom.tooling.ir_dataset.sparse import BM25_INDEX_VERSION, BM25Index, TECHNICAL_TOKEN_PATTERN
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +187,8 @@ def _embed_fingerprint(config: IRDatasetConfig, prepare_fingerprint: str) -> str
         "model_name": config.retrieval.model_name,
         "model_revision": config.retrieval.model_revision,
         "batch_size": config.retrieval.batch_size,
+        "bm25_index_version": BM25_INDEX_VERSION,
+        "bm25_token_pattern": TECHNICAL_TOKEN_PATTERN,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

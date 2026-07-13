@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+from justatom.api import ir_dataset as ir_dataset_module
 from justatom.api.ir_dataset import _embed_fingerprint, embed_stage, inspect_stage, load_ir_dataset_config, parse_cli
 from justatom.tooling.ir_dataset.artifacts import PrepareSummary
 from justatom.tooling.ir_dataset.dense import DenseIndex, DenseSearchHit
@@ -104,6 +105,14 @@ def test_embed_fingerprint_changes_with_model_revision():
     assert _embed_fingerprint(config, "prepare-v1") != _embed_fingerprint(changed, "prepare-v1")
 
 
+def test_embed_fingerprint_includes_bm25_tokenizer_contract(monkeypatch):
+    config = load_ir_dataset_config(CONFIG_PATH)
+    original = _embed_fingerprint(config, "prepare-v1")
+    monkeypatch.setattr(ir_dataset_module, "TECHNICAL_TOKEN_PATTERN", "changed-pattern")
+
+    assert _embed_fingerprint(config, "prepare-v1") != original
+
+
 def test_embed_stage_rebuilds_when_dense_index_digest_changes(tmp_path):
     config = load_ir_dataset_config(
         CONFIG_PATH,
@@ -178,12 +187,14 @@ def test_structural_neighbors_are_guaranteed_beyond_rrf_limit():
     assert len({row.candidate_id for row in rows}) == 3
 
 
-def test_query_sampler_excludes_articles_without_a_corpus_sibling():
+def test_query_sampler_requires_an_adjacent_corpus_sibling():
     frame = pl.DataFrame(
         [
-            {"corpus_rank": 0, "passage_id": "single", "article_id": "a"},
-            {"corpus_rank": 1, "passage_id": "first", "article_id": "b"},
-            {"corpus_rank": 2, "passage_id": "second", "article_id": "b"},
+            {"corpus_rank": 0, "passage_id": "single", "article_id": "a", "start_unit": 0, "end_unit": 1},
+            {"corpus_rank": 1, "passage_id": "far-1", "article_id": "b", "start_unit": 0, "end_unit": 1},
+            {"corpus_rank": 2, "passage_id": "far-2", "article_id": "b", "start_unit": 10, "end_unit": 11},
+            {"corpus_rank": 3, "passage_id": "first", "article_id": "c", "start_unit": 3, "end_unit": 5},
+            {"corpus_rank": 4, "passage_id": "second", "article_id": "c", "start_unit": 6, "end_unit": 8},
         ]
     )
 

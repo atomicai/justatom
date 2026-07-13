@@ -142,6 +142,17 @@ def test_source_filters_non_default_config_paths(monkeypatch):
     assert source._matching_parquet_files() == ["special/train-00000.parquet"]
 
 
+def test_source_filters_explicit_default_config_paths(monkeypatch):
+    source = HabrSource(repo_id="example/multi-config", config="default", split="train")
+    monkeypatch.setattr(
+        source,
+        "_repo_files",
+        lambda: ["default/train-00000.parquet", "special/train-00000.parquet"],
+    )
+
+    assert source._matching_parquet_files() == ["default/train-00000.parquet"]
+
+
 def test_hf_api_key_is_promoted_for_transformers_hub_calls(monkeypatch):
     for name in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_HUB_TOKEN", "HF_API_KEY"):
         monkeypatch.delenv(name, raising=False)

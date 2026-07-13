@@ -224,6 +224,12 @@ class DenseIndex:
         passage_ids = json.loads(passage_ids_path.read_text(encoding="utf-8"))
         if len(passage_ids) != int(metadata["count"]):
             raise ValueError("Dense passage ID count does not match metadata")
+        if encoder is not None:
+            for field, attribute in (("model_name", "model_name"), ("model_revision", "model_revision")):
+                expected = str(metadata.get(field, "unknown"))
+                actual = str(getattr(encoder, attribute, "unknown"))
+                if expected != "unknown" and actual != "unknown" and expected != actual:
+                    raise ValueError(f"Dense encoder {field} mismatch: index={expected!r}, encoder={actual!r}")
         return cls(
             output_dir=output_dir,
             passage_ids=passage_ids,
