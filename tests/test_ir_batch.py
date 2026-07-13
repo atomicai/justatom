@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from justatom.tooling.ir_dataset import batch as batch_module
 from justatom.tooling.ir_dataset.batch import (
     collect_completed_shards,
     prepare_generation_batches,
@@ -13,6 +14,9 @@ from justatom.tooling.ir_dataset.batch import (
     write_batch_shards,
 )
 from justatom.tooling.ir_dataset.generation import GeneratorConfig
+
+
+SOURCE_CORPUS_FINGERPRINT = "bb6ad903b82c337a61cce2b1cd5bf5dd7e3303b6b3263258979372c00e40c3c9"
 
 
 def request(index: int) -> dict[str, object]:
@@ -60,6 +64,11 @@ class FakeObject:
     status: str = "completed"
     output_file_id: str | None = None
     error_file_id: str | None = None
+    filename: str | None = None
+    bytes: int | None = None
+    input_file_id: str | None = None
+    metadata: dict[str, str] | None = None
+    errors: object | None = None
 
 
 class FakeFiles:
@@ -68,8 +77,14 @@ class FakeFiles:
 
     def create(self, *, file, purpose: str):
         assert purpose == "batch"
-        self.owner.uploads.append((Path(file.name).name, file.read()))
-        return FakeObject(id=f"file-{len(self.owner.uploads)}")
+        name, content = Path(file.name).name, file.read()
+        self.owner.uploads.append((name, content))
+        item = FakeObject(id=f"file-{len(self.owner.uploads)}", filename=name, bytes=len(content))
+        self.owner.file_objects.append(item)
+        return item
+
+    def list(self, **_kwargs):
+        return self.owner.file_objects
 
     def content(self, file_id: str):
         self.owner.downloads.append(file_id)
@@ -80,11 +95,20 @@ class FakeBatches:
     def __init__(self, owner: "FakeOpenAI") -> None:
         self.owner = owner
 
-    def create(self, *, input_file_id: str, endpoint: str, completion_window: str):
+    def create(self, *, input_file_id: str, endpoint: str, completion_window: str, metadata: dict[str, str]):
         assert endpoint == "/v1/responses"
         assert completion_window == "24h"
         self.owner.creates.append(input_file_id)
-        return FakeObject(id=f"batch-{len(self.owner.creates)}")
+        item = FakeObject(
+            id=f"batch-{len(self.owner.creates)}",
+            input_file_id=input_file_id,
+            metadata=metadata,
+        )
+        self.owner.batch_objects[item.id] = item
+        return item
+
+    def list(self, **_kwargs):
+        return list(self.owner.batch_objects.values())
 
     def retrieve(self, batch_id: str):
         self.owner.retrieves.append(batch_id)
@@ -94,6 +118,7 @@ class FakeBatches:
 class FakeOpenAI:
     def __init__(self) -> None:
         self.uploads: list[tuple[str, bytes]] = []
+        self.file_objects: list[FakeObject] = []
         self.creates: list[str] = []
         self.retrieves: list[str] = []
         self.downloads: list[str] = []
@@ -119,8 +144,17 @@ def test_shards_reject_duplicate_custom_ids(tmp_path: Path):
         write_batch_shards(duplicate, tmp_path)
 
 
+def test_prepare_rejects_a_generation_run_from_an_unapproved_source_corpus(tmp_path: Path):
+    row = target()
+
+    with pytest.raises(ValueError, match="source corpus manifest fingerprint"):
+        prepare_generation_batches([row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint="different-corpus")
+
+
 def test_submit_is_idempotent(tmp_path: Path):
-    state = prepare_generation_batches([target()], context(target()), GeneratorConfig(model="test-model"), tmp_path)
+    state = prepare_generation_batches(
+        [target()], context(target()), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
     client = FakeOpenAI()
 
     first = submit_pending_shards(state, client, tmp_path)
@@ -137,7 +171,9 @@ def test_submit_is_idempotent(tmp_path: Path):
 
 
 def test_submit_refuses_a_request_checksum_mismatch(tmp_path: Path):
-    state = prepare_generation_batches([target()], context(target()), GeneratorConfig(model="test-model"), tmp_path)
+    state = prepare_generation_batches(
+        [target()], context(target()), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
     request_path = tmp_path / state["shards"][0]["request_path"]
     request_path.write_text("{}\n", encoding="utf-8")
 
@@ -147,7 +183,9 @@ def test_submit_refuses_a_request_checksum_mismatch(tmp_path: Path):
 
 def test_collection_accepts_only_http_200_strict_output_text_and_keeps_rejections(tmp_path: Path):
     row = target()
-    state = prepare_generation_batches([row], context(row), GeneratorConfig(model="test-model"), tmp_path)
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
     client = FakeOpenAI()
     submitted = submit_pending_shards(state, client, tmp_path)
     custom_id = submitted["shards"][0]["custom_ids"][0]
@@ -161,7 +199,9 @@ def test_collection_accepts_only_http_200_strict_output_text_and_keeps_rejection
         "actual_intent": "how_to",
         "disambiguators": ["Redis", "production"],
     }
-    client.batch_objects["batch-1"] = FakeObject(id="batch-1", output_file_id="output-1", error_file_id="error-1")
+    client.batch_objects["batch-1"] = FakeObject(
+        id="batch-1", output_file_id="output-1", error_file_id="error-1", errors={"data": [{"code": "batch_error"}]}
+    )
     client.file_contents["output-1"] = (
         "\n".join(
             (
@@ -186,9 +226,161 @@ def test_collection_accepts_only_http_200_strict_output_text_and_keeps_rejection
     collected = collect_completed_shards(submitted, client, tmp_path)
 
     records = [json.loads(line) for line in (tmp_path / "generation_collected.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert collected["counts"] == {"accepted": 1, "rejected": 2}
-    assert records[0]["status"] == "accepted"
-    assert records[0]["output"] == output
-    assert {record["reason"] for record in records[1:]} == {"unknown_custom_id", "malformed_batch_row"}
+    assert collected["counts"] == {"accepted": 1, "rejected": 3}
+    accepted = [record for record in records if record["status"] == "accepted"]
+    assert accepted[0]["output"] == output
+    assert {record["reason"] for record in records if record["status"] == "rejected"} == {
+        "unknown_custom_id",
+        "malformed_batch_row",
+        "top_level_batch_error",
+    }
+    assert collected["shards"][0]["batch_errors"] == {"data": [{"code": "batch_error"}]}
     assert client.downloads == ["output-1", "error-1"]
-    assert collect_completed_shards(collected, FakeOpenAI(), tmp_path) == collected
+    assert collect_completed_shards(collected, client, tmp_path) == collected
+    assert client.downloads == ["output-1", "error-1"]
+
+
+@pytest.mark.parametrize("failed_field", ("input_file_id", "batch_id"))
+def test_submit_reconciles_remote_success_after_local_state_persistence_failure(tmp_path: Path, monkeypatch, failed_field: str):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    client = FakeOpenAI()
+    persist = batch_module._persist_state
+
+    def fail_after_remote(value, output_dir):
+        if value["shards"][0].get(failed_field):
+            raise OSError("simulated local state persistence failure")
+        return persist(value, output_dir)
+
+    monkeypatch.setattr(batch_module, "_persist_state", fail_after_remote)
+    with pytest.raises(OSError, match="simulated"):
+        submit_pending_shards(state, client, tmp_path)
+    monkeypatch.setattr(batch_module, "_persist_state", persist)
+
+    retried_state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    retried = submit_pending_shards(retried_state, client, tmp_path)
+
+    assert len(client.uploads) == 1
+    assert len(client.creates) == 1
+    assert retried["shards"][0]["input_file_id"] == "file-1"
+    assert retried["shards"][0]["batch_id"] == "batch-1"
+
+
+@pytest.mark.parametrize("status,output_file_id,error_file_id", (("in_progress", None, None), ("completed", "output-1", None)))
+def test_collection_requires_every_shard_to_finish_with_both_artifacts(
+    tmp_path: Path, status: str, output_file_id: str | None, error_file_id: str | None
+):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    client = FakeOpenAI()
+    submitted = submit_pending_shards(state, client, tmp_path)
+    client.batch_objects["batch-1"] = FakeObject(
+        id="batch-1", status=status, output_file_id=output_file_id, error_file_id=error_file_id
+    )
+
+    with pytest.raises(ValueError, match="collection is not ready"):
+        collect_completed_shards(submitted, client, tmp_path)
+
+    assert not (tmp_path / "generation_collected.jsonl").exists()
+
+
+def test_collection_enforces_per_shard_unique_complete_mapping_and_preserves_error_rows(tmp_path: Path):
+    rows = [target(index) for index in range(3)]
+    contexts = [item for row in rows for item in context(row)]
+    state = prepare_generation_batches(
+        rows,
+        contexts,
+        GeneratorConfig(max_requests_per_shard=1),
+        tmp_path,
+        source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT,
+    )
+    client = FakeOpenAI()
+    submitted = submit_pending_shards(state, client, tmp_path)
+    custom_ids = [shard["custom_ids"][0] for shard in submitted["shards"]]
+    output = {
+        "usable": True,
+        "reason": "ok",
+        "query": "Как Redis повторяет запросы после сетевой ошибки в production режиме?",
+        "answer": "Redis повторяет запросы после сетевой ошибки.",
+        "evidence": "Redis повторяет запросы после сетевой ошибки",
+        "requested_intent": "how_to",
+        "actual_intent": "how_to",
+        "disambiguators": ["Redis", "production"],
+    }
+
+    def response(custom_id: str):
+        return {"custom_id": custom_id, "response": {"status_code": 200, "body": {"output_text": json.dumps(output)}}}
+
+    for index, shard in enumerate(submitted["shards"], start=1):
+        client.batch_objects[f"batch-{index}"] = FakeObject(
+            id=f"batch-{index}", output_file_id=f"output-{index}", error_file_id=f"error-{index}"
+        )
+    client.file_contents["output-1"] = "\n".join((json.dumps(response(custom_ids[0])), json.dumps(response(custom_ids[0]))))
+    client.file_contents["error-1"] = json.dumps({"custom_id": custom_ids[0], "error": {"code": "diagnostic"}})
+    client.file_contents["output-2"] = "\n".join((json.dumps(response(custom_ids[0])), json.dumps(response(custom_ids[1]))))
+    client.file_contents["error-2"] = json.dumps({"custom_id": custom_ids[1], "error": {"code": "diagnostic"}})
+    client.file_contents["output-3"] = json.dumps(response("unknown"))
+    client.file_contents["error-3"] = "\n"
+
+    collected = collect_completed_shards(submitted, client, tmp_path)
+    records = [json.loads(line) for line in (tmp_path / "generation_collected.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    assert not any(record["status"] == "accepted" and record.get("custom_id") == custom_ids[0] for record in records)
+    assert any(record["reason"] == "duplicate_custom_id" and record.get("custom_id") == custom_ids[0] for record in records)
+    assert any(record["reason"] == "cross_shard_custom_id" and record.get("custom_id") == custom_ids[0] for record in records)
+    assert any(record.get("reason") == "missing_custom_id" and record.get("custom_id") == custom_ids[2] for record in records)
+    assert any(record["status"] == "accepted" and record.get("custom_id") == custom_ids[1] for record in records)
+    assert any(record["reason"] == "batch_error_row" and record.get("custom_id") == custom_ids[1] for record in records)
+    assert collected["shards"][0]["output_sha256"]
+    assert collected["shards"][0]["error_sha256"]
+
+
+def test_collection_persists_downloaded_artifacts_before_final_collection_write(tmp_path: Path, monkeypatch):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    client = FakeOpenAI()
+    submitted = submit_pending_shards(state, client, tmp_path)
+    custom_id = submitted["shards"][0]["custom_ids"][0]
+    output = {
+        "usable": False,
+        "reason": "insufficient_context",
+        "query": "",
+        "answer": "",
+        "evidence": "",
+        "requested_intent": "how_to",
+        "actual_intent": "how_to",
+        "disambiguators": [],
+    }
+    client.batch_objects["batch-1"] = FakeObject(id="batch-1", output_file_id="output-1", error_file_id="error-1")
+    client.file_contents["output-1"] = json.dumps(
+        {"custom_id": custom_id, "response": {"status_code": 200, "body": {"output_text": json.dumps(output)}}}
+    )
+    client.file_contents["error-1"] = ""
+    write = batch_module._write_bytes_atomic
+
+    def fail_final_write(path, value):
+        if path.name == "generation_collected.jsonl":
+            raise OSError("simulated final collection write failure")
+        return write(path, value)
+
+    monkeypatch.setattr(batch_module, "_write_bytes_atomic", fail_final_write)
+    with pytest.raises(OSError, match="simulated"):
+        collect_completed_shards(submitted, client, tmp_path)
+    persisted = json.loads((tmp_path / "generation_state.json").read_text(encoding="utf-8"))
+    assert persisted["shards"][0]["output_sha256"]
+    assert persisted["shards"][0]["error_sha256"]
+
+    monkeypatch.setattr(batch_module, "_write_bytes_atomic", write)
+    resumed = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    assert collect_completed_shards(resumed, client, tmp_path)["counts"] == {"accepted": 1, "rejected": 0}
+    assert client.downloads == ["output-1", "error-1"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -7,7 +8,15 @@ import numpy as np
 import polars as pl
 
 from justatom.api import ir_dataset as ir_dataset_module
-from justatom.api.ir_dataset import _embed_fingerprint, embed_stage, inspect_stage, load_ir_dataset_config, parse_cli
+from justatom.api.ir_dataset import (
+    _embed_fingerprint,
+    embed_stage,
+    inspect_stage,
+    load_ir_dataset_config,
+    parse_cli,
+    prepare_generation_stage,
+)
+from justatom.tooling.ir_dataset.batch import REQUIRED_SOURCE_CORPUS_FINGERPRINT
 from justatom.tooling.ir_dataset.artifacts import PrepareSummary
 from justatom.tooling.ir_dataset.dense import DenseIndex, DenseSearchHit
 from justatom.tooling.ir_dataset.neighbors import include_structural_neighbors, merge_neighbors, select_query_passages
@@ -76,6 +85,8 @@ def test_checked_in_config_resolves_local_defaults():
     assert config.preparation.max_passages == 100_000
     assert config.retrieval.bm25_k == 20
     assert config.retrieval.dense_k == 20
+    assert config.generation.max_shard_bytes == 100_000_000
+    assert config.output.generation_root == Path(".tmp_runs/datasets/habr-ir/generation-v1")
 
 
 def test_dotted_cli_overrides_are_typed(tmp_path):
@@ -111,6 +122,41 @@ def test_cli_accepts_resumable_generation_stages(tmp_path):
 
     assert [item.stage for item in parsed] == list(stages)
     assert all(item.config.generation.model == "gpt-5.6-terra" for item in parsed)
+
+
+def test_prepare_generation_reads_existing_generation_workspace_artifacts(tmp_path, monkeypatch):
+    source_root = tmp_path / "local-100k"
+    generation_root = tmp_path / "generation-v1"
+    source_root.mkdir()
+    generation_root.mkdir()
+    (source_root / "manifest.json").write_text(json.dumps({"fingerprint": REQUIRED_SOURCE_CORPUS_FINGERPRINT}), encoding="utf-8")
+    pl.DataFrame({"passage_id": ["source-passage"]}).write_parquet(source_root / "passages.parquet")
+    pl.DataFrame({"passage_id": ["pilot-target"]}).write_parquet(generation_root / "targets.parquet")
+    pl.DataFrame({"target_passage_id": ["pilot-target"], "context_index": [0]}).write_parquet(
+        generation_root / "generation_context.parquet"
+    )
+    captured = {}
+
+    def prepare(targets, generation_context, config, output_dir, *, source_corpus_fingerprint):
+        captured.update(
+            targets=targets.to_dicts(),
+            context=generation_context.to_dicts(),
+            output_dir=output_dir,
+            source_corpus_fingerprint=source_corpus_fingerprint,
+        )
+        return {"prepared": 1}
+
+    monkeypatch.setattr(ir_dataset_module, "prepare_generation_batches", prepare)
+    config = load_ir_dataset_config(
+        CONFIG_PATH,
+        overrides={"output": {"root": str(source_root), "generation_root": str(generation_root)}},
+    )
+
+    assert prepare_generation_stage(config) == {"prepared": 1}
+    assert captured["targets"] == [{"passage_id": "pilot-target"}]
+    assert captured["context"] == [{"target_passage_id": "pilot-target", "context_index": 0}]
+    assert captured["output_dir"] == generation_root
+    assert captured["source_corpus_fingerprint"] == REQUIRED_SOURCE_CORPUS_FINGERPRINT
 
 
 def test_embed_fingerprint_changes_with_model_revision():

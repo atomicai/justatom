@@ -101,6 +101,10 @@ def test_full_checked_in_generation_mapping_is_accepted_without_relaxing_shard_l
     assert result.accepted
     with pytest.raises(ValueError, match="max_requests_per_shard"):
         GeneratorConfig(max_requests_per_shard=1_001)
+    with pytest.raises(ValueError, match="generation.model"):
+        GeneratorConfig(model="different-model")
+    with pytest.raises(ValueError, match="max_shard_bytes"):
+        GeneratorConfig(max_shard_bytes=100_000_001)
 
 
 def test_schema_requires_every_output_field_and_disallows_unknown_properties():

@@ -125,11 +125,11 @@ class GeneratorConfig:
     attempt: int = 1
     accepted_max_tokens: int = 504
     max_requests_per_shard: int = 1_000
-    max_shard_bytes: int = 100 * 1024 * 1024
+    max_shard_bytes: int = 100_000_000
 
     def __post_init__(self) -> None:
-        if not self.model:
-            raise ValueError("generation.model must not be empty")
+        if self.model != "gpt-5.6-terra":
+            raise ValueError("generation.model must be gpt-5.6-terra")
         if self.reasoning_effort != "low":
             raise ValueError("generation.reasoning_effort must be low")
         if self.attempt < 1:
@@ -142,8 +142,8 @@ class GeneratorConfig:
             raise ValueError("generation.max_requests_per_shard must be within [1, 1000]")
         if not isinstance(self.max_shard_bytes, int) or isinstance(self.max_shard_bytes, bool):
             raise ValueError("generation.max_shard_bytes must be an integer")
-        if not 1 <= self.max_shard_bytes <= 100 * 1024 * 1024:
-            raise ValueError("generation.max_shard_bytes must be within [1, 104857600]")
+        if not 1 <= self.max_shard_bytes <= 100_000_000:
+            raise ValueError("generation.max_shard_bytes must be within [1, 100000000]")
 
 
 @dataclass(frozen=True, slots=True)

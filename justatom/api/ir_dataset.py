@@ -17,6 +17,7 @@ from dotenv import find_dotenv, load_dotenv
 from justatom.configuring.scenarios import deep_merge, parse_unknown_overrides
 from justatom.tooling.ir_dataset.artifacts import PrepareConfig, PrepareSummary, prepare_passages
 from justatom.tooling.ir_dataset.batch import (
+    REQUIRED_SOURCE_CORPUS_FINGERPRINT,
     collect_completed_shards,
     prepare_generation_batches,
     refresh_batch_status,
@@ -76,6 +77,7 @@ class RetrievalConfig:
 @dataclass(frozen=True, slots=True)
 class OutputConfig:
     root: Path = Path(".tmp_runs/datasets/habr-ir/local-100k")
+    generation_root: Path = Path(".tmp_runs/datasets/habr-ir/generation-v1")
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +132,8 @@ def load_ir_dataset_config(
         source_values["cache_dir"] = Path(source_values["cache_dir"])
     if output_values.get("root") is not None:
         output_values["root"] = Path(output_values["root"])
+    if output_values.get("generation_root") is not None:
+        output_values["generation_root"] = Path(output_values["generation_root"])
     return IRDatasetConfig(
         source=_build_dataclass(SourceConfig, source_values),
         chunking=_build_dataclass(ChunkingConfig, raw.get("chunking")),
@@ -314,27 +318,42 @@ def select_targets_stage(config: IRDatasetConfig) -> pl.DataFrame:
         raise FileNotFoundError(f"Passage artifact does not exist: {passages_path}")
     return select_target_slots(
         pl.read_parquet(passages_path),
-        TargetSelectionConfig(output_dir=config.output.root),
+        TargetSelectionConfig(output_dir=config.output.generation_root),
     )
 
 
+def _source_corpus_manifest_fingerprint(root: Path) -> str:
+    manifest_path = root / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Source corpus manifest does not exist: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid source corpus manifest: {manifest_path}") from exc
+    fingerprint = manifest.get("fingerprint") if isinstance(manifest, dict) else None
+    if fingerprint != REQUIRED_SOURCE_CORPUS_FINGERPRINT:
+        raise ValueError("source corpus manifest fingerprint does not match the required Habr corpus")
+    return fingerprint
+
+
 def prepare_generation_stage(config: IRDatasetConfig) -> dict[str, Any]:
-    root = config.output.root
-    targets_path = root / "targets.parquet"
-    passages_path = root / "passages.parquet"
+    source_root = config.output.root
+    generation_root = config.output.generation_root
+    targets_path = generation_root / "targets.parquet"
+    passages_path = source_root / "passages.parquet"
     if not targets_path.exists():
         raise FileNotFoundError(f"Target artifact does not exist: {targets_path}")
     if not passages_path.exists():
         raise FileNotFoundError(f"Passage artifact does not exist: {passages_path}")
-    context_path = root / "generation_context.parquet"
+    context_path = generation_root / "generation_context.parquet"
     if context_path.exists():
         generation_context = pl.read_parquet(context_path)
     else:
         generation_context = build_generation_context(
             pl.read_parquet(targets_path),
             pl.read_parquet(passages_path),
-            BM25Index.load(root / "bm25", mmap=True),
-            DenseIndex.load(root / "dense"),
+            BM25Index.load(source_root / "bm25", mmap=True),
+            DenseIndex.load(source_root / "dense"),
             GenerationContextConfig(
                 bm25_k=config.retrieval.bm25_k,
                 dense_k=config.retrieval.dense_k,
@@ -342,14 +361,20 @@ def prepare_generation_stage(config: IRDatasetConfig) -> dict[str, Any]:
                 rrf_k=config.retrieval.rrf_k,
                 dense_block_size=config.retrieval.dense_block_size,
                 device=config.retrieval.device,
-                output_dir=root,
+                output_dir=generation_root,
             ),
         )
-    return prepare_generation_batches(pl.read_parquet(targets_path), generation_context, config.generation, root)
+    return prepare_generation_batches(
+        pl.read_parquet(targets_path),
+        generation_context,
+        config.generation,
+        generation_root,
+        source_corpus_fingerprint=_source_corpus_manifest_fingerprint(source_root),
+    )
 
 
 def _generation_state(config: IRDatasetConfig) -> dict[str, Any]:
-    path = config.output.root / "generation_state.json"
+    path = config.output.generation_root / "generation_state.json"
     if not path.exists():
         raise FileNotFoundError(f"Generation batch state does not exist: {path}")
     try:
@@ -471,11 +496,17 @@ def main(argv: list[str] | None = None) -> int:
     elif parsed.stage == "prepare-generation":
         result = prepare_generation_stage(parsed.config)
     elif parsed.stage == "submit-generation":
-        result = submit_pending_shards(_generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.root)
+        result = submit_pending_shards(
+            _generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.generation_root
+        )
     elif parsed.stage == "generation-status":
-        result = refresh_batch_status(_generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.root)
+        result = refresh_batch_status(
+            _generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.generation_root
+        )
     else:
-        result = collect_completed_shards(_generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.root)
+        result = collect_completed_shards(
+            _generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.generation_root
+        )
     print(json.dumps(_summary_payload(result), ensure_ascii=False, indent=2, default=str))
     return 0
 
