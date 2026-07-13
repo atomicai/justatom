@@ -135,6 +135,19 @@ class BM25Index:
     def load(cls, output_dir: Path, mmap: bool = True) -> "BM25Index":
         output_dir = Path(output_dir)
         passage_ids = json.loads((output_dir / "passage_ids.json").read_text(encoding="utf-8"))
+        config = json.loads((output_dir / "retrieval_config.json").read_text(encoding="utf-8"))
+        expected = {
+            "version": BM25_INDEX_VERSION,
+            "token_pattern": TECHNICAL_TOKEN_PATTERN,
+            "count": len(passage_ids),
+        }
+        mismatches = [
+            f"{field}: persisted={config.get(field)!r}, expected={value!r}"
+            for field, value in expected.items()
+            if config.get(field) != value
+        ]
+        if mismatches:
+            raise ValueError("BM25 index contract mismatch; rebuild the index (" + "; ".join(mismatches) + ")")
         tokenizer = Tokenizer(
             lower=True,
             splitter=TECHNICAL_TOKEN_PATTERN,

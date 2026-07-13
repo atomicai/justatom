@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from justatom.tooling.ir_dataset.sparse import BM25Index
 
 
@@ -73,3 +77,19 @@ def test_bm25_does_not_attach_sentence_punctuation_to_terms(tmp_path):
 
     assert hits[0].passage_id == "p-docker"
     assert hits[0].score > 0.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("version", 1), ("token_pattern", "legacy-pattern"), ("count", 99)],
+)
+def test_bm25_load_rejects_incompatible_persisted_contract(tmp_path, field, value):
+    output_dir = tmp_path / "bm25"
+    BM25Index.build(sample_rows(), output_dir)
+    config_path = output_dir / "retrieval_config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config[field] = value
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="BM25 index"):
+        BM25Index.load(output_dir)
