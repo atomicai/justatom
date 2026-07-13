@@ -34,5 +34,11 @@ retrieval:
   rrf_k: 60
   query_passages: 200
 
+generation:
+  model: gpt-5.6-terra
+  reasoning_effort: low
+  max_requests_per_shard: 1000
+  max_shard_bytes: 104857600
+
 output:
   root: .tmp_runs/datasets/habr-ir/local-100k
