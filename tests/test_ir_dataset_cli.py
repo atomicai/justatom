@@ -9,7 +9,7 @@ import polars as pl
 from justatom.api.ir_dataset import _embed_fingerprint, embed_stage, inspect_stage, load_ir_dataset_config, parse_cli
 from justatom.tooling.ir_dataset.artifacts import PrepareSummary
 from justatom.tooling.ir_dataset.dense import DenseIndex, DenseSearchHit
-from justatom.tooling.ir_dataset.neighbors import include_structural_neighbors, merge_neighbors
+from justatom.tooling.ir_dataset.neighbors import include_structural_neighbors, merge_neighbors, select_query_passages
 from justatom.tooling.ir_dataset.sparse import BM25Index, SearchHit
 
 
@@ -176,6 +176,20 @@ def test_structural_neighbors_are_guaranteed_beyond_rrf_limit():
     assert rows[1].structural_rank == 1
     assert rows[1].adjacent is True
     assert len({row.candidate_id for row in rows}) == 3
+
+
+def test_query_sampler_excludes_articles_without_a_corpus_sibling():
+    frame = pl.DataFrame(
+        [
+            {"corpus_rank": 0, "passage_id": "single", "article_id": "a"},
+            {"corpus_rank": 1, "passage_id": "first", "article_id": "b"},
+            {"corpus_rank": 2, "passage_id": "second", "article_id": "b"},
+        ]
+    )
+
+    selected = select_query_passages(frame, count=2)
+
+    assert selected["passage_id"].to_list() == ["first", "second"]
 
 
 def test_inspect_can_select_one_query_passage(tmp_path):

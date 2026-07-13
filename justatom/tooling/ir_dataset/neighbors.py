@@ -113,6 +113,22 @@ def include_structural_neighbors(
     return output
 
 
+def select_query_passages(frame: pl.DataFrame, count: int) -> pl.DataFrame:
+    if count <= 0:
+        raise ValueError("query passage count must be > 0")
+    eligible_articles = (
+        frame.group_by("article_id")
+        .len(name="article_passages")
+        .filter(pl.col("article_passages") >= 2)
+        .select("article_id")
+    )
+    return (
+        frame.join(eligible_articles, on="article_id", how="semi")
+        .sort("corpus_rank")
+        .head(count)
+    )
+
+
 def build_neighbor_artifact(
     *,
     passages_path: Path,
@@ -122,8 +138,10 @@ def build_neighbor_artifact(
     config: NeighborBuildConfig,
 ) -> NeighborSummary:
     frame = pl.read_parquet(passages_path).sort("corpus_rank")
-    query_count = min(config.query_passages, frame.height)
-    queries = frame.head(query_count)
+    queries = select_query_passages(frame, config.query_passages)
+    query_count = queries.height
+    if query_count == 0:
+        raise RuntimeError("No passages with same-article corpus siblings are available for neighbor diagnostics")
     query_ids = queries["passage_id"].to_list()
     query_texts = queries["serialized_passage"].to_list()
     dense_indices = dense_index.indices_for_ids(query_ids)
@@ -236,4 +254,5 @@ __all__ = [
     "build_neighbor_artifact",
     "include_structural_neighbors",
     "merge_neighbors",
+    "select_query_passages",
 ]

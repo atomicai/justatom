@@ -7,7 +7,9 @@ Date: 2026-07-12
 This run validates the local corpus and retrieval foundation only. It does not
 yet contain generated queries, qrels, train/dev/test splits, or human labels.
 
-Source: private `justatom/habr-ds`, Russian articles, revision `main`.
+Source: private `justatom/habr-ds`, Russian articles, revision
+`2c6fddf3812055062ce7cd5b1d00e24a6fe5f427`. Dense model revision:
+`614241f622f53c4eeff9890bdc4f31cfecc418b3`.
 
 ## Reproduction
 
@@ -23,7 +25,7 @@ python -m justatom.api.ir_dataset \
 ```
 
 Preparation fingerprint:
-`15b15dc36245fc16b4ded82cc7d94d8d38932b0aa3a0dc8b4da028567f52652c`.
+`bb6ad903b82c337a61cce2b1cd5bf5dd7e3303b6b3263258979372c00e40c3c9`.
 A repeated `prepare` invocation returned `reused: true`.
 
 ## Corpus
@@ -31,35 +33,46 @@ A repeated `prepare` invocation returned `reused: true`.
 | Property | Value |
 | --- | ---: |
 | Passages | 100,000 |
-| Represented articles | 23,968 |
+| Represented articles | 24,226 |
 | Duplicate passage IDs | 0 |
 | Character range | 600-1,800 |
-| Character median / p95 | 1,301 / 1,780 |
+| Character median / p95 | 1,302 / 1,780 |
 | Token maximum | 504 |
-| Token median / p95 | 382 / 493 |
+| Token median / p95 | 384 / 494 |
 | Section character maximum | 240 |
 
-The pipeline took about 26 minutes on an M5 Max. Observed process RSS stayed
+The hardened pipeline took about 30 minutes on an M5 Max. Observed process RSS stayed
 below approximately 5.2 GB. Dense embeddings are normalized float32 vectors
 with shape `100000 x 384` (about 146.5 MiB).
 
+Artifact identities:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Passages | `603e1e89dc5bfa8966d6182eb2694278be35de69f856f23c9e866c5489ca5435` |
+| BM25 index | `6544610feb9d56f8d369e58becce804ce4b85e474a74c69909f4768e9e26fbe1` |
+| Dense index | `da31be52e382e9ec39dc9b58ee640ff4b747accebe5dd7999a502edd68c32ca4` |
+
 ## Retrieval Diagnostic
 
-The diagnostic artifact contains 200 deterministic passage queries and 5,966
+The diagnostic artifact contains 200 deterministic passage queries and 6,063
 RRF-union neighbors.
 
 | Contribution | Rows |
 | --- | ---: |
-| BM25 only | 2,288 |
-| Dense only | 2,451 |
-| Both | 1,227 |
-| Same article | 966 |
+| BM25 only | 2,314 |
+| Dense only | 2,481 |
+| Both | 1,163 |
+| Same article / structural | 964 |
+| Adjacent | 162 |
+| Structural only | 105 |
 | Self-neighbors | 0 |
 
-Only 20.6% of union rows occur in both source rankings. BM25 and dense retrieval
+Only 19.2% of diagnostic rows occur in both source rankings. BM25 and dense retrieval
 therefore contribute meaningfully different candidate neighborhoods. Same-article
-neighbors account for 16.2% of rows and are useful collision candidates for
+neighbors account for 15.9% of rows and are useful collision candidates for
 testing whether a generated query is one-to-one with its target passage.
+All 200 diagnostic targets have at least one same-article corpus sibling.
 
 ## Findings
 
@@ -72,6 +85,9 @@ testing whether a generated query is one-to-one with its target passage.
    distractors, but target passages need a separate deterministic quality gate.
 4. The hybrid neighborhood should be passed to the labeling stage so the model
    can avoid queries that also match a near-duplicate or sibling passage.
+5. Passage-level corpus capping can leave singleton articles in the distractor
+   corpus. The target sampler excludes them while retaining their passages as
+   legitimate retrieval distractors.
 
 ## Next Stage
 
