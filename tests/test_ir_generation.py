@@ -181,6 +181,21 @@ def test_gates_require_exact_evidence():
     assert "evidence_not_substring" in result.reason_codes
 
 
+def test_gates_do_not_normalize_newlines_when_matching_evidence():
+    target = slot(
+        content="Первая строка доказательства.\nВторая строка доказательства.",
+        serialized_passage="passage: Evidence\n\nПервая строка доказательства.\nВторая строка доказательства.",
+    )
+    result = validate_generator_result(
+        good_output(evidence="Первая строка доказательства. Вторая строка доказательства."),
+        target,
+        context(target),
+        config=config(),
+    )
+
+    assert "evidence_not_substring" in result.reason_codes
+
+
 def test_gates_treat_whitespace_only_fields_as_empty_and_evidence_as_ungrounded():
     result = validate_generator_result(
         good_output(query=" \t ", answer="\n", evidence="   "),

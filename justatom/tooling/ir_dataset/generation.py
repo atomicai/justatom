@@ -427,14 +427,15 @@ def validate_generator_result(
     for key, value in normalized_fields.items():
         if not value:
             reason_codes.append(f"empty_{key}")
-    normalized_content = _normalized_text(slot.get("content", ""))
     normalized_evidence = normalized_fields["evidence"]
-    if not normalized_evidence or normalized_evidence not in normalized_content:
+    raw_content = str(slot.get("content", ""))
+    raw_evidence = output["evidence"]
+    if not normalized_evidence or raw_evidence not in raw_content:
         reason_codes.append("evidence_not_substring")
     overlap_prefix_chars = slot.get("overlap_prefix_chars", 0)
     if isinstance(overlap_prefix_chars, int) and not isinstance(overlap_prefix_chars, bool) and overlap_prefix_chars > 0:
-        normalized_overlap = _normalized_text(str(slot.get("content", ""))[:overlap_prefix_chars])
-        if normalized_evidence and normalized_evidence in normalized_overlap:
+        raw_overlap = raw_content[:overlap_prefix_chars]
+        if normalized_evidence and raw_evidence in raw_overlap:
             reason_codes.append("evidence_overlap_only")
     query_words = output["query"].split()
     if not 5 <= len(query_words) <= 30:

@@ -14,6 +14,7 @@ from typing import Any
 
 import polars as pl
 
+from justatom.tooling.ir_dataset.artifacts import validate_bound_parquet_artifact
 from justatom.tooling.ir_dataset.generation import (
     GENERATOR_SCHEMA,
     GeneratorConfig,
@@ -229,17 +230,57 @@ def _validate_shard_checksum(shard: Mapping[str, Any], output_dir: str | Path) -
     return request_path
 
 
-def _validate_state_requests(state: Mapping[str, Any], output_dir: str | Path) -> None:
+def _request_custom_ids(path: Path) -> tuple[str, ...]:
+    custom_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for line_number, raw_line in enumerate(path.read_bytes().splitlines(), start=1):
+        try:
+            request = json.loads(raw_line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON in request shard {path} at line {line_number}") from exc
+        if not isinstance(request, Mapping):
+            raise ValueError(f"request shard row must be an object: {path}:{line_number}")
+        custom_id = request.get("custom_id")
+        if not isinstance(custom_id, str) or not custom_id:
+            raise ValueError(f"request shard row is missing custom_id: {path}:{line_number}")
+        if custom_id in seen_ids:
+            raise ValueError(f"duplicate custom_id in request shard {path}: {custom_id}")
+        seen_ids.add(custom_id)
+        custom_ids.append(custom_id)
+    if not custom_ids:
+        raise ValueError(f"request shard must not be empty: {path}")
+    return tuple(custom_ids)
+
+
+def _validate_state_requests(state: Mapping[str, Any], output_dir: str | Path) -> int:
     _validate_generation_inputs(state, output_dir)
     seen_ids: set[str] = set()
+    request_count = 0
     for shard in state.get("shards", []):
         if not isinstance(shard, Mapping):
             raise ValueError("invalid batch state shard")
-        _validate_shard_checksum(shard, output_dir)
-        for custom_id in shard.get("custom_ids", []):
-            if not isinstance(custom_id, str) or custom_id in seen_ids:
-                raise ValueError(f"duplicate custom_id in batch state: {custom_id}")
+        request_path = _validate_shard_checksum(shard, output_dir)
+        request_ids = _request_custom_ids(request_path)
+        declared_count = shard.get("request_count")
+        if not isinstance(declared_count, int) or isinstance(declared_count, bool) or declared_count != len(request_ids):
+            raise ValueError(
+                f"request_count {declared_count!r} does not match {len(request_ids)} checksummed JSONL rows: {request_path}"
+            )
+        declared_bytes = shard.get("request_bytes")
+        actual_bytes = request_path.stat().st_size
+        if not isinstance(declared_bytes, int) or isinstance(declared_bytes, bool) or declared_bytes != actual_bytes:
+            raise ValueError(f"request_bytes {declared_bytes!r} does not match {actual_bytes} checksummed bytes: {request_path}")
+        declared_ids = shard.get("custom_ids")
+        if not isinstance(declared_ids, list) or tuple(declared_ids) != request_ids:
+            raise ValueError(f"custom_ids do not match checksummed request shard rows: {request_path}")
+        for custom_id in request_ids:
+            if custom_id in seen_ids:
+                raise ValueError(f"duplicate custom_id across request shards: {custom_id}")
             seen_ids.add(custom_id)
+        request_count += len(request_ids)
+    if request_count == 0:
+        raise ValueError("batch state must contain at least one checksummed request row")
+    return request_count
 
 
 def _input_artifact_path(state: Mapping[str, Any], output_dir: str | Path, field: str, default: str) -> Path:
@@ -250,6 +291,54 @@ def _input_artifact_path(state: Mapping[str, Any], output_dir: str | Path, field
 
 def _validate_generation_inputs(state: Mapping[str, Any], output_dir: str | Path) -> None:
     root = Path(output_dir)
+    version = state.get("version")
+    if isinstance(version, int) and not isinstance(version, bool) and version >= 3:
+        source_fingerprint = state.get("source_corpus_fingerprint")
+        source_passages_sha256 = state.get("source_passages_sha256")
+        if not isinstance(source_fingerprint, str) or not source_fingerprint:
+            raise ValueError("v3 core binding requires source_corpus_fingerprint")
+        _require_sha256(source_passages_sha256, "v3 core binding source_passages_sha256")
+        for field, default, state_default, artifact_kind, label in (
+            ("targets", "targets.parquet", "targets_state.json", "targets", "targets"),
+            (
+                "generation_context",
+                "generation_context.parquet",
+                "generation_context_state.json",
+                "generation_context",
+                "generation context",
+            ),
+        ):
+            metadata = state.get(field)
+            if not isinstance(metadata, Mapping):
+                raise ValueError(f"v3 core binding requires {label} artifact metadata")
+            path_value = metadata.get("path")
+            checksum = metadata.get("sha256")
+            state_path_value = metadata.get("state_path")
+            state_checksum = metadata.get("state_sha256")
+            if path_value != default or state_path_value != state_default:
+                raise ValueError(f"v3 core binding requires fixed {label} artifact and sidecar paths")
+            _require_sha256(checksum, f"v3 core binding {label} artifact SHA-256")
+            _require_sha256(state_checksum, f"v3 core binding {label} sidecar SHA-256")
+            path = root / path_value
+            bound_state_path = root / state_path_value
+            if not path.exists() or _sha256_file(path) != checksum:
+                raise ValueError(f"{label} artifact checksum mismatch: {path}")
+            if not bound_state_path.exists() or _sha256_file(bound_state_path) != state_checksum:
+                raise ValueError(f"{label} artifact state checksum mismatch: {bound_state_path}")
+            try:
+                contract = validate_bound_parquet_artifact(path, bound_state_path, artifact_kind=artifact_kind)
+            except (FileNotFoundError, ValueError) as exc:
+                raise ValueError(f"v3 core binding has invalid {label} sidecar contract: {exc}") from exc
+            if (
+                contract.get("artifact_path") != path.name
+                or contract.get("artifact_sha256") != checksum
+                or contract.get("source_corpus_fingerprint") != source_fingerprint
+                or contract.get("passages_sha256") != source_passages_sha256
+                or not isinstance(contract.get("config"), Mapping)
+            ):
+                raise ValueError(f"v3 core binding mismatch in {label} sidecar contract")
+            _require_sha256(contract.get("upstream_sha256"), f"v3 core binding {label} upstream SHA-256")
+        return
     for field, default, label in (
         ("targets", "targets.parquet", "targets"),
         ("generation_context", "generation_context.parquet", "generation context"),
@@ -269,6 +358,12 @@ def _validate_generation_inputs(state: Mapping[str, Any], output_dir: str | Path
             bound_state_path = root / str(state_path)
             if not bound_state_path.exists() or _sha256_file(bound_state_path) != str(state_sha256):
                 raise ValueError(f"{label} artifact state checksum mismatch: {bound_state_path}")
+
+
+def _require_sha256(value: Any, label: str) -> str:
+    if not isinstance(value, str) or len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError(f"{label} must be a lowercase SHA-256 digest")
+    return value
 
 
 def _ensure_input_artifact(
@@ -302,16 +397,21 @@ def prepare_generation_batches(
     output_dir: str | Path,
     *,
     source_corpus_fingerprint: str,
-    source_passages_sha256: str | None = None,
-    targets_sha256: str | None = None,
-    generation_context_sha256: str | None = None,
-    targets_state_sha256: str | None = None,
-    generation_context_state_sha256: str | None = None,
+    source_passages_sha256: str,
+    targets_sha256: str,
+    generation_context_sha256: str,
+    targets_state_sha256: str,
+    generation_context_state_sha256: str,
     pilot_generation_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a corpus-bound, resumable OpenAI Batch state manifest."""
     if source_corpus_fingerprint != REQUIRED_SOURCE_CORPUS_FINGERPRINT:
         raise ValueError("source corpus manifest fingerprint does not match the required Habr corpus")
+    _require_sha256(source_passages_sha256, "source_passages_sha256")
+    _require_sha256(targets_sha256, "targets_sha256")
+    _require_sha256(generation_context_sha256, "generation_context_sha256")
+    _require_sha256(targets_state_sha256, "targets_state_sha256")
+    _require_sha256(generation_context_state_sha256, "generation_context_state_sha256")
     active_config = config if isinstance(config, GeneratorConfig) else GeneratorConfig(**dict(config or {}))
     target_rows = _read_rows(targets, "target")
     context_rows = _read_rows(generation_context, "generation context")
@@ -330,8 +430,8 @@ def prepare_generation_batches(
         build_generator_request(row, context_by_target.get(str(row["passage_id"]), ()), active_config) for row in target_rows
     ]
     root = Path(output_dir)
-    if len(requests) > PILOT_MAX_REQUESTS and pilot_generation_root is not None:
-        if root.resolve() == Path(pilot_generation_root).resolve():
+    if len(requests) > PILOT_MAX_REQUESTS:
+        if pilot_generation_root is None or root.resolve() == Path(pilot_generation_root).resolve():
             raise ValueError("preparing more than 100 requests requires a separate generation root")
     targets_path = root / "targets.parquet"
     context_path = root / "generation_context.parquet"
@@ -347,6 +447,24 @@ def prepare_generation_batches(
         expected_sha256=generation_context_sha256,
         label="generation context",
     )
+    candidate_bindings = {
+        "version": 3,
+        "source_corpus_fingerprint": source_corpus_fingerprint,
+        "source_passages_sha256": source_passages_sha256,
+        "targets": {
+            "path": _relative_to(targets_path, root),
+            "sha256": target_artifact_sha256,
+            "state_path": "targets_state.json",
+            "state_sha256": targets_state_sha256,
+        },
+        "generation_context": {
+            "path": _relative_to(context_path, root),
+            "sha256": context_artifact_sha256,
+            "state_path": "generation_context_state.json",
+            "state_sha256": generation_context_state_sha256,
+        },
+    }
+    _validate_generation_inputs(candidate_bindings, root)
     context_fingerprint = _target_context_fingerprint(target_rows, context_rows)
     generation_fingerprint = _generation_fingerprint(source_corpus_fingerprint, context_fingerprint, active_config, requests)
     state_path = _state_path(root)
@@ -354,6 +472,9 @@ def prepare_generation_batches(
         existing = _load_state(state_path)
         if (
             existing.get("source_corpus_fingerprint") != source_corpus_fingerprint
+            or existing.get("source_passages_sha256") != source_passages_sha256
+            or existing.get("targets") != candidate_bindings["targets"]
+            or existing.get("generation_context") != candidate_bindings["generation_context"]
             or existing.get("target_context_fingerprint") != context_fingerprint
             or existing.get("generation_fingerprint") != generation_fingerprint
         ):
@@ -371,20 +492,12 @@ def prepare_generation_batches(
         "version": 3,
         "source_corpus_fingerprint": source_corpus_fingerprint,
         "source_passages_sha256": source_passages_sha256,
-        "targets": {
-            "path": _relative_to(targets_path, root),
-            "sha256": target_artifact_sha256,
-            "state_path": "targets_state.json" if targets_state_sha256 else None,
-            "state_sha256": targets_state_sha256,
-        },
-        "generation_context": {
-            "path": _relative_to(context_path, root),
-            "sha256": context_artifact_sha256,
-            "state_path": "generation_context_state.json" if generation_context_state_sha256 else None,
-            "state_sha256": generation_context_state_sha256,
-        },
+        "targets": candidate_bindings["targets"],
+        "generation_context": candidate_bindings["generation_context"],
         "target_context_fingerprint": context_fingerprint,
         "generation_fingerprint": generation_fingerprint,
+        "validator_version": VALIDATOR_VERSION,
+        "finalizer_version": FINALIZER_VERSION,
         "generation_config": asdict(active_config),
         "limits": {
             "model": active_config.model,
@@ -509,6 +622,7 @@ def _submit_lock(output_dir: str | Path):
 
 def _submit_pending_shards_unlocked(state: Mapping[str, Any], client: Any, output_dir: str | Path) -> dict[str, Any]:
     """Submit each shard with durable operation identities and remote reconciliation."""
+    _require_v3_remote_state(state, "submit")
     result = copy.deepcopy(dict(state))
     _validate_state_requests(result, output_dir)
     for shard in result.get("shards", []):
@@ -550,22 +664,29 @@ def _submit_pending_shards_unlocked(state: Mapping[str, Any], client: Any, outpu
     return _persist_state(result, output_dir)
 
 
-def _request_count(state: Mapping[str, Any]) -> int:
-    return sum(int(shard.get("request_count", len(shard.get("custom_ids", ())))) for shard in state.get("shards", []))
+def _requires_scale_gate(state: Mapping[str, Any], request_count: int) -> bool:
+    return request_count > PILOT_MAX_REQUESTS or len(state.get("shards", ())) > 1
 
 
-def _requires_scale_gate(state: Mapping[str, Any]) -> bool:
-    return _request_count(state) > PILOT_MAX_REQUESTS or len(state.get("shards", ())) > 1
+def _require_v3_remote_state(state: Mapping[str, Any], operation: str) -> None:
+    version = state.get("version")
+    if version == 2:
+        raise ValueError(f"legacy v2 generation state is status/collection-only and cannot {operation}")
+    if version != 3:
+        raise ValueError(f"remote {operation} requires a fully bound v3 generation state")
+    if state.get("validator_version") != VALIDATOR_VERSION or state.get("finalizer_version") != FINALIZER_VERSION:
+        raise ValueError(f"remote {operation} requires current validator/finalizer versions")
 
 
 def _validate_scale_gate(
     state: Mapping[str, Any],
     output_dir: str | Path,
     *,
+    request_count: int,
     scale_authorized: bool,
     pilot_generation_root: str | Path | None,
 ) -> None:
-    if not _requires_scale_gate(state):
+    if not _requires_scale_gate(state, request_count):
         return
     if not scale_authorized:
         raise ValueError("multi-shard or >100-request submission requires explicit scale authorization")
@@ -580,6 +701,13 @@ def _validate_scale_gate(
     if not metrics_path.exists() or not pilot_state_path.exists():
         raise ValueError("scale submission requires checksummed pilot metrics and pilot state artifacts")
     pilot_state = _load_state(pilot_state_path)
+    if pilot_state.get("version") != 3:
+        raise ValueError("scale authorization requires a fully bound v3 pilot state")
+    pilot_source_passages_sha256 = pilot_state.get("source_passages_sha256")
+    if not isinstance(pilot_source_passages_sha256, str):
+        raise ValueError("pilot source passage SHA-256 is required")
+    _require_sha256(pilot_source_passages_sha256, "pilot source passage SHA-256")
+    pilot_request_count = _validate_state_requests(pilot_state, pilot_root)
     expected_checksum = pilot_state.get("pilot_metrics_sha256")
     if not expected_checksum or _sha256_file(metrics_path) != str(expected_checksum):
         raise ValueError("pilot metrics checksum mismatch")
@@ -589,14 +717,22 @@ def _validate_scale_gate(
         raise ValueError("invalid pilot metrics artifact") from exc
     if not isinstance(metrics, Mapping) or metrics.get("generation_fingerprint") != pilot_state.get("generation_fingerprint"):
         raise ValueError("pilot metrics are not bound to the pilot generation fingerprint")
-    if pilot_state.get("validator_version") != VALIDATOR_VERSION or pilot_state.get("finalizer_version") != FINALIZER_VERSION:
+    if (
+        pilot_state.get("validator_version") != VALIDATOR_VERSION
+        or pilot_state.get("finalizer_version") != FINALIZER_VERSION
+        or metrics.get("validator_version") != VALIDATOR_VERSION
+        or metrics.get("finalizer_version") != FINALIZER_VERSION
+    ):
         raise ValueError("pilot metrics were not produced by the current deterministic finalizer")
-    if pilot_state.get("source_corpus_fingerprint") != state.get("source_corpus_fingerprint"):
+    if pilot_state.get("source_corpus_fingerprint") != state.get("source_corpus_fingerprint") or metrics.get(
+        "source_corpus_fingerprint"
+    ) != state.get("source_corpus_fingerprint"):
         raise ValueError("pilot metrics source corpus does not match the scale generation")
-    pilot_passages_sha256 = pilot_state.get("source_passages_sha256")
-    if pilot_passages_sha256 and pilot_passages_sha256 != state.get("source_passages_sha256"):
+    if pilot_source_passages_sha256 != state.get("source_passages_sha256") or metrics.get("source_passages_sha256") != state.get(
+        "source_passages_sha256"
+    ):
         raise ValueError("pilot metrics source passages do not match the scale generation")
-    if int(metrics.get("request_count", PILOT_MAX_REQUESTS + 1)) > PILOT_MAX_REQUESTS:
+    if metrics.get("request_count") != pilot_request_count or pilot_request_count > PILOT_MAX_REQUESTS:
         raise ValueError("pilot metrics must describe at most 100 requests")
     if float(metrics.get("usable_rate", -1.0)) < PILOT_MIN_USABLE_RATE:
         raise ValueError(f"pilot usable rate must be >= {PILOT_MIN_USABLE_RATE:.2f}")
@@ -613,10 +749,12 @@ def submit_pending_shards(
     pilot_generation_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Serialize local submit/reconcile transitions; this does not provide cross-machine locking."""
-    _validate_state_requests(state, output_dir)
+    _require_v3_remote_state(state, "submit")
+    request_count = _validate_state_requests(state, output_dir)
     _validate_scale_gate(
         state,
         output_dir,
+        request_count=request_count,
         scale_authorized=scale_authorized,
         pilot_generation_root=pilot_generation_root,
     )
@@ -673,10 +811,12 @@ def retry_failed_shards(
     pilot_generation_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Retry failed terminal shards explicitly while retaining every prior remote attempt."""
-    _validate_state_requests(state, output_dir)
+    _require_v3_remote_state(state, "retry")
+    request_count = _validate_state_requests(state, output_dir)
     _validate_scale_gate(
         state,
         output_dir,
+        request_count=request_count,
         scale_authorized=scale_authorized,
         pilot_generation_root=pilot_generation_root,
     )
@@ -962,6 +1102,7 @@ def _finalize_record(
     if accepted:
         accepted_normalized_queries.add(normalize_query(output["query"]))
     evidence_invalid = {"empty_evidence", "evidence_not_substring", "evidence_overlap_only"}
+    evidence = output.get("evidence") if output else None
     observation = {
         "schema_success": parsed["status"] == "parsed",
         "usable": bool(output.get("usable")) if output else False,
@@ -969,7 +1110,11 @@ def _finalize_record(
         "intent_agreement": bool(output)
         and output.get("requested_intent") == slot.get("requested_intent")
         and output.get("actual_intent") == output.get("requested_intent"),
-        "evidence_valid": bool(output) and not evidence_invalid.intersection(reason_codes),
+        "evidence_valid": bool(output.get("usable"))
+        and isinstance(evidence, str)
+        and bool(evidence)
+        and evidence in str(slot.get("content", ""))
+        and not evidence_invalid.intersection(reason_codes),
         "duplicate": "duplicate_normalized_query" in reason_codes,
         "usage": parsed.get("usage") if isinstance(parsed.get("usage"), Mapping) else {},
     }
@@ -989,6 +1134,10 @@ def _pilot_metrics(state: Mapping[str, Any], observations: Sequence[Mapping[str,
     return {
         "version": 1,
         "generation_fingerprint": state["generation_fingerprint"],
+        "source_corpus_fingerprint": state.get("source_corpus_fingerprint"),
+        "source_passages_sha256": state.get("source_passages_sha256"),
+        "validator_version": VALIDATOR_VERSION,
+        "finalizer_version": FINALIZER_VERSION,
         "request_count": count,
         "schema_success_count": sum(bool(item["schema_success"]) for item in observations),
         "schema_success_rate": sum(bool(item["schema_success"]) for item in observations) / denominator,
@@ -1036,7 +1185,7 @@ def collect_completed_shards(state: Mapping[str, Any], client: Any, output_dir: 
     """Reconcile raw artifacts and deterministically finalize one row per immutable request binding."""
     root = Path(output_dir)
     result = copy.deepcopy(dict(state))
-    _validate_state_requests(result, root)
+    request_count = _validate_state_requests(result, root)
     finalized_counts = (
         copy.deepcopy(result.get("counts"))
         if result.get("collected_sha256")
@@ -1057,7 +1206,7 @@ def collect_completed_shards(state: Mapping[str, Any], client: Any, output_dir: 
             raise ValueError(f"collected artifact checksum mismatch: {collected_path}")
         if not diagnostics_path.exists() or _sha256_file(diagnostics_path) != refreshed.get("diagnostics_sha256"):
             raise ValueError(f"diagnostics artifact checksum mismatch: {diagnostics_path}")
-        if _request_count(refreshed) <= PILOT_MAX_REQUESTS:
+        if request_count <= PILOT_MAX_REQUESTS:
             metrics_path = root / PILOT_METRICS_FILE_NAME
             if not metrics_path.exists() or _sha256_file(metrics_path) != refreshed.get("pilot_metrics_sha256"):
                 raise ValueError(f"pilot metrics artifact checksum mismatch: {metrics_path}")
@@ -1123,7 +1272,7 @@ def collect_completed_shards(state: Mapping[str, Any], client: Any, output_dir: 
     refreshed["diagnostics_sha256"] = _sha256_bytes(diagnostics_encoded)
     refreshed["validator_version"] = VALIDATOR_VERSION
     refreshed["finalizer_version"] = FINALIZER_VERSION
-    refreshed["version"] = max(int(refreshed.get("version", 2)), 3)
+    refreshed["version"] = 3 if int(refreshed.get("version", 2)) >= 3 else 2
     refreshed["counts"] = {
         "prepared": len(terminal_records),
         "accepted": sum(record["status"] == "accepted" for record in terminal_records),

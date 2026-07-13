@@ -4,12 +4,14 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from justatom.tooling.ir_dataset import batch as batch_module
+from justatom.tooling.ir_dataset.artifacts import sha256_file, write_bound_parquet_artifact
 from justatom.tooling.ir_dataset.batch import (
     collect_completed_shards,
-    prepare_generation_batches,
+    prepare_generation_batches as prepare_generation_batches_core,
     submit_pending_shards,
     write_batch_shards,
 )
@@ -17,6 +19,7 @@ from justatom.tooling.ir_dataset.generation import GeneratorConfig
 
 
 SOURCE_CORPUS_FINGERPRINT = "bb6ad903b82c337a61cce2b1cd5bf5dd7e3303b6b3263258979372c00e40c3c9"
+SOURCE_PASSAGES_SHA256 = "a" * 64
 
 
 def request(index: int) -> dict[str, object]:
@@ -85,6 +88,7 @@ class FakeFiles:
         return item
 
     def list(self, **_kwargs):
+        self.owner.file_lists += 1
         return self.owner.file_objects
 
     def content(self, file_id: str):
@@ -109,6 +113,7 @@ class FakeBatches:
         return item
 
     def list(self, **_kwargs):
+        self.owner.batch_lists += 1
         return list(self.owner.batch_objects.values())
 
     def retrieve(self, batch_id: str):
@@ -119,8 +124,10 @@ class FakeBatches:
 class FakeOpenAI:
     def __init__(self) -> None:
         self.uploads: list[tuple[str, bytes]] = []
+        self.file_lists = 0
         self.file_objects: list[FakeObject] = []
         self.creates: list[str] = []
+        self.batch_lists = 0
         self.retrieves: list[str] = []
         self.downloads: list[str] = []
         self.file_contents: dict[str, object] = {}
@@ -149,25 +156,79 @@ def response_row(custom_id: str, output: dict[str, object], *, usage: dict[str, 
     return {"custom_id": custom_id, "response": {"status_code": 200, "body": body}}
 
 
+def prepare_generation_batches(
+    targets,
+    generation_context,
+    config,
+    output_dir,
+    *,
+    source_corpus_fingerprint,
+    pilot_generation_root=None,
+):
+    root = Path(output_dir)
+    target_rows = targets.to_dicts() if hasattr(targets, "to_dicts") else list(targets)
+    context_rows = generation_context.to_dicts() if hasattr(generation_context, "to_dicts") else list(generation_context)
+    write_bound_parquet_artifact(
+        pl.DataFrame(target_rows),
+        root / "targets.parquet",
+        root / "targets_state.json",
+        artifact_kind="targets",
+        source_corpus_fingerprint=source_corpus_fingerprint,
+        passages_sha256=SOURCE_PASSAGES_SHA256,
+        config={"test_contract": 1},
+        upstream_sha256="b" * 64,
+    )
+    write_bound_parquet_artifact(
+        pl.DataFrame(context_rows),
+        root / "generation_context.parquet",
+        root / "generation_context_state.json",
+        artifact_kind="generation_context",
+        source_corpus_fingerprint=source_corpus_fingerprint,
+        passages_sha256=SOURCE_PASSAGES_SHA256,
+        config={"test_contract": 1},
+        upstream_sha256=sha256_file(root / "targets.parquet"),
+    )
+    return prepare_generation_batches_core(
+        target_rows,
+        context_rows,
+        config,
+        root,
+        source_corpus_fingerprint=source_corpus_fingerprint,
+        source_passages_sha256=SOURCE_PASSAGES_SHA256,
+        targets_sha256=sha256_file(root / "targets.parquet"),
+        generation_context_sha256=sha256_file(root / "generation_context.parquet"),
+        targets_state_sha256=sha256_file(root / "targets_state.json"),
+        generation_context_state_sha256=sha256_file(root / "generation_context_state.json"),
+        pilot_generation_root=pilot_generation_root,
+    )
+
+
 def passing_pilot_root(root: Path) -> Path:
     pilot_root = root / "pilot"
+    pilot_target = target(999_999)
+    pilot_state = prepare_generation_batches(
+        [pilot_target],
+        context(pilot_target),
+        GeneratorConfig(),
+        pilot_root,
+        source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT,
+    )
     metrics = {
         "version": 1,
-        "generation_fingerprint": "pilot-fingerprint",
-        "request_count": 100,
+        "generation_fingerprint": pilot_state["generation_fingerprint"],
+        "request_count": 1,
         "usable_rate": 0.70,
         "deterministic_gate_pass_rate": 0.60,
+        "source_corpus_fingerprint": SOURCE_CORPUS_FINGERPRINT,
+        "source_passages_sha256": SOURCE_PASSAGES_SHA256,
+        "validator_version": batch_module.VALIDATOR_VERSION,
+        "finalizer_version": batch_module.FINALIZER_VERSION,
     }
     batch_module._write_json_atomic(pilot_root / "pilot_metrics.json", metrics)
+    pilot_state["pilot_metrics_sha256"] = batch_module._sha256_file(pilot_root / "pilot_metrics.json")
     batch_module._write_json_atomic(
         pilot_root / "generation_state.json",
-        {
-            "generation_fingerprint": "pilot-fingerprint",
-            "pilot_metrics_sha256": batch_module._sha256_file(pilot_root / "pilot_metrics.json"),
-            "validator_version": batch_module.VALIDATOR_VERSION,
-            "finalizer_version": batch_module.FINALIZER_VERSION,
-            "source_corpus_fingerprint": SOURCE_CORPUS_FINGERPRINT,
-        },
+        pilot_state,
     )
     return pilot_root
 
@@ -605,6 +666,128 @@ def test_submit_refuses_mutated_generation_inputs_without_any_remote_call(tmp_pa
     assert client.retrieves == []
 
 
+def test_scale_gate_rejects_101_checksummed_rows_declared_as_100_without_remote_calls(tmp_path: Path):
+    rows = [target(index) for index in range(101)]
+    state = prepare_generation_batches(
+        rows,
+        [item for row in rows for item in context(row)],
+        GeneratorConfig(),
+        tmp_path / "full",
+        source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT,
+        pilot_generation_root=tmp_path / "pilot",
+    )
+    state["shards"][0]["request_count"] = 100
+    client = FakeOpenAI()
+
+    with pytest.raises(ValueError, match="request_count.*101"):
+        submit_pending_shards(state, client, tmp_path / "full")
+
+    assert (client.file_lists, client.uploads, client.batch_lists, client.creates, client.retrieves) == (0, [], 0, [], [])
+
+
+def test_state_validation_reconciles_declared_custom_ids_with_checksummed_rows(tmp_path: Path):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    state["shards"][0]["custom_ids"] = ["forged-custom-id"]
+    client = FakeOpenAI()
+
+    with pytest.raises(ValueError, match="custom_ids.*request shard"):
+        submit_pending_shards(state, client, tmp_path)
+
+    assert (client.file_lists, client.uploads, client.batch_lists, client.creates, client.retrieves) == (0, [], 0, [], [])
+
+
+def test_state_validation_rejects_duplicate_jsonl_custom_ids_before_remote_calls(tmp_path: Path):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    shard = state["shards"][0]
+    request_path = tmp_path / shard["request_path"]
+    original = request_path.read_bytes()
+    request_path.write_bytes(original + original)
+    shard["request_sha256"] = batch_module._sha256_file(request_path)
+    shard["request_bytes"] = len(original) * 2
+    shard["request_count"] = 2
+    shard["custom_ids"] = [shard["custom_ids"][0], "forged-custom-id"]
+    client = FakeOpenAI()
+
+    with pytest.raises(ValueError, match="duplicate custom_id in request shard"):
+        submit_pending_shards(state, client, tmp_path)
+
+    assert (client.file_lists, client.uploads, client.batch_lists, client.creates, client.retrieves) == (0, [], 0, [], [])
+
+
+def test_prepare_generation_batches_requires_all_v3_source_and_sidecar_bindings(tmp_path: Path):
+    row = target()
+
+    with pytest.raises(TypeError, match="source_passages_sha256"):
+        prepare_generation_batches_core(
+            [row],
+            context(row),
+            GeneratorConfig(),
+            tmp_path,
+            source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT,
+        )
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ("source_passages_sha256", "targets", "generation_context", "targets_sidecar", "context_sidecar"),
+)
+def test_v3_state_validation_requires_complete_core_bindings_before_remote_calls(tmp_path: Path, missing: str):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    if missing in {"source_passages_sha256", "targets", "generation_context"}:
+        state.pop(missing)
+    elif missing == "targets_sidecar":
+        state["targets"]["state_path"] = None
+        state["targets"]["state_sha256"] = None
+    else:
+        state["generation_context"]["state_path"] = None
+        state["generation_context"]["state_sha256"] = None
+    client = FakeOpenAI()
+
+    with pytest.raises(ValueError, match="v3.*binding"):
+        submit_pending_shards(state, client, tmp_path)
+
+    assert (client.file_lists, client.uploads, client.batch_lists, client.creates, client.retrieves) == (0, [], 0, [], [])
+
+
+def test_submit_rejects_legacy_v2_state_before_remote_calls(tmp_path: Path):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    state["version"] = 2
+    client = FakeOpenAI()
+
+    with pytest.raises(ValueError, match="legacy v2.*submit"):
+        submit_pending_shards(state, client, tmp_path)
+
+    assert (client.file_lists, client.uploads, client.batch_lists, client.creates, client.retrieves) == (0, [], 0, [], [])
+
+
+def test_retry_rejects_legacy_v2_state_before_remote_calls(tmp_path: Path):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    state["version"] = 2
+    state["shards"][0].update({"input_file_id": "legacy-input", "batch_id": "legacy-batch", "status": "failed"})
+    client = FakeOpenAI()
+    client.batch_objects["legacy-batch"] = FakeObject(id="legacy-batch", status="failed")
+
+    with pytest.raises(ValueError, match="legacy v2.*retry"):
+        batch_module.retry_failed_shards(state, client, tmp_path)
+
+    assert (client.file_lists, client.uploads, client.batch_lists, client.creates, client.retrieves) == (0, [], 0, [], [])
+
+
 def test_scale_submit_requires_authorization_and_passing_checksummed_pilot_metrics(tmp_path: Path):
     rows = [target(index) for index in range(101)]
     contexts = [item for row in rows for item in context(row)]
@@ -649,6 +832,64 @@ def test_scale_submit_requires_authorization_and_passing_checksummed_pilot_metri
     assert submitted["counts"] == {"submitted": 1}
     assert len(client.uploads) == 1
     assert len(client.creates) == 1
+
+
+def test_scale_authorization_requires_pilot_source_passage_sha_before_remote_calls(tmp_path: Path):
+    rows = [target(index) for index in range(101)]
+    state = prepare_generation_batches(
+        rows,
+        [item for row in rows for item in context(row)],
+        GeneratorConfig(),
+        tmp_path / "full",
+        source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT,
+        pilot_generation_root=tmp_path / "pilot",
+    )
+    pilot_root = passing_pilot_root(tmp_path)
+    pilot_state_path = pilot_root / "generation_state.json"
+    pilot_state = json.loads(pilot_state_path.read_text(encoding="utf-8"))
+    pilot_state.pop("source_passages_sha256")
+    batch_module._write_json_atomic(pilot_state_path, pilot_state)
+    client = FakeOpenAI()
+
+    with pytest.raises(ValueError, match="pilot source passage SHA-256"):
+        submit_pending_shards(
+            state,
+            client,
+            tmp_path / "full",
+            scale_authorized=True,
+            pilot_generation_root=pilot_root,
+        )
+
+    assert (client.file_lists, client.uploads, client.batch_lists, client.creates, client.retrieves) == (0, [], 0, [], [])
+
+
+def test_scale_authorization_rejects_legacy_pilot_state_before_remote_calls(tmp_path: Path):
+    rows = [target(index) for index in range(101)]
+    state = prepare_generation_batches(
+        rows,
+        [item for row in rows for item in context(row)],
+        GeneratorConfig(),
+        tmp_path / "full",
+        source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT,
+        pilot_generation_root=tmp_path / "pilot",
+    )
+    pilot_root = passing_pilot_root(tmp_path)
+    pilot_state_path = pilot_root / "generation_state.json"
+    pilot_state = json.loads(pilot_state_path.read_text(encoding="utf-8"))
+    pilot_state["version"] = 2
+    batch_module._write_json_atomic(pilot_state_path, pilot_state)
+    client = FakeOpenAI()
+
+    with pytest.raises(ValueError, match="fully bound v3 pilot"):
+        submit_pending_shards(
+            state,
+            client,
+            tmp_path / "full",
+            scale_authorized=True,
+            pilot_generation_root=pilot_root,
+        )
+
+    assert (client.file_lists, client.uploads, client.batch_lists, client.creates, client.retrieves) == (0, [], 0, [], [])
 
 
 def test_multi_shard_submit_requires_the_scale_gate_even_below_100_requests(tmp_path: Path):
@@ -711,6 +952,27 @@ def test_collection_applies_global_dedup_and_persists_checksummed_pilot_metrics(
     assert metrics["duplicate_count"] == 1
     assert metrics["token_usage"] == {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}
     assert collected["pilot_metrics_sha256"] == batch_module._sha256_file(tmp_path / "pilot_metrics.json")
+
+
+def test_pilot_metrics_count_unusable_empty_evidence_as_invalid(tmp_path: Path):
+    row = target()
+    state = prepare_generation_batches(
+        [row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT
+    )
+    client = FakeOpenAI()
+    submitted = submit_pending_shards(state, client, tmp_path)
+    custom_id = submitted["shards"][0]["custom_ids"][0]
+    unusable = accepted_output()
+    unusable.update(usable=False, reason="insufficient_context", query="", answer="", evidence="")
+    client.batch_objects["batch-1"] = FakeObject(id="batch-1", output_file_id="output-1")
+    client.file_contents["output-1"] = json.dumps(response_row(custom_id, unusable))
+
+    collect_completed_shards(submitted, client, tmp_path)
+
+    metrics = json.loads((tmp_path / "pilot_metrics.json").read_text(encoding="utf-8"))
+    assert metrics["usable_rate"] == 0.0
+    assert metrics["evidence_valid_count"] == 0
+    assert metrics["evidence_validity_rate"] == 0.0
 
 
 def test_retry_failed_shard_preserves_history_and_starts_only_one_new_attempt(tmp_path: Path):
@@ -795,6 +1057,10 @@ def test_version_2_collection_without_finalizer_version_is_refinalized_from_down
     (tmp_path / "generation_collected.jsonl").write_bytes(legacy_bytes)
     legacy_state = dict(collected)
     legacy_state["version"] = 2
+    legacy_state.pop("source_passages_sha256", None)
+    legacy_state.pop("targets", None)
+    legacy_state.pop("generation_context", None)
+    legacy_state.pop("generation_config", None)
     legacy_state.pop("validator_version", None)
     legacy_state.pop("finalizer_version", None)
     legacy_state["collected_sha256"] = batch_module._sha256_bytes(legacy_bytes)
@@ -805,5 +1071,7 @@ def test_version_2_collection_without_finalizer_version_is_refinalized_from_down
     record = json.loads((tmp_path / "generation_collected.jsonl").read_text(encoding="utf-8"))
     assert record["status"] == "rejected"
     assert "evidence_overlap_only" in record["reason_codes"]
+    assert refinalized["version"] == 2
     assert refinalized["finalizer_version"]
+    assert collect_completed_shards(refinalized, client, tmp_path) == refinalized
     assert client.downloads == ["output-1"]
