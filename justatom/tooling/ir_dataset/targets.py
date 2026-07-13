@@ -167,15 +167,18 @@ def _flow_quotas(articles_by_flow: Mapping[str, list[dict[str, Any]]], config: T
     weights = [(flow, math.sqrt(len(articles))) for flow, articles in articles_by_flow.items()]
     raw_quotas = _largest_remainder(requested, weights, config.seed, "flow-quota")
     cap = max(1, math.ceil(requested * config.max_flow_share))
+    capped_capacity = sum(min(len(articles), cap) for articles in articles_by_flow.values())
+    if capped_capacity < requested:
+        raise ValueError(
+            f"requested {requested} target articles cannot satisfy max_flow_share={config.max_flow_share:.2f}: "
+            f"only {capped_capacity} articles fit within the primary-flow cap of {cap}"
+        )
     quotas = {flow: min(raw_quotas[flow], len(articles), cap) for flow, articles in articles_by_flow.items()}
     remaining = requested - sum(quotas.values())
     while remaining:
         candidates = [flow for flow, articles in articles_by_flow.items() if quotas[flow] < len(articles) and quotas[flow] < cap]
         if not candidates:
-            # A strict cap is infeasible when too few flows contain enough eligible articles.
-            candidates = [flow for flow, articles in articles_by_flow.items() if quotas[flow] < len(articles)]
-        if not candidates:
-            raise ValueError("not enough eligible articles to satisfy target selection")
+            raise ValueError("primary-flow quotas cannot satisfy target selection within the configured cap")
         flow = min(
             candidates,
             key=lambda name: (
@@ -208,13 +211,27 @@ def _choose_passages(article: Mapping[str, Any], config: TargetSelectionConfig) 
             str(item["passage_id"]),
         ),
     )
+
+    def section_label(candidate: Mapping[str, Any]) -> str:
+        return str(candidate.get("section") or "").strip().casefold()
+
+    non_empty_sections = {section_label(candidate) for candidate in ranked if section_label(candidate)}
+    if len(non_empty_sections) >= 2:
+        non_empty_ranked = [candidate for candidate in ranked if section_label(candidate)]
+        first = non_empty_ranked[0]
+        second = next(
+            candidate
+            for candidate in non_empty_ranked[1:]
+            if str(candidate.get("passage_id")) != str(first.get("passage_id")) and section_label(candidate) != section_label(first)
+        )
+        return first, second
+
     first = ranked[0]
-    first_section = str(first.get("section") or "").strip().casefold()
+    first_section = section_label(first)
     distinct_section = [
         candidate
         for candidate in ranked[1:]
-        if str(candidate.get("passage_id")) != str(first.get("passage_id"))
-        and str(candidate.get("section") or "").strip().casefold() != first_section
+        if str(candidate.get("passage_id")) != str(first.get("passage_id")) and section_label(candidate) != first_section
     ]
     second = (
         distinct_section[0]

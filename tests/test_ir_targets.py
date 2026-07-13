@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import polars as pl
+import pytest
 
 from justatom.tooling.ir_dataset.targets import TargetSelectionConfig, score_passage_quality, select_target_slots
 
@@ -109,3 +110,44 @@ def test_selection_uses_deterministic_flow_and_intent_balancing():
         "limitations",
         "factual",
     }
+
+
+def test_selection_rejects_an_infeasible_primary_flow_cap():
+    rows = []
+    for article_index in range(10):
+        for passage_index in range(2):
+            rows.append(
+                prose_row(
+                    article_id=f"article-{article_index}",
+                    passage_id=f"article-{article_index}-passage-{passage_index}",
+                    flows=["develop"],
+                )
+            )
+
+    with pytest.raises(ValueError, match="cannot satisfy.*max_flow_share=0.30"):
+        select_target_slots(pl.DataFrame(rows), TargetSelectionConfig(article_count=10))
+
+
+def test_selection_prefers_two_distinct_non_empty_sections_when_available():
+    selected = select_target_slots(
+        pl.DataFrame(
+            [
+                prose_row(article_id="article-1", passage_id="empty", section=""),
+                prose_row(
+                    article_id="article-1",
+                    passage_id="implementation",
+                    section="Implementation",
+                    content=prose_row()["content"] + " (implementation)",
+                ),
+                prose_row(
+                    article_id="article-1",
+                    passage_id="validation",
+                    section="Validation",
+                    content=prose_row()["content"] + " (validation)",
+                ),
+            ]
+        ),
+        TargetSelectionConfig(article_count=1),
+    )
+
+    assert set(selected["section"]) == {"Implementation", "Validation"}
