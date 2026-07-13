@@ -16,8 +16,16 @@ from dotenv import find_dotenv, load_dotenv
 
 from justatom.configuring.scenarios import deep_merge, parse_unknown_overrides
 from justatom.tooling.ir_dataset.artifacts import PrepareConfig, PrepareSummary, prepare_passages
+from justatom.tooling.ir_dataset.batch import (
+    collect_completed_shards,
+    prepare_generation_batches,
+    refresh_batch_status,
+    submit_pending_shards,
+)
 from justatom.tooling.ir_dataset.chunking import ChunkingConfig, MarkdownPassageChunker
 from justatom.tooling.ir_dataset.dense import DenseIndex, E5TextEncoder, TextEncoder
+from justatom.tooling.ir_dataset.generation import GeneratorConfig
+from justatom.tooling.ir_dataset.generation_context import GenerationContextConfig, build_generation_context
 from justatom.tooling.ir_dataset.neighbors import (
     NeighborBuildConfig,
     NeighborSummary,
@@ -26,6 +34,7 @@ from justatom.tooling.ir_dataset.neighbors import (
 )
 from justatom.tooling.ir_dataset.source import HabrSource, promote_hf_token_env
 from justatom.tooling.ir_dataset.sparse import BM25_INDEX_VERSION, BM25Index, TECHNICAL_TOKEN_PATTERN
+from justatom.tooling.ir_dataset.targets import TargetSelectionConfig, select_target_slots
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +84,7 @@ class IRDatasetConfig:
     chunking: ChunkingConfig
     preparation: PrepareConfig
     retrieval: RetrievalConfig
+    generation: GeneratorConfig
     output: OutputConfig
 
 
@@ -125,13 +135,25 @@ def load_ir_dataset_config(
         chunking=_build_dataclass(ChunkingConfig, raw.get("chunking")),
         preparation=_build_dataclass(PrepareConfig, raw.get("preparation")),
         retrieval=_build_dataclass(RetrievalConfig, raw.get("retrieval")),
+        generation=_build_dataclass(GeneratorConfig, raw.get("generation")),
         output=_build_dataclass(OutputConfig, output_values),
     )
 
 
 def parse_cli(argv: list[str] | None = None) -> ParsedCLI:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
-    stages = ("prepare", "embed", "neighbors", "inspect", "run")
+    stages = (
+        "prepare",
+        "embed",
+        "neighbors",
+        "inspect",
+        "run",
+        "select-targets",
+        "prepare-generation",
+        "submit-generation",
+        "generation-status",
+        "collect-generation",
+    )
     stage_positions = [(index, token) for index, token in enumerate(raw_argv) if token in stages]
     if len(stage_positions) != 1:
         raise ValueError(f"Exactly one IR dataset stage is required: {', '.join(stages)}")
@@ -286,6 +308,71 @@ def run_local_pipeline(config: IRDatasetConfig) -> LocalRunSummary:
     return LocalRunSummary(prepare=prepared, embed_reused=embed_reused, neighbors=neighbors)
 
 
+def select_targets_stage(config: IRDatasetConfig) -> pl.DataFrame:
+    passages_path = config.output.root / "passages.parquet"
+    if not passages_path.exists():
+        raise FileNotFoundError(f"Passage artifact does not exist: {passages_path}")
+    return select_target_slots(
+        pl.read_parquet(passages_path),
+        TargetSelectionConfig(output_dir=config.output.root),
+    )
+
+
+def prepare_generation_stage(config: IRDatasetConfig) -> dict[str, Any]:
+    root = config.output.root
+    targets_path = root / "targets.parquet"
+    passages_path = root / "passages.parquet"
+    if not targets_path.exists():
+        raise FileNotFoundError(f"Target artifact does not exist: {targets_path}")
+    if not passages_path.exists():
+        raise FileNotFoundError(f"Passage artifact does not exist: {passages_path}")
+    context_path = root / "generation_context.parquet"
+    if context_path.exists():
+        generation_context = pl.read_parquet(context_path)
+    else:
+        generation_context = build_generation_context(
+            pl.read_parquet(targets_path),
+            pl.read_parquet(passages_path),
+            BM25Index.load(root / "bm25", mmap=True),
+            DenseIndex.load(root / "dense"),
+            GenerationContextConfig(
+                bm25_k=config.retrieval.bm25_k,
+                dense_k=config.retrieval.dense_k,
+                union_k=config.retrieval.union_k,
+                rrf_k=config.retrieval.rrf_k,
+                dense_block_size=config.retrieval.dense_block_size,
+                device=config.retrieval.device,
+                output_dir=root,
+            ),
+        )
+    return prepare_generation_batches(pl.read_parquet(targets_path), generation_context, config.generation, root)
+
+
+def _generation_state(config: IRDatasetConfig) -> dict[str, Any]:
+    path = config.output.root / "generation_state.json"
+    if not path.exists():
+        raise FileNotFoundError(f"Generation batch state does not exist: {path}")
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid generation batch state: {path}") from exc
+    if not isinstance(state, dict):
+        raise ValueError(f"Invalid generation batch state: {path}")
+    return state
+
+
+def _openai_client_from_env() -> Any:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is required for OpenAI Batch stages")
+    from openai import OpenAI
+
+    options: dict[str, str] = {"api_key": api_key}
+    if base_url := os.environ.get("OPENAI_BASE_URL"):
+        options["base_url"] = base_url
+    return OpenAI(**options)
+
+
 def inspect_stage(
     config: IRDatasetConfig,
     *,
@@ -377,8 +464,18 @@ def main(argv: list[str] | None = None) -> int:
             passage_id=parsed.passage_id,
             query=parsed.query,
         )
-    else:
+    elif parsed.stage == "run":
         result = run_local_pipeline(parsed.config)
+    elif parsed.stage == "select-targets":
+        result = select_targets_stage(parsed.config)
+    elif parsed.stage == "prepare-generation":
+        result = prepare_generation_stage(parsed.config)
+    elif parsed.stage == "submit-generation":
+        result = submit_pending_shards(_generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.root)
+    elif parsed.stage == "generation-status":
+        result = refresh_batch_status(_generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.root)
+    else:
+        result = collect_completed_shards(_generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.root)
     print(json.dumps(_summary_payload(result), ensure_ascii=False, indent=2, default=str))
     return 0
 

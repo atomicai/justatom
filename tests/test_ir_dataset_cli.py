@@ -98,6 +98,21 @@ def test_dotted_cli_overrides_are_typed(tmp_path):
     assert parsed.config.output.root == tmp_path
 
 
+def test_cli_accepts_resumable_generation_stages(tmp_path):
+    stages = (
+        "select-targets",
+        "prepare-generation",
+        "submit-generation",
+        "generation-status",
+        "collect-generation",
+    )
+
+    parsed = [parse_cli(["--config", str(CONFIG_PATH), "--output.root", str(tmp_path), stage]) for stage in stages]
+
+    assert [item.stage for item in parsed] == list(stages)
+    assert all(item.config.generation.model == "gpt-5.6-terra" for item in parsed)
+
+
 def test_embed_fingerprint_changes_with_model_revision():
     config = load_ir_dataset_config(CONFIG_PATH)
     changed = replace(config, retrieval=replace(config.retrieval, model_revision="different-commit"))
