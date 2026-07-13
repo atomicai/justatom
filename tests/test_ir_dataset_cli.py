@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import polars as pl
+import pytest
 
 from justatom.api import ir_dataset as ir_dataset_module
 from justatom.api.ir_dataset import (
@@ -18,6 +20,7 @@ from justatom.api.ir_dataset import (
 )
 from justatom.tooling.ir_dataset.batch import REQUIRED_SOURCE_CORPUS_FINGERPRINT
 from justatom.tooling.ir_dataset.artifacts import PrepareSummary
+from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION
 from justatom.tooling.ir_dataset.dense import DenseIndex, DenseSearchHit
 from justatom.tooling.ir_dataset.neighbors import include_structural_neighbors, merge_neighbors, select_query_passages
 from justatom.tooling.ir_dataset.sparse import BM25Index, SearchHit
@@ -81,12 +84,17 @@ def test_checked_in_config_resolves_local_defaults():
     config = load_ir_dataset_config(CONFIG_PATH)
 
     assert config.source.repo_id == "justatom/habr-ds"
+    assert config.chunking.tokenizer_revision == "614241f622f53c4eeff9890bdc4f31cfecc418b3"
     assert config.chunking.accepted_max_tokens == 504
     assert config.preparation.max_passages == 100_000
     assert config.retrieval.bm25_k == 20
     assert config.retrieval.dense_k == 20
     assert config.generation.max_shard_bytes == 100_000_000
+    assert config.generation.scale_authorized is False
+    assert config.generation.max_batch_attempts == 2
+    assert config.target_selection.article_count == 50
     assert config.output.generation_root == Path(".tmp_runs/datasets/habr-ir/generation-v1")
+    assert config.output.pilot_generation_root == config.output.generation_root
 
 
 def test_dotted_cli_overrides_are_typed(tmp_path):
@@ -115,6 +123,7 @@ def test_cli_accepts_resumable_generation_stages(tmp_path):
         "prepare-generation",
         "submit-generation",
         "generation-status",
+        "retry-generation",
         "collect-generation",
     )
 
@@ -124,25 +133,96 @@ def test_cli_accepts_resumable_generation_stages(tmp_path):
     assert all(item.config.generation.model == "gpt-5.6-terra" for item in parsed)
 
 
+def test_source_corpus_authorization_checks_the_actual_passage_sha256(tmp_path):
+    passages_path = tmp_path / "passages.parquet"
+    passages_path.write_bytes(b"actual corpus bytes")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": REQUIRED_SOURCE_CORPUS_FINGERPRINT,
+                "chunker_version": CHUNKER_VERSION,
+                "passages_sha256": hashlib.sha256(b"different corpus bytes").hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="passages.parquet SHA-256"):
+        ir_dataset_module._source_corpus_manifest_fingerprint(tmp_path)
+
+
+def test_generation_rejects_a_source_corpus_from_an_old_chunker_contract(tmp_path):
+    passages_path = tmp_path / "passages.parquet"
+    passages_path.write_bytes(b"old chunker corpus")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": REQUIRED_SOURCE_CORPUS_FINGERPRINT,
+                "chunker_version": CHUNKER_VERSION - 1,
+                "passages_sha256": hashlib.sha256(b"old chunker corpus").hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="chunker contract"):
+        ir_dataset_module._source_corpus_manifest_fingerprint(tmp_path)
+
+
 def test_prepare_generation_reads_existing_generation_workspace_artifacts(tmp_path, monkeypatch):
     source_root = tmp_path / "local-100k"
     generation_root = tmp_path / "generation-v1"
     source_root.mkdir()
     generation_root.mkdir()
-    (source_root / "manifest.json").write_text(json.dumps({"fingerprint": REQUIRED_SOURCE_CORPUS_FINGERPRINT}), encoding="utf-8")
     pl.DataFrame({"passage_id": ["source-passage"]}).write_parquet(source_root / "passages.parquet")
-    pl.DataFrame({"passage_id": ["pilot-target"]}).write_parquet(generation_root / "targets.parquet")
-    pl.DataFrame({"target_passage_id": ["pilot-target"], "context_index": [0]}).write_parquet(
-        generation_root / "generation_context.parquet"
+    passages_sha256 = ir_dataset_module.sha256_file(source_root / "passages.parquet")
+    (source_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "fingerprint": REQUIRED_SOURCE_CORPUS_FINGERPRINT,
+                "chunker_version": CHUNKER_VERSION,
+                "passages_sha256": passages_sha256,
+            }
+        ),
+        encoding="utf-8",
+    )
+    ir_dataset_module.write_bound_parquet_artifact(
+        pl.DataFrame({"passage_id": ["pilot-target"]}),
+        generation_root / "targets.parquet",
+        generation_root / "targets_state.json",
+        artifact_kind="targets",
+        source_corpus_fingerprint=REQUIRED_SOURCE_CORPUS_FINGERPRINT,
+        passages_sha256=passages_sha256,
+        config={"article_count": 50, "seed": 42, "output_dir": None, "max_flow_share": 0.30},
+        upstream_sha256=ir_dataset_module.sha256_file(source_root / "manifest.json"),
+    )
+    ir_dataset_module.write_bound_parquet_artifact(
+        pl.DataFrame({"target_passage_id": ["pilot-target"], "context_index": [0]}),
+        generation_root / "generation_context.parquet",
+        generation_root / "generation_context_state.json",
+        artifact_kind="generation_context",
+        source_corpus_fingerprint=REQUIRED_SOURCE_CORPUS_FINGERPRINT,
+        passages_sha256=passages_sha256,
+        config={
+            "bm25_k": 20,
+            "dense_k": 20,
+            "union_k": 30,
+            "rrf_k": 60,
+            "dense_block_size": 65536,
+            "device": "mps",
+            "output_dir": None,
+        },
+        upstream_sha256=ir_dataset_module.sha256_file(generation_root / "targets.parquet"),
     )
     captured = {}
 
-    def prepare(targets, generation_context, config, output_dir, *, source_corpus_fingerprint):
+    def prepare(targets, generation_context, config, output_dir, *, source_corpus_fingerprint, **bindings):
         captured.update(
             targets=targets.to_dicts(),
             context=generation_context.to_dicts(),
             output_dir=output_dir,
             source_corpus_fingerprint=source_corpus_fingerprint,
+            bindings=bindings,
         )
         return {"prepared": 1}
 

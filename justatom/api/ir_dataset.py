@@ -6,7 +6,7 @@ import json
 import os
 import sys
 import uuid
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -15,15 +15,23 @@ import yaml
 from dotenv import find_dotenv, load_dotenv
 
 from justatom.configuring.scenarios import deep_merge, parse_unknown_overrides
-from justatom.tooling.ir_dataset.artifacts import PrepareConfig, PrepareSummary, prepare_passages
+from justatom.tooling.ir_dataset.artifacts import (
+    PrepareConfig,
+    PrepareSummary,
+    prepare_passages,
+    sha256_file,
+    validate_bound_parquet_artifact,
+    write_bound_parquet_artifact,
+)
 from justatom.tooling.ir_dataset.batch import (
     REQUIRED_SOURCE_CORPUS_FINGERPRINT,
     collect_completed_shards,
     prepare_generation_batches,
     refresh_batch_status,
+    retry_failed_shards,
     submit_pending_shards,
 )
-from justatom.tooling.ir_dataset.chunking import ChunkingConfig, MarkdownPassageChunker
+from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION, ChunkingConfig, MarkdownPassageChunker
 from justatom.tooling.ir_dataset.dense import DenseIndex, E5TextEncoder, TextEncoder
 from justatom.tooling.ir_dataset.generation import GeneratorConfig
 from justatom.tooling.ir_dataset.generation_context import GenerationContextConfig, build_generation_context
@@ -35,7 +43,11 @@ from justatom.tooling.ir_dataset.neighbors import (
 )
 from justatom.tooling.ir_dataset.source import HabrSource, promote_hf_token_env
 from justatom.tooling.ir_dataset.sparse import BM25_INDEX_VERSION, BM25Index, TECHNICAL_TOKEN_PATTERN
-from justatom.tooling.ir_dataset.targets import TargetSelectionConfig, select_target_slots
+from justatom.tooling.ir_dataset.targets import (
+    TargetSelectionConfig,
+    select_target_slots,
+    selection_quality_reason_counts,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +90,7 @@ class RetrievalConfig:
 class OutputConfig:
     root: Path = Path(".tmp_runs/datasets/habr-ir/local-100k")
     generation_root: Path = Path(".tmp_runs/datasets/habr-ir/generation-v1")
+    pilot_generation_root: Path = Path(".tmp_runs/datasets/habr-ir/generation-v1")
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +99,7 @@ class IRDatasetConfig:
     chunking: ChunkingConfig
     preparation: PrepareConfig
     retrieval: RetrievalConfig
+    target_selection: TargetSelectionConfig
     generation: GeneratorConfig
     output: OutputConfig
 
@@ -134,11 +148,14 @@ def load_ir_dataset_config(
         output_values["root"] = Path(output_values["root"])
     if output_values.get("generation_root") is not None:
         output_values["generation_root"] = Path(output_values["generation_root"])
+    if output_values.get("pilot_generation_root") is not None:
+        output_values["pilot_generation_root"] = Path(output_values["pilot_generation_root"])
     return IRDatasetConfig(
         source=_build_dataclass(SourceConfig, source_values),
         chunking=_build_dataclass(ChunkingConfig, raw.get("chunking")),
         preparation=_build_dataclass(PrepareConfig, raw.get("preparation")),
         retrieval=_build_dataclass(RetrievalConfig, raw.get("retrieval")),
+        target_selection=_build_dataclass(TargetSelectionConfig, raw.get("target_selection")),
         generation=_build_dataclass(GeneratorConfig, raw.get("generation")),
         output=_build_dataclass(OutputConfig, output_values),
     )
@@ -156,6 +173,7 @@ def parse_cli(argv: list[str] | None = None) -> ParsedCLI:
         "prepare-generation",
         "submit-generation",
         "generation-status",
+        "retry-generation",
         "collect-generation",
     )
     stage_positions = [(index, token) for index, token in enumerate(raw_argv) if token in stages]
@@ -316,10 +334,23 @@ def select_targets_stage(config: IRDatasetConfig) -> pl.DataFrame:
     passages_path = config.output.root / "passages.parquet"
     if not passages_path.exists():
         raise FileNotFoundError(f"Passage artifact does not exist: {passages_path}")
-    return select_target_slots(
-        pl.read_parquet(passages_path),
-        TargetSelectionConfig(output_dir=config.output.generation_root),
+    source_fingerprint = _source_corpus_manifest_fingerprint(config.output.root)
+    passages = pl.read_parquet(passages_path)
+    selection_config = replace(config.target_selection, output_dir=None)
+    targets = select_target_slots(passages, selection_config)
+    generation_root = config.output.generation_root
+    write_bound_parquet_artifact(
+        targets,
+        generation_root / "targets.parquet",
+        generation_root / "targets_state.json",
+        artifact_kind="targets",
+        source_corpus_fingerprint=source_fingerprint,
+        passages_sha256=sha256_file(passages_path),
+        config=asdict(selection_config),
+        upstream_sha256=sha256_file(config.output.root / "manifest.json"),
+        metadata={"quality_reason_counts": selection_quality_reason_counts(passages)},
     )
+    return targets
 
 
 def _source_corpus_manifest_fingerprint(root: Path) -> str:
@@ -333,7 +364,28 @@ def _source_corpus_manifest_fingerprint(root: Path) -> str:
     fingerprint = manifest.get("fingerprint") if isinstance(manifest, dict) else None
     if fingerprint != REQUIRED_SOURCE_CORPUS_FINGERPRINT:
         raise ValueError("source corpus manifest fingerprint does not match the required Habr corpus")
+    if manifest.get("chunker_version") != CHUNKER_VERSION:
+        raise ValueError("source corpus manifest does not match the current chunker contract")
+    passages_path = root / "passages.parquet"
+    expected_passages_sha256 = manifest.get("passages_sha256") if isinstance(manifest, dict) else None
+    if not passages_path.exists() or not expected_passages_sha256:
+        raise ValueError("source corpus manifest does not bind passages.parquet SHA-256")
+    if sha256_file(passages_path) != expected_passages_sha256:
+        raise ValueError("actual passages.parquet SHA-256 does not match the source corpus manifest")
     return fingerprint
+
+
+def _require_artifact_source_binding(
+    state: dict[str, Any],
+    *,
+    artifact_kind: str,
+    source_fingerprint: str,
+    passages_sha256: str,
+) -> None:
+    if state.get("source_corpus_fingerprint") != source_fingerprint:
+        raise ValueError(f"source-bound {artifact_kind} corpus fingerprint mismatch")
+    if state.get("passages_sha256") != passages_sha256:
+        raise ValueError(f"source-bound {artifact_kind} passages checksum mismatch")
 
 
 def prepare_generation_stage(config: IRDatasetConfig) -> dict[str, Any]:
@@ -345,31 +397,94 @@ def prepare_generation_stage(config: IRDatasetConfig) -> dict[str, Any]:
         raise FileNotFoundError(f"Target artifact does not exist: {targets_path}")
     if not passages_path.exists():
         raise FileNotFoundError(f"Passage artifact does not exist: {passages_path}")
+    source_fingerprint = _source_corpus_manifest_fingerprint(source_root)
+    passages_sha256 = sha256_file(passages_path)
+    manifest_sha256 = sha256_file(source_root / "manifest.json")
+    targets_state_path = generation_root / "targets_state.json"
+    generation_state_path = generation_root / "generation_state.json"
+    legacy_v2 = False
+    if generation_state_path.exists() and not targets_state_path.exists():
+        try:
+            legacy_state = json.loads(generation_state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid generation batch state: {generation_state_path}") from exc
+        legacy_v2 = isinstance(legacy_state, dict) and legacy_state.get("version") == 2
+        if not legacy_v2:
+            raise ValueError("source-bound target state is missing from a non-legacy generation workspace")
+    if legacy_v2:
+        targets_state = None
+    else:
+        targets_state = validate_bound_parquet_artifact(targets_path, targets_state_path, artifact_kind="targets")
+        _require_artifact_source_binding(
+            targets_state,
+            artifact_kind="targets",
+            source_fingerprint=source_fingerprint,
+            passages_sha256=passages_sha256,
+        )
+        expected_target_config = asdict(replace(config.target_selection, output_dir=None))
+        if targets_state.get("config") != expected_target_config:
+            raise ValueError("source-bound targets config mismatch")
+        if targets_state.get("upstream_sha256") != manifest_sha256:
+            raise ValueError("source-bound targets manifest checksum mismatch")
     context_path = generation_root / "generation_context.parquet"
+    context_state_path = generation_root / "generation_context_state.json"
+    context_config = GenerationContextConfig(
+        bm25_k=config.retrieval.bm25_k,
+        dense_k=config.retrieval.dense_k,
+        union_k=config.retrieval.union_k,
+        rrf_k=config.retrieval.rrf_k,
+        dense_block_size=config.retrieval.dense_block_size,
+        device=config.retrieval.device,
+        output_dir=None,
+    )
     if context_path.exists():
+        if not legacy_v2:
+            context_state = validate_bound_parquet_artifact(context_path, context_state_path, artifact_kind="generation_context")
+            _require_artifact_source_binding(
+                context_state,
+                artifact_kind="generation_context",
+                source_fingerprint=source_fingerprint,
+                passages_sha256=passages_sha256,
+            )
+            if context_state.get("config") != asdict(context_config):
+                raise ValueError("source-bound generation context config mismatch")
+            if context_state.get("upstream_sha256") != sha256_file(targets_path):
+                raise ValueError("source-bound generation context target checksum mismatch")
+        else:
+            context_state = None
         generation_context = pl.read_parquet(context_path)
     else:
+        if generation_state_path.exists():
+            raise ValueError("refusing to create generation context after generation state exists")
         generation_context = build_generation_context(
             pl.read_parquet(targets_path),
             pl.read_parquet(passages_path),
             BM25Index.load(source_root / "bm25", mmap=True),
             DenseIndex.load(source_root / "dense"),
-            GenerationContextConfig(
-                bm25_k=config.retrieval.bm25_k,
-                dense_k=config.retrieval.dense_k,
-                union_k=config.retrieval.union_k,
-                rrf_k=config.retrieval.rrf_k,
-                dense_block_size=config.retrieval.dense_block_size,
-                device=config.retrieval.device,
-                output_dir=generation_root,
-            ),
+            context_config,
+        )
+        context_state = write_bound_parquet_artifact(
+            generation_context,
+            context_path,
+            context_state_path,
+            artifact_kind="generation_context",
+            source_corpus_fingerprint=source_fingerprint,
+            passages_sha256=passages_sha256,
+            config=asdict(context_config),
+            upstream_sha256=sha256_file(targets_path),
         )
     return prepare_generation_batches(
         pl.read_parquet(targets_path),
         generation_context,
         config.generation,
         generation_root,
-        source_corpus_fingerprint=_source_corpus_manifest_fingerprint(source_root),
+        source_corpus_fingerprint=source_fingerprint,
+        source_passages_sha256=passages_sha256,
+        targets_sha256=sha256_file(targets_path),
+        generation_context_sha256=sha256_file(context_path),
+        targets_state_sha256=sha256_file(targets_state_path) if targets_state is not None else None,
+        generation_context_state_sha256=sha256_file(context_state_path) if context_state is not None else None,
+        pilot_generation_root=config.output.pilot_generation_root,
     )
 
 
@@ -497,11 +612,23 @@ def main(argv: list[str] | None = None) -> int:
         result = prepare_generation_stage(parsed.config)
     elif parsed.stage == "submit-generation":
         result = submit_pending_shards(
-            _generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.generation_root
+            _generation_state(parsed.config),
+            _openai_client_from_env(),
+            parsed.config.output.generation_root,
+            scale_authorized=parsed.config.generation.scale_authorized,
+            pilot_generation_root=parsed.config.output.pilot_generation_root,
         )
     elif parsed.stage == "generation-status":
         result = refresh_batch_status(
             _generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.generation_root
+        )
+    elif parsed.stage == "retry-generation":
+        result = retry_failed_shards(
+            _generation_state(parsed.config),
+            _openai_client_from_env(),
+            parsed.config.output.generation_root,
+            scale_authorized=parsed.config.generation.scale_authorized,
+            pilot_generation_root=parsed.config.output.pilot_generation_root,
         )
     else:
         result = collect_completed_shards(

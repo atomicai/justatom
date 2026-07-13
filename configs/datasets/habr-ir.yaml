@@ -7,6 +7,7 @@ source:
 
 chunking:
   tokenizer_name: intfloat/multilingual-e5-small
+  tokenizer_revision: 614241f622f53c4eeff9890bdc4f31cfecc418b3
   max_section_chars: 240
   min_chars: 600
   target_chars: 1200
@@ -34,12 +35,20 @@ retrieval:
   rrf_k: 60
   query_passages: 200
 
+target_selection:
+  article_count: 50
+  seed: 42
+  max_flow_share: 0.30
+
 generation:
   model: gpt-5.6-terra
   reasoning_effort: low
   max_requests_per_shard: 1000
   max_shard_bytes: 100000000
+  max_batch_attempts: 2
+  scale_authorized: false
 
 output:
   root: .tmp_runs/datasets/habr-ir/local-100k
   generation_root: .tmp_runs/datasets/habr-ir/generation-v1
+  pilot_generation_root: .tmp_runs/datasets/habr-ir/generation-v1

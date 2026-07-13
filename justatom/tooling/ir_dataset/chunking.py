@@ -14,7 +14,7 @@ _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?…])\s+")
 _WHITESPACE_RE = re.compile(r"[ \t\f\v]+")
 _BLANK_LINES_RE = re.compile(r"\n{3,}")
 _HABR_CODE_MARKER_RE = re.compile(r"\[/?(?:code|source)(?:=[^\]\n]*)?\]", re.IGNORECASE)
-CHUNKER_VERSION = 3
+CHUNKER_VERSION = 4
 
 
 class TokenizerLike(Protocol):
@@ -33,6 +33,7 @@ class TokenizerLike(Protocol):
 @dataclass(frozen=True, slots=True)
 class ChunkingConfig:
     tokenizer_name: str = "intfloat/multilingual-e5-small"
+    tokenizer_revision: str = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
     max_section_chars: int = 240
     min_chars: int = 600
     target_chars: int = 1200
@@ -44,6 +45,8 @@ class ChunkingConfig:
     def __post_init__(self) -> None:
         if self.max_section_chars <= 0:
             raise ValueError("chunking.max_section_chars must be > 0")
+        if not self.tokenizer_revision.strip():
+            raise ValueError("chunking.tokenizer_revision must not be empty")
         if self.min_chars <= 0:
             raise ValueError("chunking.min_chars must be > 0")
         if not self.min_chars <= self.target_chars <= self.max_chars:
@@ -120,7 +123,7 @@ def serialize_passage(title: str, section: str, content: str) -> str:
 class MarkdownPassageChunker:
     def __init__(self, config: ChunkingConfig | None = None, tokenizer: TokenizerLike | None = None) -> None:
         self.config = config or ChunkingConfig()
-        self.tokenizer = tokenizer or self._load_tokenizer(self.config.tokenizer_name)
+        self.tokenizer = tokenizer or self._load_tokenizer(self.config.tokenizer_name, self.config.tokenizer_revision)
         self._markdown = MarkdownIt("commonmark", {"html": False}).enable("table")
 
     @classmethod
@@ -134,6 +137,7 @@ class MarkdownPassageChunker:
         return cls(
             config=ChunkingConfig(
                 tokenizer_name=getattr(tokenizer, "name_or_path", "test/tokenizer"),
+                tokenizer_revision="test-revision",
                 max_section_chars=80,
                 min_chars=40,
                 target_chars=180,
@@ -146,10 +150,10 @@ class MarkdownPassageChunker:
         )
 
     @staticmethod
-    def _load_tokenizer(name: str) -> TokenizerLike:
+    def _load_tokenizer(name: str, revision: str) -> TokenizerLike:
         from transformers import AutoTokenizer
 
-        return AutoTokenizer.from_pretrained(name)
+        return AutoTokenizer.from_pretrained(name, revision=revision)
 
     def token_count(self, text: str) -> int:
         try:
@@ -275,11 +279,7 @@ class MarkdownPassageChunker:
         if self._fits(title, unit.section, unit.text):
             return [unit]
         candidates = unit.text.splitlines() if unit.kind == "code" else _SENTENCE_BOUNDARY_RE.split(unit.text)
-        candidates = [
-            _clean_text(piece, preserve_newlines=unit.kind == "code")
-            for piece in candidates
-            if _clean_text(piece)
-        ]
+        candidates = [_clean_text(piece, preserve_newlines=unit.kind == "code") for piece in candidates if _clean_text(piece)]
         pieces: list[str] = []
         for candidate in candidates:
             if self._fits(title, unit.section, candidate):
@@ -338,6 +338,8 @@ class MarkdownPassageChunker:
         for unit in units:
             if current and unit.section != current[-1].section:
                 flush()
+                current = []
+                overlap_chars = 0
             candidate_units = [*current, unit]
             candidate = "\n\n".join(item.text for item in candidate_units)
             current_content = "\n\n".join(item.text for item in current)

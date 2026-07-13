@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import transformers
+
 from justatom.tooling.ir_dataset.chunking import ChunkingConfig, MarkdownPassageChunker
 
 
@@ -151,3 +153,48 @@ def test_oversized_setext_heading_is_treated_as_passage_content():
     assert any("Криптография требует" in row.content for row in passages)
     assert all(len(row.section) <= chunker.config.max_section_chars for row in passages)
     assert all(row.token_count <= chunker.config.accepted_max_tokens for row in passages)
+
+
+def test_overlap_never_crosses_a_markdown_section_boundary():
+    chunker = MarkdownPassageChunker(
+        config=ChunkingConfig(
+            tokenizer_name="test/whitespace",
+            tokenizer_revision="test-revision",
+            min_chars=20,
+            target_chars=60,
+            max_chars=120,
+            overlap_max_chars=50,
+            model_max_tokens=100,
+            safety_reserve_tokens=4,
+        ),
+        tokenizer=WhitespaceTokenizer(),
+    )
+    article = {
+        **sample_article(),
+        "text_markdown": (
+            "# First\n\nFirst section has enough standalone material for one passage.\n\n"
+            "Short overlap sentence.\n\n# Second\n\nSecond section has its own standalone material for a passage."
+        ),
+    }
+
+    passages = chunker.chunk_article(article)
+
+    second = [passage for passage in passages if passage.section == "Second"]
+    assert second
+    assert all("Short overlap sentence." not in passage.content for passage in second)
+    assert all(passage.overlap_prefix_chars == 0 for passage in second)
+
+
+def test_chunker_passes_the_pinned_tokenizer_revision(monkeypatch):
+    captured = {}
+
+    def from_pretrained(name, **kwargs):
+        captured.update(name=name, **kwargs)
+        return WhitespaceTokenizer()
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", from_pretrained)
+    config = ChunkingConfig(tokenizer_name="test/pinned", tokenizer_revision="commit-sha")
+
+    MarkdownPassageChunker(config)
+
+    assert captured == {"name": "test/pinned", "revision": "commit-sha"}

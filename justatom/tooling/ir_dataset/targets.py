@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import os
 import re
+import unicodedata
+import uuid
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +32,7 @@ _REPEATED_CHARACTER_RE = re.compile(r"(.)\1{80,}", re.DOTALL)
 
 @dataclass(frozen=True, slots=True)
 class TargetSelectionConfig:
-    article_count: int = 5_000
+    article_count: int = 50
     seed: int = 42
     output_dir: str | Path | None = None
     max_flow_share: float = 0.30
@@ -57,6 +61,24 @@ class PassageQuality:
 
 def _text(row: Mapping[str, Any]) -> str:
     return str(row.get("content") or row.get("serialized_passage") or "").strip()
+
+
+def _normalized_content(value: Any) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", str(value))).strip().casefold()
+
+
+def selection_quality_reason_counts(passages: pl.DataFrame) -> dict[str, int]:
+    if not isinstance(passages, pl.DataFrame):
+        raise TypeError("passages must be a polars DataFrame")
+    rows = passages.to_dicts()
+    content_counts = Counter(_normalized_content(row.get("content", "")) for row in rows)
+    reasons: Counter[str] = Counter()
+    for row in rows:
+        quality = score_passage_quality(row)
+        reasons.update(quality.reason_codes)
+        if content_counts[_normalized_content(row.get("content", ""))] > 1:
+            reasons["globally_duplicate_content"] += 1
+    return dict(sorted(reasons.items()))
 
 
 def _token_count(row: Mapping[str, Any], tokens: list[str]) -> int:
@@ -333,13 +355,22 @@ def select_target_slots(passages: pl.DataFrame, config: TargetSelectionConfig | 
         raise ValueError(f"passages is missing required columns: {', '.join(missing_columns)}")
 
     passage_rows = passages.to_dicts()
+    content_counts = Counter(_normalized_content(row["content"]) for row in passage_rows)
     full_article_passages: dict[str, list[dict[str, Any]]] = {}
     for row in passage_rows:
         full_article_passages.setdefault(str(row["article_id"]), []).append(row)
 
     eligible_by_article: dict[str, list[dict[str, Any]]] = {}
+    quality_reason_counts: Counter[str] = Counter()
     for row in passage_rows:
         quality = score_passage_quality(row)
+        if content_counts[_normalized_content(row["content"])] > 1:
+            quality = replace(
+                quality,
+                eligible=False,
+                reason_codes=tuple(dict.fromkeys((*quality.reason_codes, "globally_duplicate_content"))),
+            )
+        quality_reason_counts.update(quality.reason_codes)
         if not quality.eligible:
             continue
         article_id = str(row["article_id"])
@@ -405,8 +436,34 @@ def select_target_slots(passages: pl.DataFrame, config: TargetSelectionConfig | 
     if active_config.output_dir is not None:
         output_dir = Path(active_config.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        targets.write_parquet(output_dir / "targets.parquet", compression="zstd")
+        output_path = output_dir / "targets.parquet"
+        temporary = output_path.with_name(f".{output_path.name}.{uuid.uuid4().hex}.tmp")
+        targets.write_parquet(temporary, compression="zstd")
+        os.replace(temporary, output_path)
+        summary_path = output_dir / "target_selection_summary.json"
+        summary_temporary = summary_path.with_name(f".{summary_path.name}.{uuid.uuid4().hex}.tmp")
+        summary_temporary.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "passage_count": len(passage_rows),
+                    "selected_target_count": targets.height,
+                    "quality_reason_counts": dict(sorted(quality_reason_counts.items())),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.replace(summary_temporary, summary_path)
     return targets
 
 
-__all__ = ["PassageQuality", "TargetSelectionConfig", "score_passage_quality", "select_target_slots"]
+__all__ = [
+    "PassageQuality",
+    "TargetSelectionConfig",
+    "score_passage_quality",
+    "select_target_slots",
+    "selection_quality_reason_counts",
+]

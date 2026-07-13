@@ -8,11 +8,19 @@ import os
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from justatom.tooling.ir_dataset.generation import GENERATOR_SCHEMA, GeneratorConfig, build_generator_request
+import polars as pl
+
+from justatom.tooling.ir_dataset.generation import (
+    GENERATOR_SCHEMA,
+    GeneratorConfig,
+    build_generator_request,
+    normalize_query,
+    validate_generator_result,
+)
 
 
 REQUIRED_SOURCE_CORPUS_FINGERPRINT = "bb6ad903b82c337a61cce2b1cd5bf5dd7e3303b6b3263258979372c00e40c3c9"
@@ -21,6 +29,13 @@ DEFAULT_MAX_BYTES = 100_000_000
 STATE_FILE_NAME = "generation_state.json"
 COLLECTED_FILE_NAME = "generation_collected.jsonl"
 DIAGNOSTICS_FILE_NAME = "generation_diagnostics.jsonl"
+PILOT_METRICS_FILE_NAME = "pilot_metrics.json"
+PILOT_MAX_REQUESTS = 100
+PILOT_MIN_USABLE_RATE = 0.70
+PILOT_MIN_GATE_PASS_RATE = 0.60
+VALIDATOR_VERSION = 1
+FINALIZER_VERSION = 1
+RETRYABLE_BATCH_STATUSES = frozenset({"failed", "expired", "cancelled"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +91,18 @@ def _write_bytes_atomic(path: Path, value: bytes) -> None:
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     _write_bytes_atomic(path, (_canonical_json(payload) + "\n").encode("utf-8"))
+
+
+def _write_parquet_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        pl.DataFrame(rows).write_parquet(temporary, compression="zstd")
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _relative_to(path: Path, root: Path) -> str:
@@ -171,6 +198,9 @@ def _generation_fingerprint(
         "attempt": config.attempt,
         "max_requests_per_shard": config.max_requests_per_shard,
         "max_shard_bytes": config.max_shard_bytes,
+        "accepted_max_tokens": config.accepted_max_tokens,
+        "validator_version": VALIDATOR_VERSION,
+        "finalizer_version": FINALIZER_VERSION,
         "schema": GENERATOR_SCHEMA,
         "requests": requests,
     }
@@ -200,6 +230,7 @@ def _validate_shard_checksum(shard: Mapping[str, Any], output_dir: str | Path) -
 
 
 def _validate_state_requests(state: Mapping[str, Any], output_dir: str | Path) -> None:
+    _validate_generation_inputs(state, output_dir)
     seen_ids: set[str] = set()
     for shard in state.get("shards", []):
         if not isinstance(shard, Mapping):
@@ -211,6 +242,59 @@ def _validate_state_requests(state: Mapping[str, Any], output_dir: str | Path) -
             seen_ids.add(custom_id)
 
 
+def _input_artifact_path(state: Mapping[str, Any], output_dir: str | Path, field: str, default: str) -> Path:
+    metadata = state.get(field)
+    relative = metadata.get("path", default) if isinstance(metadata, Mapping) else default
+    return Path(output_dir) / str(relative)
+
+
+def _validate_generation_inputs(state: Mapping[str, Any], output_dir: str | Path) -> None:
+    root = Path(output_dir)
+    for field, default, label in (
+        ("targets", "targets.parquet", "targets"),
+        ("generation_context", "generation_context.parquet", "generation context"),
+    ):
+        metadata = state.get(field)
+        if not isinstance(metadata, Mapping):
+            continue
+        path = root / str(metadata.get("path", default))
+        expected = metadata.get("sha256")
+        if not expected or not path.exists() or _sha256_file(path) != str(expected):
+            raise ValueError(f"{label} artifact checksum mismatch: {path}")
+        state_path = metadata.get("state_path")
+        state_sha256 = metadata.get("state_sha256")
+        if state_path or state_sha256:
+            if not state_path or not state_sha256:
+                raise ValueError(f"incomplete {label} artifact state binding")
+            bound_state_path = root / str(state_path)
+            if not bound_state_path.exists() or _sha256_file(bound_state_path) != str(state_sha256):
+                raise ValueError(f"{label} artifact state checksum mismatch: {bound_state_path}")
+
+
+def _ensure_input_artifact(
+    rows: list[dict[str, Any]],
+    path: Path,
+    *,
+    expected_sha256: str | None,
+    label: str,
+) -> str:
+    if path.exists():
+        actual_sha256 = _sha256_file(path)
+        if expected_sha256 is not None and actual_sha256 != expected_sha256:
+            raise ValueError(f"{label} artifact checksum mismatch: {path}")
+        try:
+            persisted_rows = pl.read_parquet(path).to_dicts()
+        except Exception as exc:
+            raise ValueError(f"invalid {label} artifact: {path}") from exc
+        if _canonical_json(persisted_rows) != _canonical_json(rows):
+            raise ValueError(f"refusing to reuse {label} artifact with different rows: {path}")
+        return actual_sha256
+    if expected_sha256 is not None:
+        raise FileNotFoundError(f"checksummed {label} artifact does not exist: {path}")
+    _write_parquet_atomic(path, rows)
+    return _sha256_file(path)
+
+
 def prepare_generation_batches(
     targets: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]] | Any,
     generation_context: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]] | Any,
@@ -218,6 +302,12 @@ def prepare_generation_batches(
     output_dir: str | Path,
     *,
     source_corpus_fingerprint: str,
+    source_passages_sha256: str | None = None,
+    targets_sha256: str | None = None,
+    generation_context_sha256: str | None = None,
+    targets_state_sha256: str | None = None,
+    generation_context_state_sha256: str | None = None,
+    pilot_generation_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a corpus-bound, resumable OpenAI Batch state manifest."""
     if source_corpus_fingerprint != REQUIRED_SOURCE_CORPUS_FINGERPRINT:
@@ -239,9 +329,26 @@ def prepare_generation_batches(
     requests = [
         build_generator_request(row, context_by_target.get(str(row["passage_id"]), ()), active_config) for row in target_rows
     ]
+    root = Path(output_dir)
+    if len(requests) > PILOT_MAX_REQUESTS and pilot_generation_root is not None:
+        if root.resolve() == Path(pilot_generation_root).resolve():
+            raise ValueError("preparing more than 100 requests requires a separate generation root")
+    targets_path = root / "targets.parquet"
+    context_path = root / "generation_context.parquet"
+    target_artifact_sha256 = _ensure_input_artifact(
+        target_rows,
+        targets_path,
+        expected_sha256=targets_sha256,
+        label="targets",
+    )
+    context_artifact_sha256 = _ensure_input_artifact(
+        context_rows,
+        context_path,
+        expected_sha256=generation_context_sha256,
+        label="generation context",
+    )
     context_fingerprint = _target_context_fingerprint(target_rows, context_rows)
     generation_fingerprint = _generation_fingerprint(source_corpus_fingerprint, context_fingerprint, active_config, requests)
-    root = Path(output_dir)
     state_path = _state_path(root)
     if state_path.exists():
         existing = _load_state(state_path)
@@ -261,14 +368,29 @@ def prepare_generation_batches(
         max_bytes=active_config.max_shard_bytes,
     )
     state: dict[str, Any] = {
-        "version": 2,
+        "version": 3,
         "source_corpus_fingerprint": source_corpus_fingerprint,
+        "source_passages_sha256": source_passages_sha256,
+        "targets": {
+            "path": _relative_to(targets_path, root),
+            "sha256": target_artifact_sha256,
+            "state_path": "targets_state.json" if targets_state_sha256 else None,
+            "state_sha256": targets_state_sha256,
+        },
+        "generation_context": {
+            "path": _relative_to(context_path, root),
+            "sha256": context_artifact_sha256,
+            "state_path": "generation_context_state.json" if generation_context_state_sha256 else None,
+            "state_sha256": generation_context_state_sha256,
+        },
         "target_context_fingerprint": context_fingerprint,
         "generation_fingerprint": generation_fingerprint,
+        "generation_config": asdict(active_config),
         "limits": {
             "model": active_config.model,
             "max_requests_per_shard": active_config.max_requests_per_shard,
             "max_shard_bytes": active_config.max_shard_bytes,
+            "max_batch_attempts": active_config.max_batch_attempts,
         },
         "shards": [
             {
@@ -282,6 +404,8 @@ def prepare_generation_batches(
                 "status": "prepared",
                 "output_file_id": None,
                 "error_file_id": None,
+                "attempt": 1,
+                "history": [],
             }
             for shard in shards
         ],
@@ -345,6 +469,7 @@ def _batch_operation(state: Mapping[str, Any], shard: Mapping[str, Any]) -> dict
     metadata = {
         "justatom_generation_fingerprint": str(state["generation_fingerprint"]),
         "justatom_shard_sha256": str(shard["request_sha256"]),
+        "justatom_batch_attempt": str(shard.get("attempt", 1)),
     }
     return {"input_file_id": str(shard["input_file_id"]), "metadata": metadata}
 
@@ -425,8 +550,76 @@ def _submit_pending_shards_unlocked(state: Mapping[str, Any], client: Any, outpu
     return _persist_state(result, output_dir)
 
 
-def submit_pending_shards(state: Mapping[str, Any], client: Any, output_dir: str | Path) -> dict[str, Any]:
+def _request_count(state: Mapping[str, Any]) -> int:
+    return sum(int(shard.get("request_count", len(shard.get("custom_ids", ())))) for shard in state.get("shards", []))
+
+
+def _requires_scale_gate(state: Mapping[str, Any]) -> bool:
+    return _request_count(state) > PILOT_MAX_REQUESTS or len(state.get("shards", ())) > 1
+
+
+def _validate_scale_gate(
+    state: Mapping[str, Any],
+    output_dir: str | Path,
+    *,
+    scale_authorized: bool,
+    pilot_generation_root: str | Path | None,
+) -> None:
+    if not _requires_scale_gate(state):
+        return
+    if not scale_authorized:
+        raise ValueError("multi-shard or >100-request submission requires explicit scale authorization")
+    if pilot_generation_root is None:
+        raise ValueError("scale submission requires a pilot generation root")
+    root = Path(output_dir).resolve()
+    pilot_root = Path(pilot_generation_root).resolve()
+    if root == pilot_root:
+        raise ValueError("scale submission requires a generation root separate from the pilot workspace")
+    metrics_path = pilot_root / PILOT_METRICS_FILE_NAME
+    pilot_state_path = pilot_root / STATE_FILE_NAME
+    if not metrics_path.exists() or not pilot_state_path.exists():
+        raise ValueError("scale submission requires checksummed pilot metrics and pilot state artifacts")
+    pilot_state = _load_state(pilot_state_path)
+    expected_checksum = pilot_state.get("pilot_metrics_sha256")
+    if not expected_checksum or _sha256_file(metrics_path) != str(expected_checksum):
+        raise ValueError("pilot metrics checksum mismatch")
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("invalid pilot metrics artifact") from exc
+    if not isinstance(metrics, Mapping) or metrics.get("generation_fingerprint") != pilot_state.get("generation_fingerprint"):
+        raise ValueError("pilot metrics are not bound to the pilot generation fingerprint")
+    if pilot_state.get("validator_version") != VALIDATOR_VERSION or pilot_state.get("finalizer_version") != FINALIZER_VERSION:
+        raise ValueError("pilot metrics were not produced by the current deterministic finalizer")
+    if pilot_state.get("source_corpus_fingerprint") != state.get("source_corpus_fingerprint"):
+        raise ValueError("pilot metrics source corpus does not match the scale generation")
+    pilot_passages_sha256 = pilot_state.get("source_passages_sha256")
+    if pilot_passages_sha256 and pilot_passages_sha256 != state.get("source_passages_sha256"):
+        raise ValueError("pilot metrics source passages do not match the scale generation")
+    if int(metrics.get("request_count", PILOT_MAX_REQUESTS + 1)) > PILOT_MAX_REQUESTS:
+        raise ValueError("pilot metrics must describe at most 100 requests")
+    if float(metrics.get("usable_rate", -1.0)) < PILOT_MIN_USABLE_RATE:
+        raise ValueError(f"pilot usable rate must be >= {PILOT_MIN_USABLE_RATE:.2f}")
+    if float(metrics.get("deterministic_gate_pass_rate", -1.0)) < PILOT_MIN_GATE_PASS_RATE:
+        raise ValueError(f"pilot deterministic gate pass rate must be >= {PILOT_MIN_GATE_PASS_RATE:.2f}")
+
+
+def submit_pending_shards(
+    state: Mapping[str, Any],
+    client: Any,
+    output_dir: str | Path,
+    *,
+    scale_authorized: bool = False,
+    pilot_generation_root: str | Path | None = None,
+) -> dict[str, Any]:
     """Serialize local submit/reconcile transitions; this does not provide cross-machine locking."""
+    _validate_state_requests(state, output_dir)
+    _validate_scale_gate(
+        state,
+        output_dir,
+        scale_authorized=scale_authorized,
+        pilot_generation_root=pilot_generation_root,
+    )
     with _submit_lock(output_dir):
         return _submit_pending_shards_unlocked(state, client, output_dir)
 
@@ -452,6 +645,78 @@ def refresh_batch_status(state: Mapping[str, Any], client: Any, output_dir: str 
         "completed": sum(1 for shard in result["shards"] if shard.get("status") == "completed"),
     }
     return _persist_state(result, output_dir)
+
+
+def _attempt_history_entry(shard: Mapping[str, Any]) -> dict[str, Any]:
+    fields = (
+        "attempt",
+        "batch_id",
+        "status",
+        "output_file_id",
+        "error_file_id",
+        "output_path",
+        "output_sha256",
+        "error_path",
+        "error_sha256",
+        "batch_errors",
+        "batch_operation",
+    )
+    return {field: copy.deepcopy(shard[field]) for field in fields if field in shard}
+
+
+def retry_failed_shards(
+    state: Mapping[str, Any],
+    client: Any,
+    output_dir: str | Path,
+    *,
+    scale_authorized: bool = False,
+    pilot_generation_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Retry failed terminal shards explicitly while retaining every prior remote attempt."""
+    _validate_state_requests(state, output_dir)
+    _validate_scale_gate(
+        state,
+        output_dir,
+        scale_authorized=scale_authorized,
+        pilot_generation_root=pilot_generation_root,
+    )
+    with _submit_lock(output_dir):
+        refreshed = refresh_batch_status(state, client, output_dir)
+        eligible = [shard for shard in refreshed.get("shards", []) if shard.get("status") in RETRYABLE_BATCH_STATUSES]
+        if not eligible:
+            raise ValueError("no failed, expired, or cancelled shards are eligible for retry")
+        max_attempts = int(
+            refreshed.get("generation_config", {}).get(
+                "max_batch_attempts", refreshed.get("limits", {}).get("max_batch_attempts", 2)
+            )
+        )
+        capped = [shard for shard in eligible if int(shard.get("attempt", 1)) >= max_attempts]
+        if capped:
+            raise ValueError(f"batch attempt cap of {max_attempts} reached for retryable shard")
+        for shard in eligible:
+            shard.setdefault("history", []).append(_attempt_history_entry(shard))
+            shard["attempt"] = int(shard.get("attempt", 1)) + 1
+            for field in (
+                "batch_id",
+                "batch_operation",
+                "output_file_id",
+                "error_file_id",
+                "output_path",
+                "output_sha256",
+                "error_path",
+                "error_sha256",
+                "batch_errors",
+            ):
+                shard.pop(field, None)
+            shard["status"] = "uploaded" if shard.get("input_file_id") else "prepared"
+        refreshed.pop("collected_path", None)
+        refreshed.pop("collected_sha256", None)
+        refreshed.pop("diagnostics_path", None)
+        refreshed.pop("diagnostics_sha256", None)
+        refreshed.pop("pilot_metrics_path", None)
+        refreshed.pop("pilot_metrics_sha256", None)
+        refreshed = _persist_state(refreshed, output_dir)
+        return _submit_pending_shards_unlocked(refreshed, client, output_dir)
 
 
 def _content_bytes(value: Any) -> bytes:
@@ -581,7 +846,12 @@ def _response_record(custom_id: str, row: Mapping[str, Any]) -> dict[str, Any]:
     output = _strict_output(parsed)
     if output is None:
         return {"status": "rejected", "reason": "structured_output_invalid", "custom_id": custom_id}
-    return {"status": "accepted", "custom_id": custom_id, "output": output}
+    return {
+        "status": "parsed",
+        "custom_id": custom_id,
+        "output": output,
+        "usage": _json_value(_object_value(body, "usage", {})),
+    }
 
 
 def _terminal_record(custom_id: str, events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -612,31 +882,198 @@ def _ensure_collection_ready(state: Mapping[str, Any]) -> None:
         raise ValueError(f"collection is not ready for shards: {', '.join(incomplete)}")
 
 
+def _generator_config_from_state(state: Mapping[str, Any]) -> GeneratorConfig:
+    persisted = state.get("generation_config")
+    if isinstance(persisted, Mapping):
+        return GeneratorConfig(**dict(persisted))
+    limits = state.get("limits") if isinstance(state.get("limits"), Mapping) else {}
+    supported = {
+        key: limits[key] for key in ("model", "max_requests_per_shard", "max_shard_bytes", "max_batch_attempts") if key in limits
+    }
+    return GeneratorConfig(**supported)
+
+
+def _load_request_bindings(
+    state: Mapping[str, Any], output_dir: str | Path
+) -> tuple[list[str], dict[str, tuple[dict[str, Any], list[dict[str, Any]]]], GeneratorConfig]:
+    root = Path(output_dir)
+    targets_path = _input_artifact_path(state, root, "targets", "targets.parquet")
+    context_path = _input_artifact_path(state, root, "generation_context", "generation_context.parquet")
+    if not targets_path.exists() or not context_path.exists():
+        raise FileNotFoundError("generation target/context artifacts are required for deterministic collection")
+    try:
+        target_rows = pl.read_parquet(targets_path).to_dicts()
+        context_rows = pl.read_parquet(context_path).to_dicts()
+    except Exception as exc:
+        raise ValueError("invalid generation target/context artifact") from exc
+    legacy_fingerprint = state.get("target_context_fingerprint")
+    if legacy_fingerprint and _target_context_fingerprint(target_rows, context_rows) != legacy_fingerprint:
+        raise ValueError("generation target/context fingerprint mismatch")
+    context_by_target: dict[str, list[dict[str, Any]]] = {}
+    for row in context_rows:
+        context_by_target.setdefault(str(row.get("target_passage_id", "")), []).append(row)
+    config = _generator_config_from_state(state)
+    state_ids = [str(custom_id) for shard in state.get("shards", []) for custom_id in shard.get("custom_ids", [])]
+    state_id_set = set(state_ids)
+    bindings: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    ordered_ids: list[str] = []
+    for target in target_rows:
+        target_id = str(target.get("passage_id", ""))
+        target_context = context_by_target.get(target_id, [])
+        request = build_generator_request(target, target_context, config)
+        custom_id = str(request["custom_id"])
+        if custom_id not in state_id_set:
+            raise ValueError(f"batch state custom IDs do not match immutable generation inputs: {target_id}")
+        bindings[custom_id] = (target, target_context)
+        ordered_ids.append(custom_id)
+    if len(bindings) != len(state_ids) or set(bindings) != state_id_set:
+        raise ValueError("batch state request mapping is not complete for immutable generation inputs")
+    return ordered_ids, bindings, config
+
+
+def _finalize_record(
+    custom_id: str,
+    events: Sequence[Mapping[str, Any]],
+    slot: Mapping[str, Any],
+    generation_context: Sequence[Mapping[str, Any]],
+    accepted_normalized_queries: set[str],
+    config: GeneratorConfig,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    parsed = _terminal_record(custom_id, events)
+    output = parsed.get("output") if isinstance(parsed.get("output"), Mapping) else {}
+    validation = validate_generator_result(
+        output,
+        slot,
+        generation_context,
+        accepted_normalized_queries=accepted_normalized_queries,
+        config=config,
+    )
+    reason_codes: list[str] = []
+    if parsed["status"] == "rejected":
+        reason_codes.append(str(parsed["reason"]))
+    reason_codes.extend(validation.reason_codes)
+    reason_codes = list(dict.fromkeys(reason_codes))
+    accepted = parsed["status"] == "parsed" and validation.accepted
+    record = {key: value for key, value in parsed.items() if key not in {"usage", "status"}}
+    record["status"] = "accepted" if accepted else "rejected"
+    record["reason_codes"] = reason_codes
+    if not accepted and "reason" not in record:
+        record["reason"] = reason_codes[0] if reason_codes else "deterministic_gate_failed"
+    if accepted:
+        accepted_normalized_queries.add(normalize_query(output["query"]))
+    evidence_invalid = {"empty_evidence", "evidence_not_substring", "evidence_overlap_only"}
+    observation = {
+        "schema_success": parsed["status"] == "parsed",
+        "usable": bool(output.get("usable")) if output else False,
+        "gate_pass": accepted,
+        "intent_agreement": bool(output)
+        and output.get("requested_intent") == slot.get("requested_intent")
+        and output.get("actual_intent") == output.get("requested_intent"),
+        "evidence_valid": bool(output) and not evidence_invalid.intersection(reason_codes),
+        "duplicate": "duplicate_normalized_query" in reason_codes,
+        "usage": parsed.get("usage") if isinstance(parsed.get("usage"), Mapping) else {},
+    }
+    return record, observation
+
+
+def _pilot_metrics(state: Mapping[str, Any], observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    count = len(observations)
+    denominator = max(count, 1)
+    token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    for observation in observations:
+        usage = observation.get("usage") if isinstance(observation.get("usage"), Mapping) else {}
+        for key in token_usage:
+            value = usage.get(key, 0)
+            if isinstance(value, int) and not isinstance(value, bool):
+                token_usage[key] += value
+    return {
+        "version": 1,
+        "generation_fingerprint": state["generation_fingerprint"],
+        "request_count": count,
+        "schema_success_count": sum(bool(item["schema_success"]) for item in observations),
+        "schema_success_rate": sum(bool(item["schema_success"]) for item in observations) / denominator,
+        "usable_count": sum(bool(item["usable"]) for item in observations),
+        "usable_rate": sum(bool(item["usable"]) for item in observations) / denominator,
+        "deterministic_gate_pass_count": sum(bool(item["gate_pass"]) for item in observations),
+        "deterministic_gate_pass_rate": sum(bool(item["gate_pass"]) for item in observations) / denominator,
+        "intent_agreement_count": sum(bool(item["intent_agreement"]) for item in observations),
+        "intent_agreement_rate": sum(bool(item["intent_agreement"]) for item in observations) / denominator,
+        "evidence_valid_count": sum(bool(item["evidence_valid"]) for item in observations),
+        "evidence_validity_rate": sum(bool(item["evidence_valid"]) for item in observations) / denominator,
+        "duplicate_count": sum(bool(item["duplicate"]) for item in observations),
+        "token_usage": token_usage,
+    }
+
+
+def _prior_attempt_diagnostics(shard: dict[str, Any], client: Any, root: Path, shard_index: int) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    for history in shard.get("history", []):
+        if not isinstance(history, dict):
+            continue
+        for field in ("output_file_id", "error_file_id"):
+            if not history.get(field):
+                continue
+            content = _download_file(history, field, client, root)
+            for raw_line in content.decode("utf-8", errors="replace").splitlines():
+                try:
+                    raw: Any = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    raw = raw_line
+                diagnostics.append(
+                    {
+                        "reason": "prior_attempt_artifact",
+                        "shard_index": shard_index,
+                        "attempt": history.get("attempt", 1),
+                        "status": history.get("status"),
+                        "artifact_field": field,
+                        "raw": _json_value(raw),
+                    }
+                )
+    return diagnostics
+
+
 def collect_completed_shards(state: Mapping[str, Any], client: Any, output_dir: str | Path) -> dict[str, Any]:
-    """Reconcile every completed shard, then persist a complete strict collection once."""
+    """Reconcile raw artifacts and deterministically finalize one row per immutable request binding."""
     root = Path(output_dir)
     result = copy.deepcopy(dict(state))
     _validate_state_requests(result, root)
-    finalized_counts = result.get("counts") if result.get("collected_sha256") else None
+    finalized_counts = (
+        copy.deepcopy(result.get("counts"))
+        if result.get("collected_sha256")
+        and result.get("validator_version") == VALIDATOR_VERSION
+        and result.get("finalizer_version") == FINALIZER_VERSION
+        else None
+    )
     refreshed = refresh_batch_status(result, client, root)
     _ensure_collection_ready(refreshed)
     collected_path = root / COLLECTED_FILE_NAME
     diagnostics_path = root / DIAGNOSTICS_FILE_NAME
-    if refreshed.get("collected_sha256"):
+    if (
+        refreshed.get("collected_sha256")
+        and refreshed.get("validator_version") == VALIDATOR_VERSION
+        and refreshed.get("finalizer_version") == FINALIZER_VERSION
+    ):
         if not collected_path.exists() or _sha256_file(collected_path) != refreshed["collected_sha256"]:
             raise ValueError(f"collected artifact checksum mismatch: {collected_path}")
         if not diagnostics_path.exists() or _sha256_file(diagnostics_path) != refreshed.get("diagnostics_sha256"):
             raise ValueError(f"diagnostics artifact checksum mismatch: {diagnostics_path}")
+        if _request_count(refreshed) <= PILOT_MAX_REQUESTS:
+            metrics_path = root / PILOT_METRICS_FILE_NAME
+            if not metrics_path.exists() or _sha256_file(metrics_path) != refreshed.get("pilot_metrics_sha256"):
+                raise ValueError(f"pilot metrics artifact checksum mismatch: {metrics_path}")
         if finalized_counts is not None:
             refreshed["counts"] = finalized_counts
         return _persist_state(refreshed, root)
 
     all_ids = {str(custom_id) for shard in refreshed["shards"] for custom_id in shard["custom_ids"]}
-    terminal_records: list[dict[str, Any]] = []
+    ordered_ids, bindings, generation_config = _load_request_bindings(refreshed, root)
+    events_by_id: dict[str, list[dict[str, Any]]] = {}
     diagnostics: list[dict[str, Any]] = []
     for shard_index, shard in enumerate(refreshed["shards"]):
         expected_ids = {str(custom_id) for custom_id in shard["custom_ids"]}
         events: dict[str, list[dict[str, Any]]] = {}
+        diagnostics.extend(_prior_attempt_diagnostics(shard, client, root, shard_index))
+        refreshed = _persist_state(refreshed, root)
         for field in ("output_file_id", "error_file_id"):
             if not shard.get(field):
                 continue
@@ -659,8 +1096,23 @@ def collect_completed_shards(state: Mapping[str, Any], client: Any, output_dir: 
                     "error": _json_value(error),
                 }
             )
-        for custom_id in sorted(expected_ids):
-            terminal_records.append(_terminal_record(custom_id, events.get(custom_id, [])))
+        for custom_id in expected_ids:
+            events_by_id[custom_id] = events.get(custom_id, [])
+    accepted_normalized_queries: set[str] = set()
+    terminal_records: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = []
+    for custom_id in ordered_ids:
+        slot, generation_context = bindings[custom_id]
+        record, observation = _finalize_record(
+            custom_id,
+            events_by_id.get(custom_id, []),
+            slot,
+            generation_context,
+            accepted_normalized_queries,
+            generation_config,
+        )
+        terminal_records.append(record)
+        observations.append(observation)
     encoded = b"".join((_canonical_json(record) + "\n").encode("utf-8") for record in terminal_records)
     diagnostics_encoded = b"".join((_canonical_json(record) + "\n").encode("utf-8") for record in diagnostics)
     _write_bytes_atomic(diagnostics_path, diagnostics_encoded)
@@ -669,12 +1121,21 @@ def collect_completed_shards(state: Mapping[str, Any], client: Any, output_dir: 
     refreshed["collected_sha256"] = _sha256_bytes(encoded)
     refreshed["diagnostics_path"] = DIAGNOSTICS_FILE_NAME
     refreshed["diagnostics_sha256"] = _sha256_bytes(diagnostics_encoded)
+    refreshed["validator_version"] = VALIDATOR_VERSION
+    refreshed["finalizer_version"] = FINALIZER_VERSION
+    refreshed["version"] = max(int(refreshed.get("version", 2)), 3)
     refreshed["counts"] = {
         "prepared": len(terminal_records),
         "accepted": sum(record["status"] == "accepted" for record in terminal_records),
         "rejected": sum(record["status"] == "rejected" for record in terminal_records),
         "diagnostics": len(diagnostics),
     }
+    if len(terminal_records) <= PILOT_MAX_REQUESTS:
+        metrics_path = root / PILOT_METRICS_FILE_NAME
+        metrics = _pilot_metrics(refreshed, observations)
+        _write_json_atomic(metrics_path, metrics)
+        refreshed["pilot_metrics_path"] = PILOT_METRICS_FILE_NAME
+        refreshed["pilot_metrics_sha256"] = _sha256_file(metrics_path)
     return _persist_state(refreshed, root)
 
 
@@ -682,11 +1143,13 @@ __all__ = [
     "BatchShard",
     "COLLECTED_FILE_NAME",
     "DIAGNOSTICS_FILE_NAME",
+    "PILOT_METRICS_FILE_NAME",
     "REQUIRED_SOURCE_CORPUS_FINGERPRINT",
     "STATE_FILE_NAME",
     "collect_completed_shards",
     "prepare_generation_batches",
     "refresh_batch_status",
+    "retry_failed_shards",
     "submit_pending_shards",
     "write_batch_shards",
 ]

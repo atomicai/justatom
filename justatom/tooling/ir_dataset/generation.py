@@ -126,6 +126,8 @@ class GeneratorConfig:
     accepted_max_tokens: int = 504
     max_requests_per_shard: int = 1_000
     max_shard_bytes: int = 100_000_000
+    max_batch_attempts: int = 2
+    scale_authorized: bool = False
 
     def __post_init__(self) -> None:
         if self.model != "gpt-5.6-terra":
@@ -144,6 +146,12 @@ class GeneratorConfig:
             raise ValueError("generation.max_shard_bytes must be an integer")
         if not 1 <= self.max_shard_bytes <= 100_000_000:
             raise ValueError("generation.max_shard_bytes must be within [1, 100000000]")
+        if not isinstance(self.max_batch_attempts, int) or isinstance(self.max_batch_attempts, bool):
+            raise ValueError("generation.max_batch_attempts must be an integer")
+        if self.max_batch_attempts < 1:
+            raise ValueError("generation.max_batch_attempts must be >= 1")
+        if not isinstance(self.scale_authorized, bool):
+            raise ValueError("generation.scale_authorized must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,11 +423,19 @@ def validate_generator_result(
 
     if output["reason"] != "ok":
         reason_codes.append("usable_reason_invalid")
-    for key in ("query", "answer", "evidence"):
-        if not output[key]:
+    normalized_fields = {key: _normalized_text(output[key]) for key in ("query", "answer", "evidence")}
+    for key, value in normalized_fields.items():
+        if not value:
             reason_codes.append(f"empty_{key}")
-    if _normalized_text(output["evidence"]) not in _normalized_text(slot.get("content", "")):
+    normalized_content = _normalized_text(slot.get("content", ""))
+    normalized_evidence = normalized_fields["evidence"]
+    if not normalized_evidence or normalized_evidence not in normalized_content:
         reason_codes.append("evidence_not_substring")
+    overlap_prefix_chars = slot.get("overlap_prefix_chars", 0)
+    if isinstance(overlap_prefix_chars, int) and not isinstance(overlap_prefix_chars, bool) and overlap_prefix_chars > 0:
+        normalized_overlap = _normalized_text(str(slot.get("content", ""))[:overlap_prefix_chars])
+        if normalized_evidence and normalized_evidence in normalized_overlap:
+            reason_codes.append("evidence_overlap_only")
     query_words = output["query"].split()
     if not 5 <= len(query_words) <= 30:
         reason_codes.append("query_word_count")

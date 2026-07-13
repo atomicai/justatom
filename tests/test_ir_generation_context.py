@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import pytest
 
 from justatom.tooling.ir_dataset.dense import DenseIndex
 from justatom.tooling.ir_dataset.generation_context import GenerationContextConfig, build_generation_context
@@ -27,7 +28,7 @@ class ContextEncoder:
         )
 
 
-def test_context_excludes_target_and_content_duplicates_and_prioritizes_adjacent_sibling(tmp_path: Path):
+def test_context_excludes_target_and_prioritizes_adjacent_sibling(tmp_path: Path):
     passages = pl.DataFrame(
         [
             {
@@ -62,14 +63,6 @@ def test_context_excludes_target_and_content_duplicates_and_prioritizes_adjacent
                 "start_unit": 0,
                 "end_unit": 1,
             },
-            {
-                "passage_id": "duplicate-content",
-                "article_id": "article-d",
-                "content": "anchor explanation",
-                "serialized_passage": "passage: Duplicate\n\nanchor explanation",
-                "start_unit": 0,
-                "end_unit": 1,
-            },
         ]
     )
     targets = passages.filter(pl.col("passage_id") == "target").with_columns(
@@ -95,7 +88,6 @@ def test_context_excludes_target_and_content_duplicates_and_prioritizes_adjacent
     assert context["context_index"].to_list() == [0, 1, 2]
     assert context["candidate_passage_id"].n_unique() == 3
     assert "target" not in context["candidate_passage_id"].to_list()
-    assert "duplicate-content" not in context["candidate_passage_id"].to_list()
     assert context[0, "same_article"]
     assert context[0, "adjacent"]
     assert context[0, "selection_source"] == "adjacent_sibling"
@@ -160,6 +152,36 @@ def test_context_processes_target_subsets_without_excluding_other_target_slots(t
 
     assert context.filter(pl.col("target_passage_id") == "target-a")["candidate_passage_id"].to_list()[0] == "target-b"
     assert context.filter(pl.col("target_passage_id") == "target-b")["candidate_passage_id"].to_list()[0] == "target-a"
+
+
+def test_context_fails_closed_when_a_duplicate_content_target_reaches_it(tmp_path: Path):
+    passages = pl.DataFrame(
+        [
+            {
+                "passage_id": "target",
+                "article_id": "article-a",
+                "content": "duplicate target content",
+                "serialized_passage": "passage: Target\n\nduplicate target content",
+                "start_unit": 0,
+                "end_unit": 0,
+            },
+            {
+                "passage_id": "collision",
+                "article_id": "article-b",
+                "content": "  duplicate   target content  ",
+                "serialized_passage": "passage: Collision\n\nduplicate target content",
+                "start_unit": 0,
+                "end_unit": 0,
+            },
+        ]
+    )
+    targets = passages.filter(pl.col("passage_id") == "target")
+    rows = list(zip(passages["passage_id"], passages["serialized_passage"], strict=True))
+    bm25 = BM25Index.build(rows, tmp_path / "bm25")
+    dense = DenseIndex.build(rows, tmp_path / "dense", ContextEncoder())
+
+    with pytest.raises(ValueError, match="duplicate normalized content"):
+        build_generation_context(targets, passages, bm25, dense)
 
 
 def test_context_accepts_slots_selected_with_noneligible_adjacent_siblings(tmp_path: Path):

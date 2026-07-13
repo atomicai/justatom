@@ -181,6 +181,32 @@ def test_gates_require_exact_evidence():
     assert "evidence_not_substring" in result.reason_codes
 
 
+def test_gates_treat_whitespace_only_fields_as_empty_and_evidence_as_ungrounded():
+    result = validate_generator_result(
+        good_output(query=" \t ", answer="\n", evidence="   "),
+        slot(),
+        context(),
+        config=config(),
+    )
+
+    assert {"empty_query", "empty_answer", "empty_evidence", "evidence_not_substring"} <= set(result.reason_codes)
+
+
+def test_gates_reject_evidence_contained_only_in_the_overlap_prefix():
+    target = slot(
+        content="Повторяемая вводная часть. Уникальная часть объясняет production retry.",
+        overlap_prefix_chars=len("Повторяемая вводная часть."),
+    )
+    result = validate_generator_result(
+        good_output(evidence="Повторяемая вводная часть."),
+        target,
+        context(target),
+        config=config(),
+    )
+
+    assert "evidence_overlap_only" in result.reason_codes
+
+
 def test_gates_reject_schema_and_usable_contract_violations():
     malformed = good_output()
     malformed["extra"] = "not allowed"

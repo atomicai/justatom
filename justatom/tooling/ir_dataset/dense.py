@@ -80,10 +80,16 @@ class E5TextEncoder:
                 encoded = self.tokenizer(
                     batch,
                     padding=True,
-                    truncation=True,
-                    max_length=self.max_length,
+                    truncation=False,
                     return_tensors="pt",
                 )
+                lengths = encoded["attention_mask"].sum(dim=1).tolist()
+                for offset, length in enumerate(lengths):
+                    if int(length) > self.max_length:
+                        raise ValueError(
+                            f"dense serialized passage at batch index {start + offset} has {int(length)} tokens; "
+                            f"the configured limit is {self.max_length}. Re-chunk the corpus before dense encoding."
+                        )
                 encoded = {name: tensor.to(self.device) for name, tensor in encoded.items()}
                 hidden = self.model(**encoded).last_hidden_state
                 mask = encoded["attention_mask"].unsqueeze(-1).to(hidden.dtype)

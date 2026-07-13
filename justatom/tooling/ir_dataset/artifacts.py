@@ -58,6 +58,10 @@ def _sha256_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+def sha256_file(path: str | Path) -> str:
+    return _sha256_file(Path(path))
+
+
 def _preparation_fingerprint(
     *,
     source_fingerprint: str,
@@ -102,6 +106,7 @@ def _passage_record(passage: Passage, *, selection_key: str) -> dict[str, Any]:
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     with temporary.open("w", encoding="utf-8") as stream:
         json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
@@ -109,6 +114,84 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(temporary, path)
+
+
+def write_bound_parquet_artifact(
+    frame: pl.DataFrame,
+    artifact_path: str | Path,
+    state_path: str | Path,
+    *,
+    artifact_kind: str,
+    source_corpus_fingerprint: str,
+    passages_sha256: str,
+    config: dict[str, Any],
+    upstream_sha256: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Atomically create or exactly reuse a source-bound generation parquet artifact."""
+    if not isinstance(frame, pl.DataFrame):
+        raise TypeError("bound parquet artifact must be a polars DataFrame")
+    artifact = Path(artifact_path)
+    state = Path(state_path)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    temporary = artifact.with_name(f".{artifact.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        frame.write_parquet(temporary, compression="zstd")
+        artifact_sha256 = _sha256_file(temporary)
+        contract = {
+            "version": 1,
+            "artifact_kind": str(artifact_kind),
+            "artifact_path": artifact.name,
+            "artifact_sha256": artifact_sha256,
+            "source_corpus_fingerprint": str(source_corpus_fingerprint),
+            "passages_sha256": str(passages_sha256),
+            "config": dict(config),
+            "upstream_sha256": str(upstream_sha256),
+            "metadata": dict(metadata or {}),
+        }
+        contract["contract_sha256"] = _canonical_hash(contract)
+        if artifact.exists() or state.exists():
+            if not artifact.exists() or not state.exists():
+                raise ValueError(f"refusing to overwrite incomplete source-bound {artifact_kind} artifact")
+            try:
+                existing = json.loads(state.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"invalid source-bound {artifact_kind} artifact state: {state}") from exc
+            if existing != contract or _sha256_file(artifact) != existing.get("artifact_sha256"):
+                suffix = " after generation state exists" if (artifact.parent / "generation_state.json").exists() else ""
+                raise ValueError(f"refusing to overwrite mismatched source-bound {artifact_kind} artifact{suffix}")
+            return existing
+        os.replace(temporary, artifact)
+        _write_json_atomic(state, contract)
+        return contract
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def validate_bound_parquet_artifact(
+    artifact_path: str | Path,
+    state_path: str | Path,
+    *,
+    artifact_kind: str,
+) -> dict[str, Any]:
+    artifact = Path(artifact_path)
+    state = Path(state_path)
+    if not artifact.exists() or not state.exists():
+        raise FileNotFoundError(f"source-bound {artifact_kind} artifact is incomplete")
+    try:
+        payload = json.loads(state.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid source-bound {artifact_kind} artifact state: {state}") from exc
+    if payload.get("artifact_kind") != artifact_kind:
+        raise ValueError(f"source-bound artifact kind mismatch: expected {artifact_kind}")
+    contract_sha256 = payload.pop("contract_sha256", None)
+    if contract_sha256 != _canonical_hash(payload):
+        raise ValueError(f"source-bound {artifact_kind} contract checksum mismatch")
+    payload["contract_sha256"] = contract_sha256
+    if _sha256_file(artifact) != payload.get("artifact_sha256"):
+        raise ValueError(f"source-bound {artifact_kind} artifact checksum mismatch")
+    return payload
 
 
 def _reuse_summary(output_dir: Path, fingerprint: str) -> PrepareSummary | None:
@@ -263,4 +346,11 @@ def prepare_passages(
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-__all__ = ["PrepareConfig", "PrepareSummary", "prepare_passages"]
+__all__ = [
+    "PrepareConfig",
+    "PrepareSummary",
+    "prepare_passages",
+    "sha256_file",
+    "validate_bound_parquet_artifact",
+    "write_bound_parquet_artifact",
+]

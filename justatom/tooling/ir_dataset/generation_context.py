@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import unicodedata
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
@@ -149,6 +151,14 @@ def build_generation_context(
     missing_targets = sorted(submitted_target_ids - set(metadata))
     if missing_targets:
         raise ValueError(f"targets contain passage IDs absent from passages: {', '.join(missing_targets[:5])}")
+    content_counts: dict[str, int] = defaultdict(int)
+    for row in metadata.values():
+        content_counts[_normalized_content(row["content"])] += 1
+    duplicate_targets = sorted(
+        str(row["passage_id"]) for row in target_rows if content_counts[_normalized_content(row["content"])] > 1
+    )
+    if duplicate_targets:
+        raise ValueError("targets contain duplicate normalized content in the source corpus: " + ", ".join(duplicate_targets[:5]))
 
     article_members: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in metadata.values():
@@ -213,3 +223,7 @@ def build_generation_context(
 
 
 __all__ = ["GenerationContextConfig", "build_generation_context"]
+
+
+def _normalized_content(value: Any) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", str(value))).strip().casefold()

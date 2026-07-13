@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import polars as pl
 import pytest
 
@@ -213,3 +215,20 @@ def test_selection_accepts_noneligible_full_article_structural_siblings():
 
     assert set(selected["passage_id"]) == {"target-1", "target-2"}
     assert not score_passage_quality(passages.filter(pl.col("passage_id") == "sibling-1").to_dicts()[0]).eligible
+
+
+def test_selection_excludes_globally_duplicate_normalized_content_with_reason_count(tmp_path):
+    rows = target_frame().to_dicts()
+    duplicate_content = rows[0]["content"]
+    rows[1]["content"] = f"  {duplicate_content}  "
+    rows[1]["passage_id"] = "different-id-same-content"
+
+    selected = select_target_slots(
+        pl.DataFrame(rows),
+        TargetSelectionConfig(article_count=2, output_dir=tmp_path, max_flow_share=1.0),
+    )
+    summary = json.loads((tmp_path / "target_selection_summary.json").read_text(encoding="utf-8"))
+
+    assert rows[0]["passage_id"] not in selected["passage_id"].to_list()
+    assert "different-id-same-content" not in selected["passage_id"].to_list()
+    assert summary["quality_reason_counts"]["globally_duplicate_content"] == 2

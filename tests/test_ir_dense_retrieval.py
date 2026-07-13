@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from justatom.tooling.ir_dataset.dense import DenseIndex
+from justatom.tooling.ir_dataset.dense import DenseIndex, E5TextEncoder
 
 
 class FakeEncoder:
@@ -167,3 +167,27 @@ def test_dense_load_rejects_incompatible_encoder_identity(tmp_path):
 
     with pytest.raises(ValueError, match="model_name"):
         DenseIndex.load(tmp_path / "dense", encoder=incompatible)
+
+
+def test_e5_encoder_rejects_overlength_text_without_calling_the_model():
+    class Tokenizer:
+        def __call__(self, batch, **_kwargs):
+            width = max(len(text.split()) for text in batch)
+            return {
+                "input_ids": torch.ones((len(batch), width), dtype=torch.long),
+                "attention_mask": torch.ones((len(batch), width), dtype=torch.long),
+            }
+
+    class Model:
+        def __call__(self, **_kwargs):
+            raise AssertionError("overlength text must be rejected before model inference")
+
+    encoder = E5TextEncoder.__new__(E5TextEncoder)
+    encoder.device = "cpu"
+    encoder.max_length = 4
+    encoder.dimension = 2
+    encoder.tokenizer = Tokenizer()
+    encoder.model = Model()
+
+    with pytest.raises(ValueError, match="serialized passage.*5 tokens.*limit is 4"):
+        encoder.encode(["one two three four five"], batch_size=1)

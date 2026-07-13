@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from dataclasses import replace
 
 import polars as pl
+import pytest
 
 from justatom.tooling.ir_dataset.artifacts import PrepareConfig, prepare_passages
+from justatom.tooling.ir_dataset import artifacts as artifacts_module
 from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION, ChunkingConfig, MarkdownPassageChunker
 from justatom.tooling.ir_dataset.source import HABR_SOURCE_COLUMNS, HabrSource, promote_hf_token_env
 from justatom.tooling.ir_dataset import source as source_module
@@ -253,3 +256,56 @@ def test_changed_config_invalidates_prepared_artifact(tmp_path):
 
     assert second.reused is False
     assert second.fingerprint != first.fingerprint
+
+
+def test_bound_generation_parquet_reuses_only_an_exact_source_contract(tmp_path):
+    artifact_path = tmp_path / "targets.parquet"
+    state_path = tmp_path / "targets_state.json"
+    frame = pl.DataFrame({"passage_id": ["target-1"], "content": ["grounded content"]})
+    kwargs = {
+        "artifact_kind": "targets",
+        "source_corpus_fingerprint": "source-fingerprint",
+        "passages_sha256": "passages-sha256",
+        "config": {"article_count": 50, "seed": 42},
+        "upstream_sha256": "manifest-sha256",
+    }
+
+    first = artifacts_module.write_bound_parquet_artifact(frame, artifact_path, state_path, **kwargs)
+    second = artifacts_module.write_bound_parquet_artifact(frame, artifact_path, state_path, **kwargs)
+    (tmp_path / "generation_state.json").write_text("{}\n", encoding="utf-8")
+
+    assert first == second
+    assert first["artifact_sha256"] == artifacts_module.sha256_file(artifact_path)
+    with pytest.raises(ValueError, match="refusing to overwrite.*targets"):
+        artifacts_module.write_bound_parquet_artifact(
+            pl.DataFrame({"passage_id": ["target-2"], "content": ["changed content"]}),
+            artifact_path,
+            state_path,
+            **kwargs,
+        )
+
+
+def test_tokenizer_revision_changes_the_preparation_fingerprint(tmp_path):
+    first_chunker = make_test_chunker()
+    second_chunker = MarkdownPassageChunker(
+        config=replace(first_chunker.config, tokenizer_revision="different-tokenizer-commit"),
+        tokenizer=WhitespaceTokenizer(),
+    )
+
+    first = prepare_passages(
+        rows=synthetic_rows(),
+        output_dir=tmp_path,
+        chunker=first_chunker,
+        config=PrepareConfig(seed=42, max_passages=20),
+        source_fingerprint="synthetic-v1",
+    )
+    second = prepare_passages(
+        rows=synthetic_rows(),
+        output_dir=tmp_path,
+        chunker=second_chunker,
+        config=PrepareConfig(seed=42, max_passages=20),
+        source_fingerprint="synthetic-v1",
+    )
+
+    assert first.fingerprint != second.fingerprint
+    assert second.reused is False
