@@ -17,6 +17,12 @@ from justatom.tooling.ir_dataset.neighbors import (
     build_neighbor_artifact,
     merge_neighbors,
 )
+from justatom.tooling.ir_dataset.targets import (
+    PassageQuality,
+    TargetSelectionConfig,
+    score_passage_quality,
+    select_target_slots,
+)
 
 __all__ = [
     "BM25Index",
@@ -34,10 +40,14 @@ __all__ = [
     "Passage",
     "PrepareConfig",
     "PrepareSummary",
+    "PassageQuality",
     "SearchHit",
     "StructuralUnit",
     "prepare_passages",
     "promote_hf_token_env",
+    "score_passage_quality",
+    "select_target_slots",
+    "TargetSelectionConfig",
     "build_neighbor_artifact",
     "merge_neighbors",
     "serialize_passage",
