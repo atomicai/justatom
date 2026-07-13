@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
-from huggingface_hub import hf_hub_download, list_repo_files
+from huggingface_hub import HfApi, hf_hub_download, list_repo_files
 
 
 HABR_SOURCE_COLUMNS = (
@@ -66,13 +66,25 @@ class HabrSource:
         self.split = str(split)
         self.revision = str(revision)
         self.cache_dir = None if cache_dir is None else Path(cache_dir)
+        self._resolved_revision: str | None = None
+
+    def resolved_revision(self) -> str:
+        if self._resolved_revision is None:
+            info = HfApi(token=resolve_hf_token()).dataset_info(
+                repo_id=self.repo_id,
+                revision=self.revision,
+            )
+            if not info.sha:
+                raise RuntimeError(f"Could not resolve dataset revision {self.revision!r} for {self.repo_id!r}.")
+            self._resolved_revision = str(info.sha)
+        return self._resolved_revision
 
     def _repo_files(self) -> list[str]:
         return list(
             list_repo_files(
                 repo_id=self.repo_id,
                 repo_type="dataset",
-                revision=self.revision,
+                revision=self.resolved_revision(),
                 token=resolve_hf_token(),
             )
         )
@@ -82,16 +94,34 @@ class HabrSource:
         if not parquet_files:
             raise RuntimeError(f"No parquet files found in dataset repo {self.repo_id!r}.")
 
+        candidates = parquet_files
+        config = self.config.casefold()
+        if config != "default":
+            candidates = [
+                path
+                for path in candidates
+                if config in {part.casefold() for part in Path(path).parts[:-1]}
+            ]
+            if not candidates:
+                raise RuntimeError(
+                    f"No parquet files found for config {self.config!r} in dataset repo {self.repo_id!r}."
+                )
+
         split = self.split.casefold()
         matching = []
-        for path in parquet_files:
+        for path in candidates:
             lowered = path.casefold()
             basename = Path(lowered).name
             if basename == f"{split}.parquet" or basename.startswith(f"{split}-"):
                 matching.append(path)
             elif f"/{split}/" in lowered or f"/{split}-" in lowered:
                 matching.append(path)
-        return matching or parquet_files
+        if not matching:
+            raise RuntimeError(
+                f"No parquet files found for split {self.split!r} and config {self.config!r} "
+                f"in dataset repo {self.repo_id!r}."
+            )
+        return matching
 
     def _parquet_paths(self) -> list[Path]:
         return list(self._iter_parquet_paths())
@@ -103,7 +133,7 @@ class HabrSource:
                 repo_id=self.repo_id,
                 filename=repo_file,
                 repo_type="dataset",
-                revision=self.revision,
+                revision=self.resolved_revision(),
                 token=token,
                 cache_dir=None if self.cache_dir is None else str(self.cache_dir),
             )
@@ -120,6 +150,7 @@ class HabrSource:
             "config": self.config,
             "split": self.split,
             "revision": self.revision,
+            "resolved_revision": self.resolved_revision(),
             "files": files,
         }
         canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

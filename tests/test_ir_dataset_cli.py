@@ -1,16 +1,70 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 
-from justatom.api.ir_dataset import inspect_stage, load_ir_dataset_config, parse_cli
-from justatom.tooling.ir_dataset.dense import DenseSearchHit
-from justatom.tooling.ir_dataset.neighbors import merge_neighbors
-from justatom.tooling.ir_dataset.sparse import SearchHit
+from justatom.api.ir_dataset import _embed_fingerprint, embed_stage, inspect_stage, load_ir_dataset_config, parse_cli
+from justatom.tooling.ir_dataset.artifacts import PrepareSummary
+from justatom.tooling.ir_dataset.dense import DenseIndex, DenseSearchHit
+from justatom.tooling.ir_dataset.neighbors import include_structural_neighbors, merge_neighbors
+from justatom.tooling.ir_dataset.sparse import BM25Index, SearchHit
 
 
 CONFIG_PATH = Path(__file__).parents[1] / "configs" / "datasets" / "habr-ir.yaml"
+
+
+class CLIEncoder:
+    dimension = 2
+    model_name = "test/encoder"
+    model_revision = "test-commit"
+    device = "cpu"
+
+    def encode(self, texts, batch_size):
+        return np.asarray(
+            [[1.0, 0.0] if "docker" in str(text).casefold() else [0.0, 1.0] for text in texts],
+            dtype=np.float32,
+        )
+
+
+def prepared_fixture(tmp_path: Path) -> PrepareSummary:
+    path = tmp_path / "passages.parquet"
+    pl.DataFrame(
+        [
+            {
+                "corpus_rank": 0,
+                "passage_id": "p1",
+                "article_id": "a1",
+                "title": "Docker",
+                "section": "Порты",
+                "content": "Docker открывает порт после настройки.",
+                "serialized_passage": "passage: Docker\nПорты\n\nDocker открывает порт после настройки.",
+                "flows": ["develop"],
+                "hubs": ["containers"],
+            },
+            {
+                "corpus_rank": 1,
+                "passage_id": "p2",
+                "article_id": "a2",
+                "title": "PostgreSQL",
+                "section": "WAL",
+                "content": "PostgreSQL хранит журнал WAL.",
+                "serialized_passage": "passage: PostgreSQL\nWAL\n\nPostgreSQL хранит журнал WAL.",
+                "flows": ["develop"],
+                "hubs": ["databases"],
+            },
+        ]
+    ).write_parquet(path)
+    return PrepareSummary(
+        passages_path=path,
+        manifest_path=tmp_path / "manifest.json",
+        article_count=2,
+        passage_count=2,
+        fingerprint="prepare-v1",
+        reused=False,
+    )
 
 
 def test_checked_in_config_resolves_local_defaults():
@@ -41,6 +95,32 @@ def test_dotted_cli_overrides_are_typed(tmp_path):
     assert parsed.config.preparation.max_articles == 100
     assert parsed.config.retrieval.query_passages == 25
     assert parsed.config.output.root == tmp_path
+
+
+def test_embed_fingerprint_changes_with_model_revision():
+    config = load_ir_dataset_config(CONFIG_PATH)
+    changed = replace(config, retrieval=replace(config.retrieval, model_revision="different-commit"))
+
+    assert _embed_fingerprint(config, "prepare-v1") != _embed_fingerprint(changed, "prepare-v1")
+
+
+def test_embed_stage_rebuilds_when_dense_index_digest_changes(tmp_path):
+    config = load_ir_dataset_config(
+        CONFIG_PATH,
+        overrides={
+            "output": {"root": str(tmp_path)},
+            "retrieval": {"model_name": "test/encoder", "model_revision": "test-commit", "device": "cpu"},
+        },
+    )
+    prepared = prepared_fixture(tmp_path)
+
+    assert embed_stage(config, prepared, encoder=CLIEncoder()) is False
+    assert embed_stage(config, prepared, encoder=CLIEncoder()) is True
+    with (tmp_path / "dense" / "embeddings.f32").open("r+b") as stream:
+        stream.seek(0)
+        stream.write(b"broken")
+
+    assert embed_stage(config, prepared, encoder=CLIEncoder()) is False
 
 
 def test_rrf_union_excludes_self_and_retains_source_ranks():
@@ -77,6 +157,27 @@ def test_rrf_ties_are_stable_by_candidate_id():
     assert [row.candidate_id for row in rows] == ["a", "b"]
 
 
+def test_structural_neighbors_are_guaranteed_beyond_rrf_limit():
+    ranked = merge_neighbors(
+        "query",
+        [SearchHit("retrieved", 1.0, 1)],
+        [],
+        rrf_k=60,
+        limit=1,
+    )
+
+    rows = include_structural_neighbors(
+        ranked,
+        [("sibling", True), ("retrieved", False), ("far-sibling", False)],
+    )
+
+    assert [row.candidate_id for row in rows] == ["retrieved", "sibling", "far-sibling"]
+    assert rows[0].structural_rank == 2
+    assert rows[1].structural_rank == 1
+    assert rows[1].adjacent is True
+    assert len({row.candidate_id for row in rows}) == 3
+
+
 def test_inspect_can_select_one_query_passage(tmp_path):
     config = load_ir_dataset_config(
         CONFIG_PATH,
@@ -93,3 +194,25 @@ def test_inspect_can_select_one_query_passage(tmp_path):
     rows = inspect_stage(config, sample=10, passage_id="q2")
 
     assert [row["candidate_id"] for row in rows] == ["b", "c"]
+
+
+def test_inspect_free_query_searches_bm25_and_dense_indices(tmp_path):
+    config = load_ir_dataset_config(
+        CONFIG_PATH,
+        overrides={"output": {"root": str(tmp_path)}, "retrieval": {"device": "cpu"}},
+    )
+    prepared = prepared_fixture(tmp_path)
+    frame = pl.read_parquet(prepared.passages_path)
+    rows = list(zip(frame["passage_id"], frame["serialized_passage"], strict=True))
+    bm25 = BM25Index.build(rows, tmp_path / "bm25")
+    dense = DenseIndex.build(rows, tmp_path / "dense", CLIEncoder())
+
+    result = inspect_stage(
+        config,
+        query="почему docker не открывает порт",
+        bm25_index=bm25,
+        dense_index=dense,
+    )
+
+    assert result[0]["candidate_id"] == "p1"
+    assert result[0]["bm25_rank"] is not None or result[0]["dense_rank"] is not None

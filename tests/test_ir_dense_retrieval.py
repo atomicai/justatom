@@ -24,6 +24,15 @@ class FakeEncoder:
         return np.asarray([vectors[text] for text in texts], dtype=np.float32)
 
 
+class TieEncoder:
+    dimension = 2
+    model_name = "test/ties"
+    device = "cpu"
+
+    def encode(self, texts, batch_size):
+        return np.asarray([[1.0, 0.0] for _ in texts], dtype=np.float32)
+
+
 def sample_rows() -> list[tuple[str, str]]:
     return [("p1", "alpha"), ("p2", "beta"), ("p3", "alpha beta")]
 
@@ -112,3 +121,31 @@ def test_mps_search_does_not_wrap_read_only_memmap(tmp_path):
         )
 
     assert not any("not writable" in str(item.message) for item in recorded)
+
+
+def test_dense_topk_ties_are_selected_by_passage_id_before_truncation(tmp_path):
+    index = DenseIndex.build(
+        rows=[("a", "one"), ("b", "two"), ("c", "three"), ("d", "four")],
+        output_dir=tmp_path / "dense",
+        encoder=TieEncoder(),
+        batch_size=2,
+    )
+
+    hits = index.search_embeddings(
+        np.asarray([[1.0, 0.0]], dtype=np.float32),
+        k=2,
+        block_size=4,
+        device="cpu",
+    )[0]
+
+    assert [hit.passage_id for hit in hits] == ["a", "b"]
+
+
+def test_dense_load_rejects_corrupted_embeddings(tmp_path):
+    index = dense_fixture(tmp_path)
+    with index.embeddings_path.open("r+b") as stream:
+        stream.seek(0)
+        stream.write(b"broken")
+
+    with pytest.raises(ValueError, match="checksum"):
+        DenseIndex.load(tmp_path / "dense")

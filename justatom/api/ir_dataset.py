@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
+import uuid
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,7 @@ from justatom.tooling.ir_dataset.neighbors import (
     NeighborBuildConfig,
     NeighborSummary,
     build_neighbor_artifact,
+    merge_neighbors,
 )
 from justatom.tooling.ir_dataset.source import HabrSource, promote_hf_token_env
 from justatom.tooling.ir_dataset.sparse import BM25Index
@@ -37,6 +40,7 @@ class SourceConfig:
 @dataclass(frozen=True, slots=True)
 class RetrievalConfig:
     model_name: str = "intfloat/multilingual-e5-small"
+    model_revision: str = "main"
     device: str = "mps"
     batch_size: int = 64
     dense_block_size: int = 65_536
@@ -181,10 +185,27 @@ def _embed_fingerprint(config: IRDatasetConfig, prepare_fingerprint: str) -> str
     payload = {
         "prepare_fingerprint": prepare_fingerprint,
         "model_name": config.retrieval.model_name,
+        "model_revision": config.retrieval.model_revision,
         "batch_size": config.retrieval.batch_size,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _sha256_tree(path: Path) -> str:
+    digest = hashlib.sha256()
+    for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
+        digest.update(item.relative_to(path).as_posix().encode("utf-8"))
+        with item.open("rb") as stream:
+            while chunk := stream.read(8 * 1024 * 1024):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def embed_stage(
@@ -199,8 +220,16 @@ def embed_stage(
     bm25_dir = root / "bm25"
     dense_dir = root / "dense"
     if state_path.exists() and bm25_dir.exists() and dense_dir.exists():
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        if state.get("fingerprint") == fingerprint:
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            valid = (
+                state.get("fingerprint") == fingerprint
+                and state.get("bm25_sha256") == _sha256_tree(bm25_dir)
+                and state.get("dense_sha256") == _sha256_tree(dense_dir)
+            )
+        except (OSError, json.JSONDecodeError):
+            valid = False
+        if valid:
             return True
 
     frame = pl.read_parquet(prepare_summary.passages_path).sort("corpus_rank")
@@ -208,6 +237,7 @@ def embed_stage(
     BM25Index.build(rows, bm25_dir)
     active_encoder = encoder or E5TextEncoder(
         model_name=config.retrieval.model_name,
+        revision=config.retrieval.model_revision,
         device=config.retrieval.device,
         max_length=config.chunking.model_max_tokens,
     )
@@ -217,9 +247,14 @@ def embed_stage(
         active_encoder,
         batch_size=config.retrieval.batch_size,
     )
-    state_path.write_text(
-        json.dumps({"fingerprint": fingerprint, "count": frame.height}, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    _write_json_atomic(
+        state_path,
+        {
+            "fingerprint": fingerprint,
+            "count": frame.height,
+            "bm25_sha256": _sha256_tree(bm25_dir),
+            "dense_sha256": _sha256_tree(dense_dir),
+        },
     )
     return False
 
@@ -254,7 +289,52 @@ def inspect_stage(
     *,
     sample: int = 10,
     passage_id: str | None = None,
+    query: str | None = None,
+    bm25_index: BM25Index | None = None,
+    dense_index: DenseIndex | None = None,
 ) -> list[dict[str, Any]]:
+    if query is not None:
+        passages_path = config.output.root / "passages.parquet"
+        if not passages_path.exists():
+            raise FileNotFoundError(f"Passage artifact does not exist: {passages_path}")
+        frame = pl.read_parquet(passages_path).sort("corpus_rank")
+        lexical_index = bm25_index or BM25Index.load(config.output.root / "bm25", mmap=True)
+        semantic_index = dense_index
+        if semantic_index is None:
+            encoder = E5TextEncoder(
+                model_name=config.retrieval.model_name,
+                revision=config.retrieval.model_revision,
+                device=config.retrieval.device,
+                max_length=config.chunking.model_max_tokens,
+            )
+            semantic_index = DenseIndex.load(config.output.root / "dense", encoder=encoder)
+        lexical = lexical_index.search([query], k=config.retrieval.bm25_k)[0]
+        semantic = semantic_index.search_texts(
+            [query],
+            k=config.retrieval.dense_k,
+            batch_size=config.retrieval.batch_size,
+            block_size=config.retrieval.dense_block_size,
+            device=config.retrieval.device,
+        )[0]
+        candidates = merge_neighbors(
+            "__free_query__",
+            lexical,
+            semantic,
+            rrf_k=config.retrieval.rrf_k,
+            limit=config.retrieval.union_k,
+        )
+        metadata = {row["passage_id"]: row for row in frame.iter_rows(named=True)}
+        return [
+            {
+                **asdict(candidate),
+                "query": query,
+                "candidate_title": metadata[candidate.candidate_id]["title"],
+                "candidate_section": metadata[candidate.candidate_id]["section"],
+                "candidate_preview": metadata[candidate.candidate_id]["content"][:500],
+            }
+            for candidate in candidates
+        ]
+
     path = config.output.root / "neighbors.parquet"
     if not path.exists():
         raise FileNotFoundError(f"Neighbor artifact does not exist: {path}")
@@ -289,7 +369,12 @@ def main(argv: list[str] | None = None) -> int:
     elif parsed.stage == "neighbors":
         result = neighbors_stage(parsed.config)
     elif parsed.stage == "inspect":
-        result = inspect_stage(parsed.config, sample=parsed.sample, passage_id=parsed.passage_id)
+        result = inspect_stage(
+            parsed.config,
+            sample=parsed.sample,
+            passage_id=parsed.passage_id,
+            query=parsed.query,
+        )
     else:
         result = run_local_pipeline(parsed.config)
     print(json.dumps(_summary_payload(result), ensure_ascii=False, indent=2, default=str))

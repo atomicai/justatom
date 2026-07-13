@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import polars as pl
@@ -20,6 +21,8 @@ class NeighborCandidate:
     bm25_score: float | None
     dense_rank: int | None
     dense_score: float | None
+    structural_rank: int | None = None
+    adjacent: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +43,7 @@ class NeighborSummary:
     row_count: int
     bm25_contributions: int
     dense_contributions: int
+    structural_contributions: int
 
 
 def merge_neighbors(
@@ -78,6 +82,37 @@ def merge_neighbors(
     return candidates[:limit]
 
 
+def include_structural_neighbors(
+    ranked: Sequence[NeighborCandidate],
+    structural: Sequence[tuple[str, bool]],
+) -> list[NeighborCandidate]:
+    output = list(ranked)
+    positions = {row.candidate_id: index for index, row in enumerate(output)}
+    for structural_rank, (candidate_id, adjacent) in enumerate(structural, start=1):
+        if candidate_id in positions:
+            index = positions[candidate_id]
+            output[index] = replace(
+                output[index],
+                structural_rank=structural_rank,
+                adjacent=bool(adjacent),
+            )
+            continue
+        positions[candidate_id] = len(output)
+        output.append(
+            NeighborCandidate(
+                candidate_id=candidate_id,
+                rrf_score=0.0,
+                bm25_rank=None,
+                bm25_score=None,
+                dense_rank=None,
+                dense_score=None,
+                structural_rank=structural_rank,
+                adjacent=bool(adjacent),
+            )
+        )
+    return output
+
+
 def build_neighbor_artifact(
     *,
     passages_path: Path,
@@ -111,11 +146,17 @@ def build_neighbor_artifact(
             "content",
             "flows",
             "hubs",
+            "start_unit",
+            "end_unit",
         ).iter_rows(named=True)
     }
+    article_members: dict[str, list[dict]] = defaultdict(list)
+    for row in metadata.values():
+        article_members[row["article_id"]].append(row)
     records: list[dict] = []
     bm25_contributions = 0
     dense_contributions = 0
+    structural_contributions = 0
     for query_id, lexical, semantic in zip(query_ids, bm25_hits, dense_hits, strict=True):
         query_meta = metadata[query_id]
         candidates = merge_neighbors(
@@ -125,10 +166,26 @@ def build_neighbor_artifact(
             rrf_k=config.rrf_k,
             limit=config.union_k,
         )
+        structural_rows = []
+        query_start = int(query_meta["start_unit"])
+        query_end = int(query_meta["end_unit"])
+        for row in article_members[query_meta["article_id"]]:
+            if row["passage_id"] == query_id:
+                continue
+            candidate_start = int(row["start_unit"])
+            candidate_end = int(row["end_unit"])
+            gap = max(query_start - candidate_end, candidate_start - query_end, 0)
+            structural_rows.append((row["passage_id"], gap <= 1, gap, candidate_start))
+        structural_rows.sort(key=lambda row: (not row[1], row[2], row[3], row[0]))
+        candidates = include_structural_neighbors(
+            candidates,
+            [(candidate_id, adjacent) for candidate_id, adjacent, _, _ in structural_rows],
+        )
         for candidate in candidates:
             candidate_meta = metadata[candidate.candidate_id]
             bm25_contributions += int(candidate.bm25_rank is not None)
             dense_contributions += int(candidate.dense_rank is not None)
+            structural_contributions += int(candidate.structural_rank is not None)
             records.append(
                 {
                     "query_id": query_id,
@@ -141,6 +198,8 @@ def build_neighbor_artifact(
                     "bm25_score": candidate.bm25_score,
                     "dense_rank": candidate.dense_rank,
                     "dense_score": candidate.dense_score,
+                    "structural_rank": candidate.structural_rank,
+                    "adjacent": candidate.adjacent,
                     "query_title": query_meta["title"],
                     "query_section": query_meta["section"],
                     "query_preview": query_meta["content"][:500],
@@ -166,6 +225,7 @@ def build_neighbor_artifact(
         row_count=len(records),
         bm25_contributions=bm25_contributions,
         dense_contributions=dense_contributions,
+        structural_contributions=structural_contributions,
     )
 
 
@@ -174,5 +234,6 @@ __all__ = [
     "NeighborCandidate",
     "NeighborSummary",
     "build_neighbor_artifact",
+    "include_structural_neighbors",
     "merge_neighbors",
 ]

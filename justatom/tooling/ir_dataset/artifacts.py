@@ -50,6 +50,14 @@ def _canonical_hash(value: Any) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _sha256_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _preparation_fingerprint(
     *,
     source_fingerprint: str,
@@ -114,6 +122,14 @@ def _reuse_summary(output_dir: Path, fingerprint: str) -> PrepareSummary | None:
         return None
     if manifest.get("fingerprint") != fingerprint:
         return None
+    expected_checksum = manifest.get("passages_sha256")
+    if not expected_checksum:
+        return None
+    try:
+        if _sha256_file(passages_path) != expected_checksum:
+            return None
+    except OSError:
+        return None
     counts = manifest.get("counts") or {}
     return PrepareSummary(
         passages_path=passages_path,
@@ -171,7 +187,7 @@ def prepare_passages(
             if not article_id or article_id in seen_article_ids:
                 continue
             passages = chunker.chunk_article(row)
-            if not passages:
+            if len(passages) < 2:
                 continue
             seen_article_ids.add(article_id)
             accepted_articles += 1
@@ -231,6 +247,7 @@ def prepare_passages(
             "counts": {"articles": article_count, "passages": passage_count},
             "flow_counts": dict(sorted(flow_counts.items())),
             "passages_file": final_path.name,
+            "passages_sha256": _sha256_file(final_path),
         }
         manifest_path = output_dir / "manifest.json"
         _write_json_atomic(manifest_path, manifest)

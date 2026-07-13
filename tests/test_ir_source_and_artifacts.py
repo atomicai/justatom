@@ -94,6 +94,7 @@ def test_habr_source_downloads_shards_lazily_when_limit_is_reached(tmp_path, mon
     downloads = []
     source = HabrSource(repo_id="justatom/habr-ds", cache_dir=tmp_path)
     monkeypatch.setattr(source, "_matching_parquet_files", lambda: list(paths))
+    monkeypatch.setattr(source, "resolved_revision", lambda: "test-commit")
 
     def fake_download(*, filename, **kwargs):
         downloads.append(filename)
@@ -105,6 +106,40 @@ def test_habr_source_downloads_shards_lazily_when_limit_is_reached(tmp_path, mon
 
     assert len(rows) == 1
     assert downloads == ["data/train-00000-of-00002.parquet"]
+
+
+def test_source_fingerprint_includes_resolved_dataset_revision(monkeypatch):
+    first = HabrSource(repo_id="justatom/habr-ds", revision="main")
+    second = HabrSource(repo_id="justatom/habr-ds", revision="main")
+    monkeypatch.setattr(first, "resolved_revision", lambda: "commit-a")
+    monkeypatch.setattr(second, "resolved_revision", lambda: "commit-b")
+    monkeypatch.setattr(first, "_repo_files", lambda: ["data/train-00000.parquet"])
+    monkeypatch.setattr(second, "_repo_files", lambda: ["data/train-00000.parquet"])
+
+    assert first.fingerprint() != second.fingerprint()
+
+
+def test_source_rejects_unknown_split_instead_of_reading_all_parquet(monkeypatch):
+    source = HabrSource(repo_id="justatom/habr-ds", split="validation")
+    monkeypatch.setattr(source, "_repo_files", lambda: ["data/train-00000.parquet"])
+
+    try:
+        source._matching_parquet_files()
+    except RuntimeError as exc:
+        assert "split" in str(exc)
+    else:
+        raise AssertionError("an unknown split must not fall back to all parquet files")
+
+
+def test_source_filters_non_default_config_paths(monkeypatch):
+    source = HabrSource(repo_id="example/multi-config", config="special", split="train")
+    monkeypatch.setattr(
+        source,
+        "_repo_files",
+        lambda: ["default/train-00000.parquet", "special/train-00000.parquet"],
+    )
+
+    assert source._matching_parquet_files() == ["special/train-00000.parquet"]
 
 
 def test_hf_api_key_is_promoted_for_transformers_hub_calls(monkeypatch):
@@ -155,6 +190,38 @@ def test_prepare_reuses_matching_fingerprint(tmp_path):
     assert second.reused is True
     assert second.fingerprint == first.fingerprint
     assert second.passage_count == first.passage_count
+
+
+def test_prepare_rebuilds_when_passage_checksum_does_not_match(tmp_path):
+    kwargs = {
+        "output_dir": tmp_path,
+        "chunker": make_test_chunker(),
+        "config": PrepareConfig(seed=42, max_passages=20),
+        "source_fingerprint": "synthetic-v1",
+    }
+    first = prepare_passages(rows=synthetic_rows(), **kwargs)
+    first.passages_path.write_bytes(b"corrupted")
+
+    second = prepare_passages(rows=synthetic_rows(), **kwargs)
+
+    assert second.reused is False
+    assert pl.read_parquet(second.passages_path).height == second.passage_count
+
+
+def test_prepare_requires_two_valid_passages_per_article(tmp_path):
+    short = source_row(99)
+    short["text_markdown"] = "Один самостоятельный технический абзац. " * 4
+
+    summary = prepare_passages(
+        rows=iter([short, source_row(1)]),
+        output_dir=tmp_path,
+        chunker=make_test_chunker(),
+        config=PrepareConfig(seed=42, max_passages=20),
+        source_fingerprint="synthetic-v1",
+    )
+    frame = pl.read_parquet(summary.passages_path)
+
+    assert "99" not in frame["article_id"].to_list()
 
 
 def test_changed_config_invalidates_prepared_artifact(tmp_path):

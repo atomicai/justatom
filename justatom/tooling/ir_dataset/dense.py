@@ -50,6 +50,7 @@ class E5TextEncoder:
     def __init__(
         self,
         model_name: str = "intfloat/multilingual-e5-small",
+        revision: str = "main",
         device: str = "mps",
         max_length: int = 512,
     ) -> None:
@@ -59,10 +60,12 @@ class E5TextEncoder:
         if device == "mps" and not torch.backends.mps.is_available():
             device = "cpu"
         self.model_name = str(model_name)
+        self.model_revision = str(revision)
         self.device = str(device)
         self.max_length = int(max_length)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.model = AutoModel.from_pretrained(self.model_name).eval().to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, revision=self.model_revision)
+        self.model = AutoModel.from_pretrained(self.model_name, revision=self.model_revision).eval().to(self.device)
+        self.model_revision = str(getattr(self.model.config, "_commit_hash", None) or self.model_revision)
         self.dimension = int(self.model.config.hidden_size)
 
     def encode(self, texts: Sequence[str], batch_size: int = 64) -> np.ndarray:
@@ -177,14 +180,17 @@ class DenseIndex:
                 json.dumps(passage_ids, ensure_ascii=False, separators=(",", ":")) + "\n",
                 encoding="utf-8",
             )
+            passage_ids_path = temporary / "passage_ids.json"
             metadata = {
                 "version": 1,
                 "count": len(passage_ids),
                 "dimension": dimension,
                 "dtype": "float32",
                 "model_name": str(getattr(encoder, "model_name", "unknown")),
+                "model_revision": str(getattr(encoder, "model_revision", "unknown")),
                 "build_device": str(getattr(encoder, "device", "unknown")),
                 "embeddings_sha256": _sha256_file(embeddings_path),
+                "passage_ids_sha256": _sha256_file(passage_ids_path),
             }
             (temporary / "dense_config.json").write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -199,10 +205,23 @@ class DenseIndex:
         return cls.load(output_dir, encoder=encoder)
 
     @classmethod
-    def load(cls, output_dir: Path, encoder: TextEncoder | None = None) -> "DenseIndex":
+    def load(
+        cls,
+        output_dir: Path,
+        encoder: TextEncoder | None = None,
+        *,
+        verify_checksum: bool = True,
+    ) -> "DenseIndex":
         output_dir = Path(output_dir)
         metadata = json.loads((output_dir / "dense_config.json").read_text(encoding="utf-8"))
-        passage_ids = json.loads((output_dir / "passage_ids.json").read_text(encoding="utf-8"))
+        embeddings_path = output_dir / "embeddings.f32"
+        passage_ids_path = output_dir / "passage_ids.json"
+        if verify_checksum:
+            if _sha256_file(embeddings_path) != metadata.get("embeddings_sha256"):
+                raise ValueError("Dense embedding checksum does not match metadata")
+            if _sha256_file(passage_ids_path) != metadata.get("passage_ids_sha256"):
+                raise ValueError("Dense passage ID checksum does not match metadata")
+        passage_ids = json.loads(passage_ids_path.read_text(encoding="utf-8"))
         if len(passage_ids) != int(metadata["count"]):
             raise ValueError("Dense passage ID count does not match metadata")
         return cls(
@@ -250,6 +269,29 @@ class DenseIndex:
             return (query_tensor @ corpus_tensor.T).float().cpu().numpy()
         return queries @ corpus.T
 
+    def _stable_topk_positions(self, scores: np.ndarray, indices: np.ndarray, k: int) -> np.ndarray:
+        valid_positions = np.flatnonzero((indices >= 0) & np.isfinite(scores))
+        if len(valid_positions) <= k:
+            selected = valid_positions
+        else:
+            valid_scores = scores[valid_positions]
+            threshold = np.partition(valid_scores, len(valid_scores) - k)[len(valid_scores) - k]
+            above = valid_positions[valid_scores > threshold]
+            tied = valid_positions[valid_scores == threshold]
+            needed = k - len(above)
+            tied = np.asarray(
+                sorted(tied, key=lambda position: self.passage_ids[int(indices[position])])[:needed],
+                dtype=np.int64,
+            )
+            selected = np.concatenate([above, tied])
+        return np.asarray(
+            sorted(
+                selected,
+                key=lambda position: (-float(scores[position]), self.passage_ids[int(indices[position])]),
+            )[:k],
+            dtype=np.int64,
+        )
+
     def search_embeddings(
         self,
         query_embeddings: np.ndarray,
@@ -284,14 +326,25 @@ class DenseIndex:
                     scores[query_index, excluded - start] = -np.inf
 
             local_k = min(active_k, end - start)
-            local_positions = np.argpartition(scores, -local_k, axis=1)[:, -local_k:]
-            local_scores = np.take_along_axis(scores, local_positions, axis=1)
-            local_indices = local_positions.astype(np.int64) + start
+            block_indices = np.arange(start, end, dtype=np.int64)
+            local_scores = np.full((len(queries), active_k), -np.inf, dtype=np.float32)
+            local_indices = np.full((len(queries), active_k), -1, dtype=np.int64)
+            for query_index, row_scores in enumerate(scores):
+                positions = self._stable_topk_positions(row_scores, block_indices, local_k)
+                local_scores[query_index, : len(positions)] = row_scores[positions]
+                local_indices[query_index, : len(positions)] = block_indices[positions]
             combined_scores = np.concatenate([best_scores, local_scores], axis=1)
             combined_indices = np.concatenate([best_indices, local_indices], axis=1)
-            selected = np.argpartition(combined_scores, -active_k, axis=1)[:, -active_k:]
-            best_scores = np.take_along_axis(combined_scores, selected, axis=1)
-            best_indices = np.take_along_axis(combined_indices, selected, axis=1)
+            for query_index in range(len(queries)):
+                selected = self._stable_topk_positions(
+                    combined_scores[query_index],
+                    combined_indices[query_index],
+                    active_k,
+                )
+                best_scores[query_index].fill(-np.inf)
+                best_indices[query_index].fill(-1)
+                best_scores[query_index, : len(selected)] = combined_scores[query_index, selected]
+                best_indices[query_index, : len(selected)] = combined_indices[query_index, selected]
 
         output: list[list[DenseSearchHit]] = []
         for row_scores, row_indices in zip(best_scores, best_indices, strict=True):

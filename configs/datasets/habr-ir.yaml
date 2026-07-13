@@ -2,7 +2,7 @@ source:
   repo_id: justatom/habr-ds
   config: default
   split: train
-  revision: main
+  revision: 2c6fddf3812055062ce7cd5b1d00e24a6fe5f427
   cache_dir: null
 
 chunking:
@@ -24,6 +24,7 @@ preparation:
 
 retrieval:
   model_name: intfloat/multilingual-e5-small
+  model_revision: 614241f622f53c4eeff9890bdc4f31cfecc418b3
   device: mps
   batch_size: 64
   dense_block_size: 65536

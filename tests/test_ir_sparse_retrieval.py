@@ -58,3 +58,17 @@ def test_bm25_k_is_capped_by_corpus_size(tmp_path):
 
     assert len(hits) == 3
     assert {hit.passage_id for hit in hits} == {"p1", "p2", "p3"}
+
+
+def test_bm25_does_not_attach_sentence_punctuation_to_terms(tmp_path):
+    index = BM25Index.build(
+        [
+            ("p-other", "Контейнер запускается через podman."),
+            ("p-docker", "Контейнер запускается через docker."),
+        ],
+        tmp_path / "bm25",
+    )
+
+    hits = index.search(["docker"], k=2)[0]
+
+    assert hits[0].passage_id == "p-docker"
