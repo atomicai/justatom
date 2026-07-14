@@ -93,7 +93,9 @@ def test_checked_in_config_resolves_local_defaults():
     assert config.generation.scale_authorized is False
     assert config.generation.max_batch_attempts == 2
     assert config.target_selection.article_count == 50
-    assert config.output.generation_root == Path(".tmp_runs/datasets/habr-ir/generation-v1")
+    assert config.preparation.max_articles == 25_000
+    assert config.output.root == Path(".tmp_runs/datasets/habr-ir/local-100k-v4")
+    assert config.output.generation_root == Path(".tmp_runs/datasets/habr-ir/generation-v3-pilot")
     assert config.output.pilot_generation_root == config.output.generation_root
 
 

@@ -18,7 +18,7 @@ from justatom.tooling.ir_dataset.batch import (
 from justatom.tooling.ir_dataset.generation import GeneratorConfig
 
 
-SOURCE_CORPUS_FINGERPRINT = "bb6ad903b82c337a61cce2b1cd5bf5dd7e3303b6b3263258979372c00e40c3c9"
+SOURCE_CORPUS_FINGERPRINT = "9c98a176e4bf6869742cc9a59379ea7375c029d7eb36c3b7f3d37e0f62b253c6"
 SOURCE_PASSAGES_SHA256 = "a" * 64
 
 

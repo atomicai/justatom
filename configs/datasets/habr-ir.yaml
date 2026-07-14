@@ -18,7 +18,7 @@ chunking:
 
 preparation:
   seed: 42
-  max_articles: null
+  max_articles: 25000
   max_passages: 100000
   max_passages_per_article: 8
   part_rows: 10000
@@ -49,6 +49,6 @@ generation:
   scale_authorized: false
 
 output:
-  root: .tmp_runs/datasets/habr-ir/local-100k
-  generation_root: .tmp_runs/datasets/habr-ir/generation-v1
-  pilot_generation_root: .tmp_runs/datasets/habr-ir/generation-v1
+  root: .tmp_runs/datasets/habr-ir/local-100k-v4
+  generation_root: .tmp_runs/datasets/habr-ir/generation-v3-pilot
+  pilot_generation_root: .tmp_runs/datasets/habr-ir/generation-v3-pilot
