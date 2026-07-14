@@ -54,18 +54,36 @@ for 300 context rows total.
 | Generation fingerprint | `7628151eb1a4233d2ed5174bf4a30ea2cbfaf4c5d4268ab9e26b639e8781beb3` |
 
 The single 100-request shard uses `gpt-5.6-terra` with low reasoning effort.
-It was submitted as OpenAI batch
-`batch_6a556faaa13c81908fbfe8ec96712b3b`; its status was `validating` when this
-record was written.
+It completed as OpenAI batch `batch_6a556faaa13c81908fbfe8ec96712b3b`
+with 100 successful API responses and no failed requests.
+
+| Pilot metric | Result |
+| --- | ---: |
+| Schema success | 100/100 (100%) |
+| Usable generations | 96/100 (96%) |
+| Deterministic validation pass | 96/100 (96%) |
+| Exact evidence validity | 96/100 (96%) |
+| Requested-intent agreement | 99/100 (99%) |
+| Duplicate queries | 0 |
+| Input tokens | 210,602 |
+| Output tokens | 22,052 |
+| Total tokens | 232,654 |
+
+Four requests were rejected: all four returned `usable=false`; three also
+failed the unusable-response contract because they populated fields that must
+remain empty for an unsupported intent.
 
 ## Scale Gate
 
-The checked-in config keeps `generation.scale_authorized: false`. A 10k run
-must not be prepared or submitted until this exact v4 pilot is collected and
+The checked-in config keeps `generation.scale_authorized: false`. The v4 pilot
 meets both preregistered thresholds:
 
 1. Usable generation rate at least 70%.
 2. Deterministic validation pass rate at least 60%.
+
+Scale remains disabled pending a brief human audit of accepted pairs and the
+four rejected cases. Enabling scale requires a separate, explicit config
+change after that review.
 
 The earlier v2 pilot achieved 96% usable and 94% deterministic pass rates after
 the fixed finalizer, but it is tied to the old chunker-v3 corpus and therefore
