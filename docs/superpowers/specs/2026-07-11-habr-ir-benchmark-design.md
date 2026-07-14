@@ -473,8 +473,8 @@ Release requires:
 ### 13.1 Pair rows
 
 ```text
-pair_id, query_id, article_id, passage_id, split,
-query, answer, evidence, positive,
+pair_id, query_id, article_id, positive_passage_id, split,
+query, answer, evidence, positive_passage,
 requested_intent, actual_intent, topic_flows, topic_hubs, tags,
 difficulty, hard_negative_ids,
 generator_model, validator_model,
@@ -482,7 +482,9 @@ generator_prompt_hash, validator_prompt_hash,
 generation_attempt, validator_confidence
 ```
 
-`positive` is the exact serialized passage consumed by training and evaluation.
+`positive_passage` is the exact serialized passage consumed by training and
+evaluation. `evidence` is an exact quote used for groundedness audit and does
+not replace the full positive passage.
 `difficulty` is derived after retrieval from positive rank, score gap, and hard
 negative scores; it is not accepted solely from an LLM self-assessment.
 
