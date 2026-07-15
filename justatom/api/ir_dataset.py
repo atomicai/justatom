@@ -545,6 +545,7 @@ def finalize_stage(config: IRDatasetConfig) -> ReleaseSummary:
         config.output.release_root,
         git_sha=git_sha,
         git_dirty=git_dirty,
+        pilot_generation_root=config.output.pilot_generation_root,
     )
 
 

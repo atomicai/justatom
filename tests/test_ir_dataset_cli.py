@@ -150,6 +150,7 @@ def test_finalize_stage_passes_bound_roots_and_git_identity(monkeypatch, tmp_pat
             "output": {
                 "root": str(tmp_path / "source"),
                 "generation_root": str(tmp_path / "generation"),
+                "pilot_generation_root": str(tmp_path / "pilot-generation"),
                 "release_root": str(tmp_path / "release"),
             }
         },
@@ -172,6 +173,7 @@ def test_finalize_stage_passes_bound_roots_and_git_identity(monkeypatch, tmp_pat
     assert captured == {
         "source_root": tmp_path / "source",
         "generation_root": tmp_path / "generation",
+        "pilot_generation_root": tmp_path / "pilot-generation",
         "release_root": tmp_path / "release",
         "git_sha": "abc123",
         "git_dirty": False,

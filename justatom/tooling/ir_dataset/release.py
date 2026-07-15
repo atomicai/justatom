@@ -15,7 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from justatom.tooling.ir_dataset.artifacts import sha256_file, validate_bound_parquet_artifact
-from justatom.tooling.ir_dataset.batch import _generation_fingerprint, _target_context_fingerprint
+from justatom.tooling.ir_dataset.batch import _generation_fingerprint, _target_context_fingerprint, validate_pilot_gate
 from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION
 from justatom.tooling.ir_dataset.generation import GeneratorConfig
 
@@ -470,8 +470,19 @@ def _request_bindings(
 
 
 def _validate_generation_inputs(
-    source_manifest: Mapping[str, Any], source_manifest_sha256: str, generation_root: Path
-) -> tuple[dict[str, Any], list[dict[str, Any]], pl.DataFrame, pl.DataFrame, list[str], dict[str, GenerationBinding]]:
+    source_manifest: Mapping[str, Any],
+    source_manifest_sha256: str,
+    generation_root: Path,
+    pilot_generation_root: str | Path | None,
+) -> tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    pl.DataFrame,
+    pl.DataFrame,
+    list[str],
+    dict[str, GenerationBinding],
+    dict[str, Any] | None,
+]:
     state = _read_json(generation_root / "generation_state.json", "generation state")
     source_fingerprint = str(source_manifest["fingerprint"])
     passages_sha256 = str(source_manifest["passages_sha256"])
@@ -500,10 +511,17 @@ def _validate_generation_inputs(
     for path_key, sha_key, label in (
         ("collected_path", "collected_sha256", "collected artifact"),
         ("diagnostics_path", "diagnostics_sha256", "diagnostics artifact"),
-        ("pilot_metrics_path", "pilot_metrics_sha256", "pilot metrics artifact"),
     ):
         artifact_path = _bound_path(generation_root, state.get(path_key), label)
         _require_checksum(artifact_path, state.get(sha_key), label)
+    pilot_gate = None
+    if state.get("pilot_metrics_path") is not None or state.get("pilot_metrics_sha256") is not None:
+        metrics_path = _bound_path(generation_root, state.get("pilot_metrics_path"), "pilot metrics artifact")
+        _require_checksum(metrics_path, state.get("pilot_metrics_sha256"), "pilot metrics artifact")
+    else:
+        if pilot_generation_root is not None and generation_root.resolve() == Path(pilot_generation_root).resolve():
+            raise ValueError("scale release requires a pilot generation root separate from the generation workspace")
+        pilot_gate = validate_pilot_gate(state, pilot_generation_root)
     generation_config = state.get("generation_config")
     generator_model = generation_config.get("model") if isinstance(generation_config, Mapping) else None
     if not isinstance(generator_model, str) or not generator_model:
@@ -530,7 +548,7 @@ def _validate_generation_inputs(
     generation_fingerprint = _generation_fingerprint(source_fingerprint, target_context_fingerprint, generator, requests)
     if state.get("generation_fingerprint") != generation_fingerprint:
         raise ValueError("generation fingerprint mismatch")
-    return state, records, targets, context, ordered_ids, bindings
+    return state, records, targets, context, ordered_ids, bindings, pilot_gate
 
 
 def _audit_frame(
@@ -676,20 +694,28 @@ Local pilot release. See the repository research record for provenance and audit
 """
 
 
-def _release_fingerprint(source_manifest: Mapping[str, Any], state: Mapping[str, Any], *, git_sha: str, git_dirty: bool) -> str:
-    return _canonical_hash(
-        {
-            "version": 1,
-            "source_corpus_fingerprint": source_manifest["fingerprint"],
-            "source_passages_sha256": source_manifest["passages_sha256"],
-            "generation_fingerprint": state.get("generation_fingerprint"),
-            "targets_sha256": state["targets"]["sha256"],
-            "generation_context_sha256": state["generation_context"]["sha256"],
-            "collected_sha256": state["collected_sha256"],
-            "git": {"sha": git_sha, "dirty": bool(git_dirty)},
-            "contract": "habr-ir-release-v1",
-        }
-    )
+def _release_fingerprint(
+    source_manifest: Mapping[str, Any],
+    state: Mapping[str, Any],
+    *,
+    git_sha: str,
+    git_dirty: bool,
+    pilot_gate: Mapping[str, Any] | None,
+) -> str:
+    payload = {
+        "version": 1,
+        "source_corpus_fingerprint": source_manifest["fingerprint"],
+        "source_passages_sha256": source_manifest["passages_sha256"],
+        "generation_fingerprint": state.get("generation_fingerprint"),
+        "targets_sha256": state["targets"]["sha256"],
+        "generation_context_sha256": state["generation_context"]["sha256"],
+        "collected_sha256": state["collected_sha256"],
+        "git": {"sha": git_sha, "dirty": bool(git_dirty)},
+        "contract": "habr-ir-release-v1",
+    }
+    if pilot_gate is not None:
+        payload["pilot_gate"] = dict(pilot_gate)
+    return _canonical_hash(payload)
 
 
 def _summary_from_manifest(root: Path, manifest: Mapping[str, Any], *, reused: bool) -> ReleaseSummary:
@@ -750,6 +776,7 @@ def finalize_release(
     *,
     git_sha: str,
     git_dirty: bool,
+    pilot_generation_root: str | Path | None = None,
 ) -> ReleaseSummary:
     """Validate collected generation state and atomically write a local release."""
     source = Path(source_root)
@@ -758,12 +785,19 @@ def finalize_release(
     if not isinstance(git_sha, str) or not git_sha:
         raise ValueError("git_sha must be a non-empty string")
     source_manifest, passages_path, source_manifest_sha256 = _validate_source(source)
-    state, records, targets, context, ordered_ids, bindings = _validate_generation_inputs(
+    state, records, targets, context, ordered_ids, bindings, pilot_gate = _validate_generation_inputs(
         source_manifest,
         source_manifest_sha256,
         generation,
+        pilot_generation_root,
     )
-    fingerprint = _release_fingerprint(source_manifest, state, git_sha=git_sha, git_dirty=git_dirty)
+    fingerprint = _release_fingerprint(
+        source_manifest,
+        state,
+        git_sha=git_sha,
+        git_dirty=git_dirty,
+        pilot_gate=pilot_gate,
+    )
     if release.exists():
         return _validate_existing_release(release, fingerprint)
 
@@ -824,6 +858,7 @@ def finalize_release(
                 "fingerprint": state.get("generation_fingerprint"),
                 "model": generation_config["model"],
                 "collected_sha256": state["collected_sha256"],
+                **({"pilot_gate": pilot_gate} if pilot_gate is not None else {}),
             },
             "git": {"sha": git_sha, "dirty": bool(git_dirty)},
             "counts": {

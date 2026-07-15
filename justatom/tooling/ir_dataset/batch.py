@@ -678,24 +678,11 @@ def _require_v3_remote_state(state: Mapping[str, Any], operation: str) -> None:
         raise ValueError(f"remote {operation} requires current validator/finalizer versions")
 
 
-def _validate_scale_gate(
-    state: Mapping[str, Any],
-    output_dir: str | Path,
-    *,
-    request_count: int,
-    scale_authorized: bool,
-    pilot_generation_root: str | Path | None,
-) -> None:
-    if not _requires_scale_gate(state, request_count):
-        return
-    if not scale_authorized:
-        raise ValueError("multi-shard or >100-request submission requires explicit scale authorization")
+def validate_pilot_gate(state: Mapping[str, Any], pilot_generation_root: str | Path | None) -> dict[str, Any]:
+    """Validate and summarize the immutable pilot authorization for a scale run."""
     if pilot_generation_root is None:
         raise ValueError("scale submission requires a pilot generation root")
-    root = Path(output_dir).resolve()
     pilot_root = Path(pilot_generation_root).resolve()
-    if root == pilot_root:
-        raise ValueError("scale submission requires a generation root separate from the pilot workspace")
     metrics_path = pilot_root / PILOT_METRICS_FILE_NAME
     pilot_state_path = pilot_root / STATE_FILE_NAME
     if not metrics_path.exists() or not pilot_state_path.exists():
@@ -738,6 +725,31 @@ def _validate_scale_gate(
         raise ValueError(f"pilot usable rate must be >= {PILOT_MIN_USABLE_RATE:.2f}")
     if float(metrics.get("deterministic_gate_pass_rate", -1.0)) < PILOT_MIN_GATE_PASS_RATE:
         raise ValueError(f"pilot deterministic gate pass rate must be >= {PILOT_MIN_GATE_PASS_RATE:.2f}")
+    return {
+        "generation_fingerprint": str(pilot_state["generation_fingerprint"]),
+        "metrics_sha256": str(expected_checksum),
+        "request_count": pilot_request_count,
+        "usable_rate": float(metrics["usable_rate"]),
+        "deterministic_gate_pass_rate": float(metrics["deterministic_gate_pass_rate"]),
+    }
+
+
+def _validate_scale_gate(
+    state: Mapping[str, Any],
+    output_dir: str | Path,
+    *,
+    request_count: int,
+    scale_authorized: bool,
+    pilot_generation_root: str | Path | None,
+) -> None:
+    if not _requires_scale_gate(state, request_count):
+        return
+    if not scale_authorized:
+        raise ValueError("multi-shard or >100-request submission requires explicit scale authorization")
+    root = Path(output_dir).resolve()
+    if pilot_generation_root is not None and root == Path(pilot_generation_root).resolve():
+        raise ValueError("scale submission requires a generation root separate from the pilot workspace")
+    validate_pilot_gate(state, pilot_generation_root)
 
 
 def submit_pending_shards(
@@ -1300,5 +1312,6 @@ __all__ = [
     "refresh_batch_status",
     "retry_failed_shards",
     "submit_pending_shards",
+    "validate_pilot_gate",
     "write_batch_shards",
 ]

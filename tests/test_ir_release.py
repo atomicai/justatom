@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import shutil
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -276,15 +277,29 @@ def write_release_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
     collected_path.write_bytes(collected_bytes)
     diagnostics_path = generation_root / "generation_diagnostics.jsonl"
     diagnostics_path.write_bytes(b"")
-    metrics_path = generation_root / "pilot_metrics.json"
-    metrics_path.write_text(json.dumps({"request_count": 2}, sort_keys=True), encoding="utf-8")
-
     target_context_fingerprint = _target_context_fingerprint(targets().to_dicts(), context_frame.to_dicts())
     generation_fingerprint = _generation_fingerprint(
         source_fingerprint,
         target_context_fingerprint,
         generator_config,
         request_rows,
+    )
+    metrics_path = generation_root / "pilot_metrics.json"
+    metrics_path.write_text(
+        json.dumps(
+            {
+                "generation_fingerprint": generation_fingerprint,
+                "source_corpus_fingerprint": source_fingerprint,
+                "source_passages_sha256": passages_sha256,
+                "request_count": 2,
+                "usable_rate": 1.0,
+                "deterministic_gate_pass_rate": 1.0,
+                "validator_version": 1,
+                "finalizer_version": 1,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
     )
     state = {
         "version": 3,
@@ -312,6 +327,7 @@ def write_release_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
                 "custom_ids": list(bindings()),
                 "request_path": request_path.relative_to(generation_root).as_posix(),
                 "request_sha256": hashlib.sha256(request_bytes).hexdigest(),
+                "request_bytes": len(request_bytes),
                 "request_count": 2,
                 "status": "completed",
             }
@@ -418,6 +434,33 @@ def test_finalize_writes_hf_layout_manifest_and_review_sheet(tmp_path):
         "reviewer",
         "notes",
     ]
+
+
+def test_finalize_scale_release_uses_checksummed_external_pilot_gate(tmp_path):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+    pilot_root = tmp_path / "pilot-generation"
+    shutil.copytree(generation_root, pilot_root)
+    pilot_state = json.loads((pilot_root / "generation_state.json").read_text(encoding="utf-8"))
+
+    state_path = generation_root / "generation_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.pop("pilot_metrics_path")
+    state.pop("pilot_metrics_sha256")
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (generation_root / "pilot_metrics.json").unlink()
+
+    result = finalize_release(
+        source_root,
+        generation_root,
+        release_root,
+        git_sha="test-sha",
+        git_dirty=False,
+        pilot_generation_root=pilot_root,
+    )
+
+    assert result.pair_count == 1
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["generation"]["pilot_gate"]["metrics_sha256"] == pilot_state["pilot_metrics_sha256"]
 
 
 def test_finalize_escapes_spreadsheet_formulas_in_audit_csv(tmp_path):
