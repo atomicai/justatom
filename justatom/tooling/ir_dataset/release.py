@@ -15,7 +15,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from justatom.tooling.ir_dataset.artifacts import sha256_file, validate_bound_parquet_artifact
+from justatom.tooling.ir_dataset.batch import _generation_fingerprint, _target_context_fingerprint
 from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION
+from justatom.tooling.ir_dataset.generation import GeneratorConfig
 
 
 PAIR_SCHEMA = {
@@ -68,6 +70,16 @@ CORPUS_COLUMNS = (
 
 SPLIT_NAMES = {"train": "train", "dev": "validation", "test": "test"}
 
+RELEASE_ARTIFACT_PATHS = frozenset(
+    {
+        "README.md",
+        "audit/pilot-review.csv",
+        "data/corpus-100k/corpus.parquet",
+        *(f"data/pairs/{split}.parquet" for split in ("train", "validation", "test")),
+        *(f"data/qrels/{split}.parquet" for split in ("train", "validation", "test")),
+    }
+)
+
 AUDIT_HUMAN_COLUMNS = (
     "human_target_answers_query",
     "human_evidence_supports_answer",
@@ -80,6 +92,8 @@ AUDIT_HUMAN_COLUMNS = (
     "reviewer",
     "notes",
 )
+
+_SPREADSHEET_FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +214,9 @@ def materialize_release_frames(
         record_rows[custom_id] = record
     if set(record_rows) != set(bindings):
         raise ValueError("collected record IDs do not exactly match immutable generation bindings")
+    binding_passage_ids = [binding.passage_id for binding in bindings.values()]
+    if len(binding_passage_ids) != len(set(binding_passage_ids)) or set(binding_passage_ids) != set(target_rows):
+        raise ValueError("generation bindings must have a one-to-one mapping to targets")
 
     pair_rows: list[dict[str, Any]] = []
     qrel_rows: list[dict[str, Any]] = []
@@ -353,8 +370,9 @@ def _read_jsonl(path: Path, label: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _validate_source(source_root: Path) -> tuple[dict[str, Any], Path]:
-    manifest = _read_json(source_root / "manifest.json", "source corpus manifest")
+def _validate_source(source_root: Path) -> tuple[dict[str, Any], Path, str]:
+    manifest_path = source_root / "manifest.json"
+    manifest = _read_json(manifest_path, "source corpus manifest")
     fingerprint = manifest.get("fingerprint")
     passages_sha256 = manifest.get("passages_sha256")
     if not isinstance(fingerprint, str) or not fingerprint:
@@ -363,7 +381,7 @@ def _validate_source(source_root: Path) -> tuple[dict[str, Any], Path]:
         raise ValueError("source corpus manifest does not match the current chunker contract")
     passages_path = source_root / "passages.parquet"
     _require_checksum(passages_path, passages_sha256, "source passages artifact")
-    return manifest, passages_path
+    return manifest, passages_path, sha256_file(manifest_path)
 
 
 def _validate_generation_artifact(
@@ -373,6 +391,7 @@ def _validate_generation_artifact(
     artifact_kind: str,
     source_fingerprint: str,
     passages_sha256: str,
+    upstream_sha256: str,
 ) -> Path:
     if not isinstance(descriptor, Mapping):
         raise ValueError(f"generation state is missing {artifact_kind} descriptor")
@@ -385,17 +404,20 @@ def _validate_generation_artifact(
         raise ValueError(f"{artifact_kind} source corpus fingerprint mismatch")
     if bound_state.get("passages_sha256") != passages_sha256:
         raise ValueError(f"{artifact_kind} source passages checksum mismatch")
+    if bound_state.get("upstream_sha256") != upstream_sha256:
+        raise ValueError(f"{artifact_kind} upstream checksum mismatch")
     return artifact_path
 
 
 def _request_bindings(
     state: Mapping[str, Any], generation_root: Path, generator_model: str
-) -> tuple[list[str], dict[str, GenerationBinding]]:
+) -> tuple[list[str], dict[str, GenerationBinding], list[dict[str, Any]]]:
     shards = state.get("shards")
     if not isinstance(shards, list) or not shards:
         raise ValueError("generation state has no request shards")
     ordered_ids: list[str] = []
     bindings: dict[str, GenerationBinding] = {}
+    ordered_requests: list[dict[str, Any]] = []
     for shard_index, shard in enumerate(shards):
         if not isinstance(shard, Mapping):
             raise ValueError(f"invalid generation shard at index {shard_index}")
@@ -441,13 +463,14 @@ def _request_bindings(
             )
             actual_ids.append(custom_id)
             ordered_ids.append(custom_id)
+            ordered_requests.append(request)
         if actual_ids != expected_ids:
             raise ValueError(f"request shard {shard_index} custom ID order mismatch")
-    return ordered_ids, bindings
+    return ordered_ids, bindings, ordered_requests
 
 
 def _validate_generation_inputs(
-    source_manifest: Mapping[str, Any], generation_root: Path
+    source_manifest: Mapping[str, Any], source_manifest_sha256: str, generation_root: Path
 ) -> tuple[dict[str, Any], list[dict[str, Any]], pl.DataFrame, pl.DataFrame, list[str], dict[str, GenerationBinding]]:
     state = _read_json(generation_root / "generation_state.json", "generation state")
     source_fingerprint = str(source_manifest["fingerprint"])
@@ -464,6 +487,7 @@ def _validate_generation_inputs(
         artifact_kind="targets",
         source_fingerprint=source_fingerprint,
         passages_sha256=passages_sha256,
+        upstream_sha256=source_manifest_sha256,
     )
     context_path = _validate_generation_artifact(
         generation_root,
@@ -471,6 +495,7 @@ def _validate_generation_inputs(
         artifact_kind="generation_context",
         source_fingerprint=source_fingerprint,
         passages_sha256=passages_sha256,
+        upstream_sha256=str(state["targets"]["sha256"]),
     )
     for path_key, sha_key, label in (
         ("collected_path", "collected_sha256", "collected artifact"),
@@ -483,7 +508,7 @@ def _validate_generation_inputs(
     generator_model = generation_config.get("model") if isinstance(generation_config, Mapping) else None
     if not isinstance(generator_model, str) or not generator_model:
         raise ValueError("generation state has no generator model")
-    ordered_ids, bindings = _request_bindings(state, generation_root, generator_model)
+    ordered_ids, bindings, requests = _request_bindings(state, generation_root, generator_model)
     collected_path = _bound_path(generation_root, state["collected_path"], "collected artifact")
     records = _read_jsonl(collected_path, "collected artifact")
     counts = state.get("counts")
@@ -493,7 +518,19 @@ def _validate_generation_inputs(
     rejected = sum(record.get("status") == "rejected" for record in records)
     if accepted != int(counts.get("accepted", -1)) or rejected != int(counts.get("rejected", -1)):
         raise ValueError("generation terminal status counts do not match state")
-    return state, records, pl.read_parquet(targets_path), pl.read_parquet(context_path), ordered_ids, bindings
+    targets = pl.read_parquet(targets_path)
+    context = pl.read_parquet(context_path)
+    target_context_fingerprint = _target_context_fingerprint(targets.to_dicts(), context.to_dicts())
+    if state.get("target_context_fingerprint") != target_context_fingerprint:
+        raise ValueError("generation target context fingerprint mismatch")
+    try:
+        generator = GeneratorConfig(**dict(generation_config))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("generation state has an invalid generator config") from exc
+    generation_fingerprint = _generation_fingerprint(source_fingerprint, target_context_fingerprint, generator, requests)
+    if state.get("generation_fingerprint") != generation_fingerprint:
+        raise ValueError("generation fingerprint mismatch")
+    return state, records, targets, context, ordered_ids, bindings
 
 
 def _audit_frame(
@@ -545,6 +582,20 @@ def _audit_frame(
         row.update({column: "" for column in AUDIT_HUMAN_COLUMNS})
         rows.append(row)
     return pl.DataFrame(rows)
+
+
+def _csv_safe_cell(value: Any) -> Any:
+    if not isinstance(value, str) or not value:
+        return value
+    stripped = value.lstrip()
+    if value[0] in "\t\r\n" or stripped.startswith(_SPREADSHEET_FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
+
+
+def _csv_safe_frame(frame: pl.DataFrame) -> pl.DataFrame:
+    rows = [{key: _csv_safe_cell(value) for key, value in row.items()} for row in frame.iter_rows(named=True)]
+    return pl.DataFrame(rows, schema=frame.schema)
 
 
 def _write_text(path: Path, content: str) -> None:
@@ -663,11 +714,32 @@ def _validate_existing_release(root: Path, fingerprint: str) -> ReleaseSummary:
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, list):
         raise ValueError("release manifest artifacts are invalid")
+    artifact_paths = [item.get("path") for item in artifacts if isinstance(item, Mapping)]
+    if len(artifact_paths) != len(artifacts) or len(artifact_paths) != len(set(artifact_paths)):
+        raise ValueError("release required artifact set mismatch")
+    if set(artifact_paths) != RELEASE_ARTIFACT_PATHS:
+        raise ValueError("release required artifact set mismatch")
     for item in artifacts:
-        if not isinstance(item, Mapping):
-            raise ValueError("release manifest artifact entry is invalid")
         path = _bound_path(root, item.get("path"), "release artifact")
         _require_checksum(path, item.get("sha256"), "release artifact")
+        if item.get("bytes") != path.stat().st_size:
+            raise ValueError("release artifact byte count mismatch")
+
+    pair_splits = {
+        split: pq.ParquetFile(root / f"data/pairs/{split}.parquet").metadata.num_rows for split in ("train", "validation", "test")
+    }
+    qrel_count = sum(
+        pq.ParquetFile(root / f"data/qrels/{split}.parquet").metadata.num_rows for split in ("train", "validation", "test")
+    )
+    actual_counts = {
+        "pairs": sum(pair_splits.values()),
+        "pair_splits": pair_splits,
+        "corpus": pq.ParquetFile(root / "data/corpus-100k/corpus.parquet").metadata.num_rows,
+        "qrels": qrel_count,
+        "audit_rows": pl.read_csv(root / "audit/pilot-review.csv").height,
+    }
+    if manifest.get("counts") != actual_counts:
+        raise ValueError("release counts mismatch")
     return _summary_from_manifest(root, manifest, reused=True)
 
 
@@ -685,8 +757,12 @@ def finalize_release(
     release = Path(release_root)
     if not isinstance(git_sha, str) or not git_sha:
         raise ValueError("git_sha must be a non-empty string")
-    source_manifest, passages_path = _validate_source(source)
-    state, records, targets, context, ordered_ids, bindings = _validate_generation_inputs(source_manifest, generation)
+    source_manifest, passages_path, source_manifest_sha256 = _validate_source(source)
+    state, records, targets, context, ordered_ids, bindings = _validate_generation_inputs(
+        source_manifest,
+        source_manifest_sha256,
+        generation,
+    )
     fingerprint = _release_fingerprint(source_manifest, state, git_sha=git_sha, git_dirty=git_dirty)
     if release.exists():
         return _validate_existing_release(release, fingerprint)
@@ -722,7 +798,7 @@ def finalize_release(
         _write_hf_parquet(frames.corpus, corpus_path)
         review_path = temporary / "audit/pilot-review.csv"
         review_path.parent.mkdir(parents=True, exist_ok=True)
-        review.write_csv(review_path)
+        _csv_safe_frame(review).write_csv(review_path)
         _fsync_file(review_path)
         _write_text(temporary / "README.md", _dataset_card())
 

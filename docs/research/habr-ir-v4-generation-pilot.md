@@ -88,22 +88,23 @@ change after that review.
 ## Local Pilot Release
 
 The completed pilot was materialized with the local-only `finalize` stage. The
-release fingerprint is
-`fb16ff6178b8e2c8640089558bd95c15ffae1fa9c4ca1a2fd8c34dcca19cef3f`.
-It is bound to clean git commit `5f7c5cc1308b75c8f090c3f706975c778150daaa`.
+release fingerprint, clean code commit, and per-file checksums are recorded in
+`data/manifests/release-manifest.json` inside the ignored release directory.
 
-| Release artifact | Rows | SHA-256 |
-| --- | ---: | --- |
-| Pairs, train | 76 | `0cdc7198e6041f1f7d0cae20a7f1695a802c1280b46e5f18f1613aa37cf93089` |
-| Pairs, validation | 10 | `d5864aa817d69d98effb0e8bb19119bd79259c99b49ed7a387108e0f0c7abc74` |
-| Pairs, test | 10 | `3b10be92b83cb7b151cba681b3e8c997ac5239188c49614d7e478a3d6c8befc7` |
-| Corpus 100k | 100,000 | `efbc196047429eff23fcf38683a1d1eaed06bf7e6de2eb7d3d23f4892a0758e3` |
-| Qrels, all splits | 96 | See `release-manifest.json` |
-| Human-audit sheet | 100 | `6edec2a22ad33f1d9a1d6c16914627248982d5fa100365828cfd5628019ef8fa` |
+| Release artifact | Rows |
+| --- | ---: |
+| Pairs, train | 76 |
+| Pairs, validation | 10 |
+| Pairs, test | 10 |
+| Corpus 100k | 100,000 |
+| Qrels, all splits | 96 |
+| Human-audit sheet | 100 |
 
 Hugging Face Datasets 2.18.0 loaded the local `pairs`, `corpus-100k`, and
 `qrels` configurations without a custom dataset script. A repeated `finalize`
 invocation returned `reused: true` after verifying every artifact checksum.
+The release directory is immutable: after a code-provenance change, archive the
+old directory or select a new `output.release_root` before running `finalize`.
 
 The review sheet is
 `.tmp_runs/datasets/habr-ir/pilot-release-v1/audit/pilot-review.csv`. It includes

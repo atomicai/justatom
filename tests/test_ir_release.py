@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import polars as pl
@@ -10,7 +12,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from justatom.tooling.ir_dataset.artifacts import sha256_file, write_bound_parquet_artifact
+from justatom.tooling.ir_dataset.batch import _generation_fingerprint, _target_context_fingerprint
 from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION
+from justatom.tooling.ir_dataset.generation import GeneratorConfig
 from justatom.tooling.ir_dataset.release import (
     GenerationBinding,
     finalize_release,
@@ -153,6 +157,25 @@ def test_materialization_keeps_only_accepted_rows_and_full_positive():
     assert result.corpus.filter(pl.col("passage_id") == "p2")["is_positive"].item() is False
 
 
+def test_materialization_requires_one_request_binding_per_target():
+    duplicate_bindings = bindings()
+    duplicate_bindings["gen-rejected"] = replace(
+        duplicate_bindings["gen-rejected"],
+        passage_id="p1",
+        article_id="a1",
+        source_hash="source-1",
+    )
+
+    with pytest.raises(ValueError, match="one-to-one.*targets"):
+        materialize_release_frames(
+            records=records(),
+            targets=targets(),
+            corpus=corpus(),
+            bindings=duplicate_bindings,
+            generator_model="test-model",
+        )
+
+
 def _jsonl(rows: list[dict[str, object]]) -> bytes:
     return b"".join((json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode() for row in rows)
 
@@ -224,6 +247,7 @@ def write_release_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
         upstream_sha256=sha256_file(target_path),
     )
 
+    generator_config = GeneratorConfig()
     request_rows = []
     for custom_id, binding in bindings().items():
         request_rows.append(
@@ -232,7 +256,7 @@ def write_release_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
                 "method": "POST",
                 "url": "/v1/responses",
                 "body": {
-                    "model": "test-model",
+                    "model": generator_config.model,
                     "metadata": {
                         "article_id": binding.article_id,
                         "generation_attempt": str(binding.generation_attempt),
@@ -255,12 +279,20 @@ def write_release_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
     metrics_path = generation_root / "pilot_metrics.json"
     metrics_path.write_text(json.dumps({"request_count": 2}, sort_keys=True), encoding="utf-8")
 
+    target_context_fingerprint = _target_context_fingerprint(targets().to_dicts(), context_frame.to_dicts())
+    generation_fingerprint = _generation_fingerprint(
+        source_fingerprint,
+        target_context_fingerprint,
+        generator_config,
+        request_rows,
+    )
     state = {
         "version": 3,
         "source_corpus_fingerprint": source_fingerprint,
         "source_passages_sha256": passages_sha256,
-        "generation_fingerprint": "generation-fingerprint",
-        "generation_config": {"model": "test-model"},
+        "target_context_fingerprint": target_context_fingerprint,
+        "generation_fingerprint": generation_fingerprint,
+        "generation_config": asdict(generator_config),
         "targets": {
             "path": target_path.name,
             "sha256": sha256_file(target_path),
@@ -316,6 +348,43 @@ def test_finalize_rejects_missing_or_ambiguous_request_binding(tmp_path):
         finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
 
 
+def _rewrite_bound_state(generation_root: Path, artifact: str, **changes: object) -> None:
+    state_path = generation_root / f"{artifact}_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.update(changes)
+    unsigned = {key: value for key, value in state.items() if key != "contract_sha256"}
+    state["contract_sha256"] = hashlib.sha256(
+        json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    generation_state_path = generation_root / "generation_state.json"
+    generation_state = json.loads(generation_state_path.read_text(encoding="utf-8"))
+    generation_state[artifact]["state_sha256"] = sha256_file(state_path)
+    generation_state_path.write_text(json.dumps(generation_state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("artifact", ["targets", "generation_context"])
+def test_finalize_rejects_broken_artifact_upstream_chain(tmp_path, artifact):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+    _rewrite_bound_state(generation_root, artifact, upstream_sha256="0" * 64)
+
+    with pytest.raises(ValueError, match=rf"{artifact} upstream checksum mismatch"):
+        finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+
+
+@pytest.mark.parametrize("field", ["target_context_fingerprint", "generation_fingerprint"])
+def test_finalize_recomputes_generation_fingerprints(tmp_path, field):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+    state_path = generation_root / "generation_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state[field] = "0" * 64
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field.replace("_", " ")):
+        finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+
+
 def test_finalize_writes_hf_layout_manifest_and_review_sheet(tmp_path):
     source_root, generation_root, release_root = write_release_workspace(tmp_path)
 
@@ -350,6 +419,25 @@ def test_finalize_writes_hf_layout_manifest_and_review_sheet(tmp_path):
     ]
 
 
+def test_finalize_escapes_spreadsheet_formulas_in_audit_csv(tmp_path):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+    collected_path = generation_root / "generation_collected.jsonl"
+    unsafe_records = records()
+    unsafe_records[0]["output"]["query"] = '=HYPERLINK("https://example.test")'
+    collected_bytes = _jsonl(unsafe_records)
+    collected_path.write_bytes(collected_bytes)
+    state_path = generation_root / "generation_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["collected_sha256"] = hashlib.sha256(collected_bytes).hexdigest()
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+
+    with (release_root / "audit/pilot-review.csv").open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert rows[0]["query"] == '\'=HYPERLINK("https://example.test")'
+
+
 def test_finalize_writes_hugging_face_compatible_arrow_types(tmp_path):
     source_root, generation_root, release_root = write_release_workspace(tmp_path)
 
@@ -380,3 +468,29 @@ def test_finalize_exactly_reuses_matching_release(tmp_path):
     assert first.qrel_count == second.qrel_count
     assert first.review_count == second.review_count
     assert first.fingerprint == second.fingerprint
+
+
+def test_finalize_rejects_existing_release_missing_required_artifact(tmp_path):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+    finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+    manifest_path = release_root / "data/manifests/release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    missing = "audit/pilot-review.csv"
+    manifest["artifacts"] = [item for item in manifest["artifacts"] if item["path"] != missing]
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (release_root / missing).unlink()
+
+    with pytest.raises(ValueError, match="required artifact set mismatch"):
+        finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+
+
+def test_finalize_rejects_existing_release_with_false_counts(tmp_path):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+    finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+    manifest_path = release_root / "data/manifests/release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["counts"]["pairs"] = 999
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="release counts mismatch"):
+        finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
