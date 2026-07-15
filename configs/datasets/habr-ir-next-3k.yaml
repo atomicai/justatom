@@ -1,0 +1,57 @@
+source:
+  repo_id: justatom/habr-ds
+  config: default
+  split: train
+  revision: 2c6fddf3812055062ce7cd5b1d00e24a6fe5f427
+  cache_dir: null
+
+chunking:
+  tokenizer_name: intfloat/multilingual-e5-small
+  tokenizer_revision: 614241f622f53c4eeff9890bdc4f31cfecc418b3
+  max_section_chars: 240
+  min_chars: 600
+  target_chars: 1200
+  max_chars: 1800
+  overlap_max_chars: 250
+  model_max_tokens: 512
+  safety_reserve_tokens: 8
+
+preparation:
+  seed: 42
+  max_articles: 25000
+  max_passages: 100000
+  max_passages_per_article: 8
+  part_rows: 10000
+
+retrieval:
+  model_name: intfloat/multilingual-e5-small
+  model_revision: 614241f622f53c4eeff9890bdc4f31cfecc418b3
+  device: mps
+  batch_size: 64
+  dense_block_size: 65536
+  bm25_k: 20
+  dense_k: 20
+  union_k: 30
+  rrf_k: 60
+  query_passages: 200
+
+target_selection:
+  article_count: 1500
+  seed: 42
+  max_flow_share: 0.30
+  exclude_target_roots:
+    - .tmp_runs/datasets/habr-ir/generation-1k-canary-v1
+
+generation:
+  model: gpt-5.6-terra
+  reasoning_effort: low
+  max_requests_per_shard: 1000
+  max_shard_bytes: 100000000
+  max_batch_attempts: 2
+  scale_authorized: true
+
+output:
+  root: .tmp_runs/datasets/habr-ir/local-100k-v4
+  generation_root: .tmp_runs/datasets/habr-ir/generation-next-3k-v1
+  pilot_generation_root: .tmp_runs/datasets/habr-ir/generation-v3-pilot
+  release_root: .tmp_runs/datasets/habr-ir/next-3k-release-v1

@@ -343,7 +343,13 @@ def select_targets_stage(config: IRDatasetConfig) -> pl.DataFrame:
     source_fingerprint = _source_corpus_manifest_fingerprint(config.output.root)
     passages = pl.read_parquet(passages_path)
     selection_config = replace(config.target_selection, output_dir=None)
-    targets = select_target_slots(passages, selection_config)
+    excluded_article_ids, exclusion_provenance = _load_excluded_target_articles(
+        selection_config.exclude_target_roots,
+        source_fingerprint=source_fingerprint,
+        passages_sha256=sha256_file(passages_path),
+        manifest_sha256=sha256_file(config.output.root / "manifest.json"),
+    )
+    targets = select_target_slots(passages, selection_config, excluded_article_ids=excluded_article_ids)
     generation_root = config.output.generation_root
     write_bound_parquet_artifact(
         targets,
@@ -352,9 +358,12 @@ def select_targets_stage(config: IRDatasetConfig) -> pl.DataFrame:
         artifact_kind="targets",
         source_corpus_fingerprint=source_fingerprint,
         passages_sha256=sha256_file(passages_path),
-        config=asdict(selection_config),
+        config=_target_selection_artifact_config(selection_config),
         upstream_sha256=sha256_file(config.output.root / "manifest.json"),
-        metadata={"quality_reason_counts": selection_quality_reason_counts(passages)},
+        metadata={
+            "quality_reason_counts": selection_quality_reason_counts(passages),
+            "excluded_targets": exclusion_provenance,
+        },
     )
     return targets
 
@@ -394,6 +403,50 @@ def _require_artifact_source_binding(
         raise ValueError(f"source-bound {artifact_kind} passages checksum mismatch")
 
 
+def _target_selection_artifact_config(config: TargetSelectionConfig) -> dict[str, Any]:
+    payload = asdict(replace(config, output_dir=None))
+    roots = list(payload.pop("exclude_target_roots", ()))
+    if roots:
+        payload["exclude_target_roots"] = roots
+    return payload
+
+
+def _load_excluded_target_articles(
+    roots: tuple[str, ...],
+    *,
+    source_fingerprint: str,
+    passages_sha256: str,
+    manifest_sha256: str,
+) -> tuple[set[str], list[dict[str, Any]]]:
+    article_ids: set[str] = set()
+    provenance: list[dict[str, Any]] = []
+    for root_value in roots:
+        root = Path(root_value)
+        targets_path = root / "targets.parquet"
+        state_path = root / "targets_state.json"
+        state = validate_bound_parquet_artifact(targets_path, state_path, artifact_kind="targets")
+        _require_artifact_source_binding(
+            state,
+            artifact_kind="excluded targets",
+            source_fingerprint=source_fingerprint,
+            passages_sha256=passages_sha256,
+        )
+        if state.get("upstream_sha256") != manifest_sha256:
+            raise ValueError("excluded targets manifest checksum mismatch")
+        frame = pl.read_parquet(targets_path, columns=["article_id"])
+        root_article_ids = {str(article_id) for article_id in frame["article_id"]}
+        article_ids.update(root_article_ids)
+        provenance.append(
+            {
+                "root": str(root),
+                "article_count": len(root_article_ids),
+                "targets_sha256": sha256_file(targets_path),
+                "targets_state_sha256": sha256_file(state_path),
+            }
+        )
+    return article_ids, provenance
+
+
 def prepare_generation_stage(config: IRDatasetConfig) -> dict[str, Any]:
     source_root = config.output.root
     generation_root = config.output.generation_root
@@ -427,7 +480,7 @@ def prepare_generation_stage(config: IRDatasetConfig) -> dict[str, Any]:
             source_fingerprint=source_fingerprint,
             passages_sha256=passages_sha256,
         )
-        expected_target_config = asdict(replace(config.target_selection, output_dir=None))
+        expected_target_config = _target_selection_artifact_config(config.target_selection)
         if targets_state.get("config") != expected_target_config:
             raise ValueError("source-bound targets config mismatch")
         if targets_state.get("upstream_sha256") != manifest_sha256:

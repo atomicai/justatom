@@ -119,6 +119,25 @@ def test_selection_uses_deterministic_flow_and_intent_balancing():
     }
 
 
+def test_selection_excludes_prior_articles_before_balancing():
+    passages = target_frame()
+    prior = select_target_slots(
+        passages,
+        TargetSelectionConfig(article_count=1, seed=42, max_flow_share=1.0),
+    )
+    prior_article_ids = set(prior["article_id"])
+
+    selected = select_target_slots(
+        passages,
+        TargetSelectionConfig(article_count=2, seed=42, max_flow_share=1.0),
+        excluded_article_ids=prior_article_ids,
+    )
+
+    assert selected.height == 4
+    assert prior_article_ids.isdisjoint(set(selected["article_id"]))
+    assert selected.group_by("article_id").len()["len"].to_list() == [2, 2]
+
+
 def test_selection_rejects_an_infeasible_primary_flow_cap():
     rows = []
     for article_index in range(10):

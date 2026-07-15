@@ -94,11 +94,56 @@ def test_checked_in_config_resolves_local_defaults():
     assert config.generation.scale_authorized is False
     assert config.generation.max_batch_attempts == 2
     assert config.target_selection.article_count == 50
+    assert config.target_selection.exclude_target_roots == ()
     assert config.preparation.max_articles == 25_000
     assert config.output.root == Path(".tmp_runs/datasets/habr-ir/local-100k-v4")
     assert config.output.generation_root == Path(".tmp_runs/datasets/habr-ir/generation-v3-pilot")
     assert config.output.pilot_generation_root == config.output.generation_root
     assert config.output.release_root == Path(".tmp_runs/datasets/habr-ir/pilot-release-v1")
+
+
+def test_target_exclusion_roots_are_normalized_from_yaml_lists(tmp_path):
+    roots = [str(tmp_path / "first"), str(tmp_path / "second")]
+
+    config = load_ir_dataset_config(
+        CONFIG_PATH,
+        overrides={"target_selection": {"exclude_target_roots": roots}},
+    )
+
+    assert config.target_selection.exclude_target_roots == tuple(roots)
+
+
+def test_excluded_target_articles_are_loaded_from_source_bound_artifacts(tmp_path):
+    prior_root = tmp_path / "prior"
+    prior_root.mkdir()
+    frame = pl.DataFrame({"article_id": ["a1", "a1", "a2"], "passage_id": ["p1", "p2", "p3"]})
+    ir_dataset_module.write_bound_parquet_artifact(
+        frame,
+        prior_root / "targets.parquet",
+        prior_root / "targets_state.json",
+        artifact_kind="targets",
+        source_corpus_fingerprint="source-v1",
+        passages_sha256="passages-v1",
+        config={"article_count": 2},
+        upstream_sha256="manifest-v1",
+    )
+
+    article_ids, provenance = ir_dataset_module._load_excluded_target_articles(
+        (str(prior_root),),
+        source_fingerprint="source-v1",
+        passages_sha256="passages-v1",
+        manifest_sha256="manifest-v1",
+    )
+
+    assert article_ids == {"a1", "a2"}
+    assert provenance == [
+        {
+            "root": str(prior_root),
+            "article_count": 2,
+            "targets_sha256": ir_dataset_module.sha256_file(prior_root / "targets.parquet"),
+            "targets_state_sha256": ir_dataset_module.sha256_file(prior_root / "targets_state.json"),
+        }
+    ]
 
 
 def test_dotted_cli_overrides_are_typed(tmp_path):

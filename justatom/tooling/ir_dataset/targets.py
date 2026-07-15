@@ -8,7 +8,7 @@ import re
 import unicodedata
 import uuid
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -36,12 +36,22 @@ class TargetSelectionConfig:
     seed: int = 42
     output_dir: str | Path | None = None
     max_flow_share: float = 0.30
+    exclude_target_roots: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.article_count <= 0:
             raise ValueError("target selection article_count must be > 0")
         if not 0 < self.max_flow_share <= 1:
             raise ValueError("target selection max_flow_share must be within (0, 1]")
+        roots = self.exclude_target_roots
+        if isinstance(roots, (str, Path)):
+            raise ValueError("target selection exclude_target_roots must be a sequence of artifact roots")
+        normalized = tuple(str(Path(root)) for root in roots)
+        if any(not root for root in normalized):
+            raise ValueError("target selection exclude_target_roots must not contain empty paths")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("target selection exclude_target_roots must be unique")
+        object.__setattr__(self, "exclude_target_roots", normalized)
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,7 +355,12 @@ def _has_structural_sibling(passage: Mapping[str, Any], article_passages: Sequen
     return False
 
 
-def select_target_slots(passages: pl.DataFrame, config: TargetSelectionConfig | None = None) -> pl.DataFrame:
+def select_target_slots(
+    passages: pl.DataFrame,
+    config: TargetSelectionConfig | None = None,
+    *,
+    excluded_article_ids: Collection[str] = (),
+) -> pl.DataFrame:
     if not isinstance(passages, pl.DataFrame):
         raise TypeError("passages must be a polars DataFrame")
     active_config = config or TargetSelectionConfig()
@@ -354,7 +369,8 @@ def select_target_slots(passages: pl.DataFrame, config: TargetSelectionConfig | 
     if missing_columns:
         raise ValueError(f"passages is missing required columns: {', '.join(missing_columns)}")
 
-    passage_rows = passages.to_dicts()
+    excluded = {str(article_id) for article_id in excluded_article_ids}
+    passage_rows = [row for row in passages.to_dicts() if str(row["article_id"]) not in excluded]
     content_counts = Counter(_normalized_content(row["content"]) for row in passage_rows)
     full_article_passages: dict[str, list[dict[str, Any]]] = {}
     for row in passage_rows:
