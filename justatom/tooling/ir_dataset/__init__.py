@@ -23,6 +23,13 @@ from justatom.tooling.ir_dataset.targets import (
     score_passage_quality,
     select_target_slots,
 )
+from justatom.tooling.ir_dataset.release import (
+    GenerationBinding,
+    ReleaseFrames,
+    materialize_release_frames,
+    stable_pair_id,
+    stable_query_id,
+)
 
 __all__ = [
     "BM25Index",
@@ -33,6 +40,7 @@ __all__ = [
     "E5TextEncoder",
     "HABR_SOURCE_COLUMNS",
     "HabrSource",
+    "GenerationBinding",
     "MarkdownPassageChunker",
     "NeighborBuildConfig",
     "NeighborCandidate",
@@ -40,6 +48,7 @@ __all__ = [
     "Passage",
     "PrepareConfig",
     "PrepareSummary",
+    "ReleaseFrames",
     "PassageQuality",
     "SearchHit",
     "StructuralUnit",
@@ -50,5 +59,8 @@ __all__ = [
     "TargetSelectionConfig",
     "build_neighbor_artifact",
     "merge_neighbors",
+    "materialize_release_frames",
     "serialize_passage",
+    "stable_pair_id",
+    "stable_query_id",
 ]
