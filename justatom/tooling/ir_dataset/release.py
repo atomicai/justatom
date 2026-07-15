@@ -798,7 +798,7 @@ def finalize_release(
         _write_hf_parquet(frames.corpus, corpus_path)
         review_path = temporary / "audit/pilot-review.csv"
         review_path.parent.mkdir(parents=True, exist_ok=True)
-        _csv_safe_frame(review).write_csv(review_path)
+        _csv_safe_frame(review).write_csv(review_path, include_bom=True)
         _fsync_file(review_path)
         _write_text(temporary / "README.md", _dataset_card())
 

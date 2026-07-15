@@ -398,6 +398,7 @@ def test_finalize_writes_hf_layout_manifest_and_review_sheet(tmp_path):
     assert (release_root / "data/corpus-100k/corpus.parquet").exists()
     assert (release_root / "data/qrels/train.parquet").exists()
     assert (release_root / "audit/pilot-review.csv").exists()
+    assert (release_root / "audit/pilot-review.csv").read_bytes().startswith(b"\xef\xbb\xbf")
     assert (release_root / "README.md").exists()
     manifest = json.loads((release_root / "data/manifests/release-manifest.json").read_text())
     assert manifest["git"] == {"sha": "test-sha", "dirty": False}
