@@ -6,6 +6,8 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from justatom.tooling.ir_dataset.artifacts import sha256_file, write_bound_parquet_artifact
 from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION
@@ -346,6 +348,22 @@ def test_finalize_writes_hf_layout_manifest_and_review_sheet(tmp_path):
         "reviewer",
         "notes",
     ]
+
+
+def test_finalize_writes_hugging_face_compatible_arrow_types(tmp_path):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+
+    finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+
+    pair_schema = pq.read_schema(release_root / "data/pairs/train.parquet")
+    corpus_schema = pq.read_schema(release_root / "data/corpus-100k/corpus.parquet")
+    assert pair_schema.field("query").type == pa.string()
+    assert pair_schema.field("topic_flows").type == pa.list_(pa.string())
+    assert pair_schema.field("topic_hubs").type == pa.list_(pa.string())
+    assert pair_schema.field("tags").type == pa.list_(pa.string())
+    assert corpus_schema.field("flows").type == pa.list_(pa.string())
+    assert corpus_schema.field("hubs").type == pa.list_(pa.string())
+    assert corpus_schema.field("tags").type == pa.list_(pa.string())
 
 
 def test_finalize_exactly_reuses_matching_release(tmp_path):

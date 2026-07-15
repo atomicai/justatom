@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from justatom.tooling.ir_dataset.artifacts import sha256_file, validate_bound_parquet_artifact
 from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION
@@ -558,6 +560,40 @@ def _fsync_file(path: Path) -> None:
         os.fsync(stream.fileno())
 
 
+def _hf_arrow_type(dtype: pa.DataType) -> pa.DataType:
+    if pa.types.is_large_string(dtype):
+        return pa.string()
+    if pa.types.is_large_binary(dtype):
+        return pa.binary()
+    if pa.types.is_large_list(dtype) or pa.types.is_list(dtype):
+        return pa.list_(_hf_arrow_type(dtype.value_type))
+    if pa.types.is_struct(dtype):
+        return pa.struct(
+            [pa.field(field.name, _hf_arrow_type(field.type), nullable=field.nullable, metadata=field.metadata) for field in dtype]
+        )
+    return dtype
+
+
+def _write_hf_parquet(frame: pl.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    table = frame.to_arrow()
+    schema = pa.schema(
+        [
+            pa.field(field.name, _hf_arrow_type(field.type), nullable=field.nullable, metadata=field.metadata)
+            for field in table.schema
+        ],
+        metadata=table.schema.metadata,
+    )
+    pq.write_table(
+        table.cast(schema),
+        path,
+        compression="zstd",
+        row_group_size=50_000,
+        write_page_index=True,
+    )
+    _fsync_file(path)
+
+
 def _dataset_card() -> str:
     return """---
 configs:
@@ -670,9 +706,7 @@ def finalize_release(
     try:
         for split in ("train", "validation", "test"):
             pair_path = temporary / "data/pairs" / f"{split}.parquet"
-            pair_path.parent.mkdir(parents=True, exist_ok=True)
-            frames.pairs.filter(pl.col("split") == split).write_parquet(pair_path, compression="zstd")
-            _fsync_file(pair_path)
+            _write_hf_parquet(frames.pairs.filter(pl.col("split") == split), pair_path)
             split_qrels = (
                 frames.qrels.join(
                     frames.pairs.filter(pl.col("split") == split).select("query_id"),
@@ -683,13 +717,9 @@ def finalize_release(
                 .sort("query_id")
             )
             qrel_path = temporary / "data/qrels" / f"{split}.parquet"
-            qrel_path.parent.mkdir(parents=True, exist_ok=True)
-            split_qrels.write_parquet(qrel_path, compression="zstd")
-            _fsync_file(qrel_path)
+            _write_hf_parquet(split_qrels, qrel_path)
         corpus_path = temporary / "data/corpus-100k/corpus.parquet"
-        corpus_path.parent.mkdir(parents=True, exist_ok=True)
-        frames.corpus.write_parquet(corpus_path, compression="zstd")
-        _fsync_file(corpus_path)
+        _write_hf_parquet(frames.corpus, corpus_path)
         review_path = temporary / "audit/pilot-review.csv"
         review_path.parent.mkdir(parents=True, exist_ok=True)
         review.write_csv(review_path)
