@@ -13,6 +13,7 @@ from justatom.api import ir_dataset as ir_dataset_module
 from justatom.api.ir_dataset import (
     _embed_fingerprint,
     embed_stage,
+    finalize_stage,
     inspect_stage,
     load_ir_dataset_config,
     parse_cli,
@@ -97,6 +98,7 @@ def test_checked_in_config_resolves_local_defaults():
     assert config.output.root == Path(".tmp_runs/datasets/habr-ir/local-100k-v4")
     assert config.output.generation_root == Path(".tmp_runs/datasets/habr-ir/generation-v3-pilot")
     assert config.output.pilot_generation_root == config.output.generation_root
+    assert config.output.release_root == Path(".tmp_runs/datasets/habr-ir/pilot-release-v1")
 
 
 def test_dotted_cli_overrides_are_typed(tmp_path):
@@ -133,6 +135,47 @@ def test_cli_accepts_resumable_generation_stages(tmp_path):
 
     assert [item.stage for item in parsed] == list(stages)
     assert all(item.config.generation.model == "gpt-5.6-terra" for item in parsed)
+
+
+def test_cli_accepts_local_finalize_stage():
+    parsed = parse_cli(["--config", str(CONFIG_PATH), "finalize"])
+
+    assert parsed.stage == "finalize"
+
+
+def test_finalize_stage_passes_bound_roots_and_git_identity(monkeypatch, tmp_path):
+    config = load_ir_dataset_config(
+        CONFIG_PATH,
+        overrides={
+            "output": {
+                "root": str(tmp_path / "source"),
+                "generation_root": str(tmp_path / "generation"),
+                "release_root": str(tmp_path / "release"),
+            }
+        },
+    )
+    captured = {}
+    monkeypatch.setattr(ir_dataset_module, "_git_identity", lambda: ("abc123", False))
+    monkeypatch.setattr(
+        ir_dataset_module,
+        "finalize_release",
+        lambda source_root, generation_root, release_root, **kwargs: captured.update(
+            source_root=source_root,
+            generation_root=generation_root,
+            release_root=release_root,
+            **kwargs,
+        ),
+    )
+
+    finalize_stage(config)
+
+    assert captured == {
+        "source_root": tmp_path / "source",
+        "generation_root": tmp_path / "generation",
+        "release_root": tmp_path / "release",
+        "git_sha": "abc123",
+        "git_dirty": False,
+    }
 
 
 def test_source_corpus_authorization_checks_the_actual_passage_sha256(tmp_path):

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import uuid
 from dataclasses import asdict, dataclass, fields, replace
@@ -41,6 +42,7 @@ from justatom.tooling.ir_dataset.neighbors import (
     build_neighbor_artifact,
     merge_neighbors,
 )
+from justatom.tooling.ir_dataset.release import ReleaseSummary, finalize_release
 from justatom.tooling.ir_dataset.source import HabrSource, promote_hf_token_env
 from justatom.tooling.ir_dataset.sparse import BM25_INDEX_VERSION, BM25Index, TECHNICAL_TOKEN_PATTERN
 from justatom.tooling.ir_dataset.targets import (
@@ -91,6 +93,7 @@ class OutputConfig:
     root: Path = Path(".tmp_runs/datasets/habr-ir/local-100k")
     generation_root: Path = Path(".tmp_runs/datasets/habr-ir/generation-v1")
     pilot_generation_root: Path = Path(".tmp_runs/datasets/habr-ir/generation-v1")
+    release_root: Path = Path(".tmp_runs/datasets/habr-ir/pilot-release-v1")
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +153,8 @@ def load_ir_dataset_config(
         output_values["generation_root"] = Path(output_values["generation_root"])
     if output_values.get("pilot_generation_root") is not None:
         output_values["pilot_generation_root"] = Path(output_values["pilot_generation_root"])
+    if output_values.get("release_root") is not None:
+        output_values["release_root"] = Path(output_values["release_root"])
     return IRDatasetConfig(
         source=_build_dataclass(SourceConfig, source_values),
         chunking=_build_dataclass(ChunkingConfig, raw.get("chunking")),
@@ -175,6 +180,7 @@ def parse_cli(argv: list[str] | None = None) -> ParsedCLI:
         "generation-status",
         "retry-generation",
         "collect-generation",
+        "finalize",
     )
     stage_positions = [(index, token) for index, token in enumerate(raw_argv) if token in stages]
     if len(stage_positions) != 1:
@@ -513,6 +519,35 @@ def _openai_client_from_env() -> Any:
     return OpenAI(**options)
 
 
+def _git_identity() -> tuple[str, bool]:
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    return sha, dirty
+
+
+def finalize_stage(config: IRDatasetConfig) -> ReleaseSummary:
+    git_sha, git_dirty = _git_identity()
+    return finalize_release(
+        config.output.root,
+        config.output.generation_root,
+        config.output.release_root,
+        git_sha=git_sha,
+        git_dirty=git_dirty,
+    )
+
+
 def inspect_stage(
     config: IRDatasetConfig,
     *,
@@ -630,10 +665,14 @@ def main(argv: list[str] | None = None) -> int:
             scale_authorized=parsed.config.generation.scale_authorized,
             pilot_generation_root=parsed.config.output.pilot_generation_root,
         )
-    else:
+    elif parsed.stage == "collect-generation":
         result = collect_completed_shards(
             _generation_state(parsed.config), _openai_client_from_env(), parsed.config.output.generation_root
         )
+    elif parsed.stage == "finalize":
+        result = finalize_stage(parsed.config)
+    else:
+        raise AssertionError(f"Unhandled IR dataset stage: {parsed.stage}")
     print(json.dumps(_summary_payload(result), ensure_ascii=False, indent=2, default=str))
     return 0
 

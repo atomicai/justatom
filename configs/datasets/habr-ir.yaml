@@ -52,3 +52,4 @@ output:
   root: .tmp_runs/datasets/habr-ir/local-100k-v4
   generation_root: .tmp_runs/datasets/habr-ir/generation-v3-pilot
   pilot_generation_root: .tmp_runs/datasets/habr-ir/generation-v3-pilot
+  release_root: .tmp_runs/datasets/habr-ir/pilot-release-v1
