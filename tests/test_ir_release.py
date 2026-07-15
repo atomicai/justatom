@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-import polars as pl
+import hashlib
+import json
+from pathlib import Path
 
+import polars as pl
+import pytest
+
+from justatom.tooling.ir_dataset.artifacts import sha256_file, write_bound_parquet_artifact
+from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION
 from justatom.tooling.ir_dataset.release import (
     GenerationBinding,
+    finalize_release,
     materialize_release_frames,
     stable_pair_id,
     stable_query_id,
@@ -141,3 +149,216 @@ def test_materialization_keeps_only_accepted_rows_and_full_positive():
     }
     assert result.corpus.filter(pl.col("passage_id") == "p1")["is_positive"].item() is True
     assert result.corpus.filter(pl.col("passage_id") == "p2")["is_positive"].item() is False
+
+
+def _jsonl(rows: list[dict[str, object]]) -> bytes:
+    return b"".join((json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode() for row in rows)
+
+
+def write_release_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
+    source_root = tmp_path / "source"
+    generation_root = tmp_path / "generation"
+    release_root = tmp_path / "release"
+    source_root.mkdir()
+    generation_root.mkdir()
+    (generation_root / "generation_requests").mkdir()
+
+    source_frame = corpus()
+    passages_path = source_root / "passages.parquet"
+    source_frame.write_parquet(passages_path)
+    passages_sha256 = sha256_file(passages_path)
+    source_fingerprint = "source-fingerprint-v4"
+    manifest_path = source_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "fingerprint": source_fingerprint,
+                "chunker_version": CHUNKER_VERSION,
+                "passages_sha256": passages_sha256,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    target_path = generation_root / "targets.parquet"
+    target_state_path = generation_root / "targets_state.json"
+    write_bound_parquet_artifact(
+        targets(),
+        target_path,
+        target_state_path,
+        artifact_kind="targets",
+        source_corpus_fingerprint=source_fingerprint,
+        passages_sha256=passages_sha256,
+        config={"fixture": 1},
+        upstream_sha256=sha256_file(manifest_path),
+    )
+    context_frame = pl.DataFrame(
+        [
+            {
+                "target_passage_id": target_id,
+                "candidate_passage_id": candidate_id,
+                "candidate_serialized_passage": candidate_text,
+                "context_index": context_index,
+            }
+            for target_id, candidate_id, candidate_text in (
+                ("p1", "p2", source_frame.row(1, named=True)["serialized_passage"]),
+                ("p2", "p1", source_frame.row(0, named=True)["serialized_passage"]),
+            )
+            for context_index in range(3)
+        ]
+    )
+    context_path = generation_root / "generation_context.parquet"
+    context_state_path = generation_root / "generation_context_state.json"
+    write_bound_parquet_artifact(
+        context_frame,
+        context_path,
+        context_state_path,
+        artifact_kind="generation_context",
+        source_corpus_fingerprint=source_fingerprint,
+        passages_sha256=passages_sha256,
+        config={"fixture": 1},
+        upstream_sha256=sha256_file(target_path),
+    )
+
+    request_rows = []
+    for custom_id, binding in bindings().items():
+        request_rows.append(
+            {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/responses",
+                "body": {
+                    "model": "test-model",
+                    "metadata": {
+                        "article_id": binding.article_id,
+                        "generation_attempt": str(binding.generation_attempt),
+                        "passage_id": binding.passage_id,
+                        "prompt_hash": binding.prompt_hash,
+                        "source_hash": binding.source_hash,
+                    },
+                },
+            }
+        )
+    request_bytes = _jsonl(request_rows)
+    request_path = generation_root / "generation_requests" / "generation-00000.jsonl"
+    request_path.write_bytes(request_bytes)
+
+    collected_bytes = _jsonl(records())
+    collected_path = generation_root / "generation_collected.jsonl"
+    collected_path.write_bytes(collected_bytes)
+    diagnostics_path = generation_root / "generation_diagnostics.jsonl"
+    diagnostics_path.write_bytes(b"")
+    metrics_path = generation_root / "pilot_metrics.json"
+    metrics_path.write_text(json.dumps({"request_count": 2}, sort_keys=True), encoding="utf-8")
+
+    state = {
+        "version": 3,
+        "source_corpus_fingerprint": source_fingerprint,
+        "source_passages_sha256": passages_sha256,
+        "generation_fingerprint": "generation-fingerprint",
+        "generation_config": {"model": "test-model"},
+        "targets": {
+            "path": target_path.name,
+            "sha256": sha256_file(target_path),
+            "state_path": target_state_path.name,
+            "state_sha256": sha256_file(target_state_path),
+        },
+        "generation_context": {
+            "path": context_path.name,
+            "sha256": sha256_file(context_path),
+            "state_path": context_state_path.name,
+            "state_sha256": sha256_file(context_state_path),
+        },
+        "shards": [
+            {
+                "attempt": 1,
+                "batch_id": "batch-1",
+                "custom_ids": list(bindings()),
+                "request_path": request_path.relative_to(generation_root).as_posix(),
+                "request_sha256": hashlib.sha256(request_bytes).hexdigest(),
+                "request_count": 2,
+                "status": "completed",
+            }
+        ],
+        "counts": {"prepared": 2, "accepted": 1, "rejected": 1, "diagnostics": 0},
+        "collected_path": collected_path.name,
+        "collected_sha256": hashlib.sha256(collected_bytes).hexdigest(),
+        "diagnostics_path": diagnostics_path.name,
+        "diagnostics_sha256": hashlib.sha256(b"").hexdigest(),
+        "pilot_metrics_path": metrics_path.name,
+        "pilot_metrics_sha256": sha256_file(metrics_path),
+        "validator_version": 1,
+        "finalizer_version": 1,
+    }
+    (generation_root / "generation_state.json").write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return source_root, generation_root, release_root
+
+
+def test_finalize_rejects_tampered_collected_output(tmp_path):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+    with (generation_root / "generation_collected.jsonl").open("ab") as stream:
+        stream.write(b"{}\n")
+
+    with pytest.raises(ValueError, match="collected artifact checksum mismatch"):
+        finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+
+
+def test_finalize_rejects_missing_or_ambiguous_request_binding(tmp_path):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+    request_path = next((generation_root / "generation_requests").glob("*.jsonl"))
+    request_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="request shard checksum mismatch"):
+        finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+
+
+def test_finalize_writes_hf_layout_manifest_and_review_sheet(tmp_path):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+
+    result = finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+
+    assert result.pair_count == 1
+    assert result.review_count == 2
+    assert (release_root / "data/pairs/train.parquet").exists()
+    assert (release_root / "data/pairs/validation.parquet").exists()
+    assert (release_root / "data/pairs/test.parquet").exists()
+    assert (release_root / "data/corpus-100k/corpus.parquet").exists()
+    assert (release_root / "data/qrels/train.parquet").exists()
+    assert (release_root / "audit/pilot-review.csv").exists()
+    assert (release_root / "README.md").exists()
+    manifest = json.loads((release_root / "data/manifests/release-manifest.json").read_text())
+    assert manifest["git"] == {"sha": "test-sha", "dirty": False}
+    assert manifest["counts"]["pairs"] == 1
+    assert manifest["counts"]["audit_rows"] == 2
+    assert all(item["sha256"] for item in manifest["artifacts"])
+    review = pl.read_csv(release_root / "audit/pilot-review.csv")
+    assert review.columns[-10:] == [
+        "human_target_answers_query",
+        "human_evidence_supports_answer",
+        "human_self_contained",
+        "human_single_interpretation",
+        "human_no_competitor_answers",
+        "human_natural_not_copied",
+        "human_correct_intent",
+        "human_accept",
+        "reviewer",
+        "notes",
+    ]
+
+
+def test_finalize_exactly_reuses_matching_release(tmp_path):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+    first = finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+    second = finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+
+    assert first.reused is False
+    assert second.reused is True
+    assert first.root == second.root
+    assert first.manifest_path == second.manifest_path
+    assert first.pair_count == second.pair_count
+    assert first.corpus_count == second.corpus_count
+    assert first.qrel_count == second.qrel_count
+    assert first.review_count == second.review_count
+    assert first.fingerprint == second.fingerprint

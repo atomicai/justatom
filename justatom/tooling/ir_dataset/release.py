@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import shutil
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import polars as pl
+
+from justatom.tooling.ir_dataset.artifacts import sha256_file, validate_bound_parquet_artifact
+from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION
 
 
 PAIR_SCHEMA = {
@@ -58,6 +66,19 @@ CORPUS_COLUMNS = (
 
 SPLIT_NAMES = {"train": "train", "dev": "validation", "test": "test"}
 
+AUDIT_HUMAN_COLUMNS = (
+    "human_target_answers_query",
+    "human_evidence_supports_answer",
+    "human_self_contained",
+    "human_single_interpretation",
+    "human_no_competitor_answers",
+    "human_natural_not_copied",
+    "human_correct_intent",
+    "human_accept",
+    "reviewer",
+    "notes",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class GenerationBinding:
@@ -75,6 +96,18 @@ class ReleaseFrames:
     pairs: pl.DataFrame
     corpus: pl.DataFrame
     qrels: pl.DataFrame
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseSummary:
+    root: Path
+    manifest_path: Path
+    pair_count: int
+    corpus_count: int
+    qrel_count: int
+    review_count: int
+    fingerprint: str
+    reused: bool
 
 
 def stable_query_id(custom_id: str) -> str:
@@ -262,9 +295,460 @@ def materialize_release_frames(
     return ReleaseFrames(pairs=pairs, corpus=release_corpus, qrels=qrels)
 
 
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _canonical_hash(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _read_json(path: Path, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise FileNotFoundError(f"{label} does not exist: {path}") from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid {label}: {path}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"invalid {label}: expected an object")
+    return value
+
+
+def _bound_path(root: Path, relative: Any, label: str) -> Path:
+    if not isinstance(relative, str) or not relative:
+        raise ValueError(f"{label} path is missing")
+    root_resolved = root.resolve()
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError:
+        raise ValueError(f"{label} path escapes its artifact root") from None
+    return candidate
+
+
+def _require_checksum(path: Path, expected: Any, label: str) -> None:
+    if not path.exists() or not isinstance(expected, str) or sha256_file(path) != expected:
+        raise ValueError(f"{label} checksum mismatch")
+
+
+def _read_jsonl(path: Path, label: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"{label} does not exist: {path}") from None
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid {label} JSON on line {line_number}") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"invalid {label} row on line {line_number}")
+        rows.append(row)
+    return rows
+
+
+def _validate_source(source_root: Path) -> tuple[dict[str, Any], Path]:
+    manifest = _read_json(source_root / "manifest.json", "source corpus manifest")
+    fingerprint = manifest.get("fingerprint")
+    passages_sha256 = manifest.get("passages_sha256")
+    if not isinstance(fingerprint, str) or not fingerprint:
+        raise ValueError("source corpus manifest fingerprint is missing")
+    if manifest.get("chunker_version") != CHUNKER_VERSION:
+        raise ValueError("source corpus manifest does not match the current chunker contract")
+    passages_path = source_root / "passages.parquet"
+    _require_checksum(passages_path, passages_sha256, "source passages artifact")
+    return manifest, passages_path
+
+
+def _validate_generation_artifact(
+    generation_root: Path,
+    descriptor: Any,
+    *,
+    artifact_kind: str,
+    source_fingerprint: str,
+    passages_sha256: str,
+) -> Path:
+    if not isinstance(descriptor, Mapping):
+        raise ValueError(f"generation state is missing {artifact_kind} descriptor")
+    artifact_path = _bound_path(generation_root, descriptor.get("path"), artifact_kind)
+    state_path = _bound_path(generation_root, descriptor.get("state_path"), f"{artifact_kind} state")
+    _require_checksum(artifact_path, descriptor.get("sha256"), f"{artifact_kind} artifact")
+    _require_checksum(state_path, descriptor.get("state_sha256"), f"{artifact_kind} state artifact")
+    bound_state = validate_bound_parquet_artifact(artifact_path, state_path, artifact_kind=artifact_kind)
+    if bound_state.get("source_corpus_fingerprint") != source_fingerprint:
+        raise ValueError(f"{artifact_kind} source corpus fingerprint mismatch")
+    if bound_state.get("passages_sha256") != passages_sha256:
+        raise ValueError(f"{artifact_kind} source passages checksum mismatch")
+    return artifact_path
+
+
+def _request_bindings(
+    state: Mapping[str, Any], generation_root: Path, generator_model: str
+) -> tuple[list[str], dict[str, GenerationBinding]]:
+    shards = state.get("shards")
+    if not isinstance(shards, list) or not shards:
+        raise ValueError("generation state has no request shards")
+    ordered_ids: list[str] = []
+    bindings: dict[str, GenerationBinding] = {}
+    for shard_index, shard in enumerate(shards):
+        if not isinstance(shard, Mapping):
+            raise ValueError(f"invalid generation shard at index {shard_index}")
+        request_path = _bound_path(generation_root, shard.get("request_path"), "request shard")
+        _require_checksum(request_path, shard.get("request_sha256"), "request shard")
+        expected_ids = shard.get("custom_ids")
+        if not isinstance(expected_ids, list) or not all(isinstance(item, str) and item for item in expected_ids):
+            raise ValueError(f"request shard {shard_index} has invalid custom IDs")
+        request_rows = _read_jsonl(request_path, "request shard")
+        if len(request_rows) != int(shard.get("request_count", -1)) or len(request_rows) != len(expected_ids):
+            raise ValueError(f"request shard {shard_index} row count mismatch")
+        actual_ids: list[str] = []
+        for request in request_rows:
+            custom_id = request.get("custom_id")
+            body = request.get("body")
+            metadata = body.get("metadata") if isinstance(body, Mapping) else None
+            if not isinstance(custom_id, str) or not isinstance(body, Mapping) or not isinstance(metadata, Mapping):
+                raise ValueError(f"request shard {shard_index} contains an invalid request binding")
+            if body.get("model") != generator_model:
+                raise ValueError(f"request {custom_id} generator model mismatch")
+            if custom_id in bindings:
+                raise ValueError(f"duplicate generation request custom_id: {custom_id}")
+            try:
+                attempt = int(metadata["generation_attempt"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"request {custom_id} has invalid generation attempt") from exc
+            if attempt != int(shard.get("attempt", -1)):
+                raise ValueError(f"request {custom_id} generation attempt mismatch")
+            values = {key: metadata.get(key) for key in ("passage_id", "article_id", "source_hash", "prompt_hash")}
+            if not all(isinstance(value, str) and value for value in values.values()):
+                raise ValueError(f"request {custom_id} has incomplete immutable metadata")
+            batch_id = shard.get("batch_id")
+            if not isinstance(batch_id, str) or not batch_id:
+                raise ValueError(f"request {custom_id} has no completed batch binding")
+            bindings[custom_id] = GenerationBinding(
+                custom_id=custom_id,
+                passage_id=values["passage_id"],
+                article_id=values["article_id"],
+                source_hash=values["source_hash"],
+                prompt_hash=values["prompt_hash"],
+                generation_attempt=attempt,
+                batch_id=batch_id,
+            )
+            actual_ids.append(custom_id)
+            ordered_ids.append(custom_id)
+        if actual_ids != expected_ids:
+            raise ValueError(f"request shard {shard_index} custom ID order mismatch")
+    return ordered_ids, bindings
+
+
+def _validate_generation_inputs(
+    source_manifest: Mapping[str, Any], generation_root: Path
+) -> tuple[dict[str, Any], list[dict[str, Any]], pl.DataFrame, pl.DataFrame, list[str], dict[str, GenerationBinding]]:
+    state = _read_json(generation_root / "generation_state.json", "generation state")
+    source_fingerprint = str(source_manifest["fingerprint"])
+    passages_sha256 = str(source_manifest["passages_sha256"])
+    if state.get("version") != 3:
+        raise ValueError("release finalization requires generation state version 3")
+    if state.get("source_corpus_fingerprint") != source_fingerprint:
+        raise ValueError("generation source corpus fingerprint mismatch")
+    if state.get("source_passages_sha256") != passages_sha256:
+        raise ValueError("generation source passages checksum mismatch")
+    targets_path = _validate_generation_artifact(
+        generation_root,
+        state.get("targets"),
+        artifact_kind="targets",
+        source_fingerprint=source_fingerprint,
+        passages_sha256=passages_sha256,
+    )
+    context_path = _validate_generation_artifact(
+        generation_root,
+        state.get("generation_context"),
+        artifact_kind="generation_context",
+        source_fingerprint=source_fingerprint,
+        passages_sha256=passages_sha256,
+    )
+    for path_key, sha_key, label in (
+        ("collected_path", "collected_sha256", "collected artifact"),
+        ("diagnostics_path", "diagnostics_sha256", "diagnostics artifact"),
+        ("pilot_metrics_path", "pilot_metrics_sha256", "pilot metrics artifact"),
+    ):
+        artifact_path = _bound_path(generation_root, state.get(path_key), label)
+        _require_checksum(artifact_path, state.get(sha_key), label)
+    generation_config = state.get("generation_config")
+    generator_model = generation_config.get("model") if isinstance(generation_config, Mapping) else None
+    if not isinstance(generator_model, str) or not generator_model:
+        raise ValueError("generation state has no generator model")
+    ordered_ids, bindings = _request_bindings(state, generation_root, generator_model)
+    collected_path = _bound_path(generation_root, state["collected_path"], "collected artifact")
+    records = _read_jsonl(collected_path, "collected artifact")
+    counts = state.get("counts")
+    if not isinstance(counts, Mapping) or int(counts.get("prepared", -1)) != len(records):
+        raise ValueError("generation collected count does not match state")
+    accepted = sum(record.get("status") == "accepted" for record in records)
+    rejected = sum(record.get("status") == "rejected" for record in records)
+    if accepted != int(counts.get("accepted", -1)) or rejected != int(counts.get("rejected", -1)):
+        raise ValueError("generation terminal status counts do not match state")
+    return state, records, pl.read_parquet(targets_path), pl.read_parquet(context_path), ordered_ids, bindings
+
+
+def _audit_frame(
+    records: Sequence[Mapping[str, Any]],
+    targets: pl.DataFrame,
+    context: pl.DataFrame,
+    ordered_ids: Sequence[str],
+    bindings: Mapping[str, GenerationBinding],
+) -> pl.DataFrame:
+    target_rows = _unique_rows(targets, "passage_id", "targets")
+    record_rows = {str(record["custom_id"]): record for record in records}
+    contexts: dict[str, list[dict[str, Any]]] = {}
+    _required_columns(
+        context,
+        ("target_passage_id", "candidate_passage_id", "candidate_serialized_passage", "context_index"),
+        "generation context",
+    )
+    for row in context.sort(["target_passage_id", "context_index"]).iter_rows(named=True):
+        contexts.setdefault(str(row["target_passage_id"]), []).append(row)
+    rows: list[dict[str, Any]] = []
+    for custom_id in ordered_ids:
+        binding = bindings[custom_id]
+        target = target_rows[binding.passage_id]
+        record = record_rows[custom_id]
+        output = record.get("output") if isinstance(record.get("output"), Mapping) else {}
+        candidates = contexts.get(binding.passage_id, [])
+        if len(candidates) < 3:
+            raise ValueError(f"audit target {binding.passage_id} has fewer than three competitors")
+        row = {
+            "generation_custom_id": custom_id,
+            "automatic_status": str(record.get("status") or ""),
+            "automatic_reason_codes": _canonical_json(record.get("reason_codes") or []),
+            "requested_intent": str(output.get("requested_intent") or target.get("requested_intent") or ""),
+            "actual_intent": str(output.get("actual_intent") or ""),
+            "query": str(output.get("query") or ""),
+            "answer": str(output.get("answer") or ""),
+            "evidence": str(output.get("evidence") or ""),
+            "positive_passage_id": binding.passage_id,
+            "article_id": binding.article_id,
+            "split": SPLIT_NAMES[str(target["split"])],
+            "title": str(target.get("title") or ""),
+            "section": str(target.get("section") or ""),
+            "url": str(target.get("url") or ""),
+            "positive_passage": str(target["serialized_passage"]),
+        }
+        for index, candidate in enumerate(candidates[:3], start=1):
+            row[f"competitor_{index}_passage_id"] = str(candidate["candidate_passage_id"])
+            row[f"competitor_{index}_passage"] = str(candidate["candidate_serialized_passage"])
+        row.update({column: "" for column in AUDIT_HUMAN_COLUMNS})
+        rows.append(row)
+    return pl.DataFrame(rows)
+
+
+def _write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as stream:
+        os.fsync(stream.fileno())
+
+
+def _dataset_card() -> str:
+    return """---
+configs:
+- config_name: pairs
+  data_files:
+  - split: train
+    path: data/pairs/train.parquet
+  - split: validation
+    path: data/pairs/validation.parquet
+  - split: test
+    path: data/pairs/test.parquet
+- config_name: corpus-100k
+  data_files:
+  - split: train
+    path: data/corpus-100k/corpus.parquet
+- config_name: qrels
+  data_files:
+  - split: train
+    path: data/qrels/train.parquet
+  - split: validation
+    path: data/qrels/validation.parquet
+  - split: test
+    path: data/qrels/test.parquet
+---
+
+# Habr IR
+
+Local pilot release. See the repository research record for provenance and audit status.
+"""
+
+
+def _release_fingerprint(source_manifest: Mapping[str, Any], state: Mapping[str, Any], *, git_sha: str, git_dirty: bool) -> str:
+    return _canonical_hash(
+        {
+            "version": 1,
+            "source_corpus_fingerprint": source_manifest["fingerprint"],
+            "source_passages_sha256": source_manifest["passages_sha256"],
+            "generation_fingerprint": state.get("generation_fingerprint"),
+            "targets_sha256": state["targets"]["sha256"],
+            "generation_context_sha256": state["generation_context"]["sha256"],
+            "collected_sha256": state["collected_sha256"],
+            "git": {"sha": git_sha, "dirty": bool(git_dirty)},
+            "contract": "habr-ir-release-v1",
+        }
+    )
+
+
+def _summary_from_manifest(root: Path, manifest: Mapping[str, Any], *, reused: bool) -> ReleaseSummary:
+    counts = manifest["counts"]
+    return ReleaseSummary(
+        root=root,
+        manifest_path=root / "data/manifests/release-manifest.json",
+        pair_count=int(counts["pairs"]),
+        corpus_count=int(counts["corpus"]),
+        qrel_count=int(counts["qrels"]),
+        review_count=int(counts["audit_rows"]),
+        fingerprint=str(manifest["fingerprint"]),
+        reused=reused,
+    )
+
+
+def _validate_existing_release(root: Path, fingerprint: str) -> ReleaseSummary:
+    manifest_path = root / "data/manifests/release-manifest.json"
+    manifest = _read_json(manifest_path, "release manifest")
+    if manifest.get("fingerprint") != fingerprint:
+        raise ValueError("refusing to overwrite a release with a different fingerprint")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise ValueError("release manifest artifacts are invalid")
+    for item in artifacts:
+        if not isinstance(item, Mapping):
+            raise ValueError("release manifest artifact entry is invalid")
+        path = _bound_path(root, item.get("path"), "release artifact")
+        _require_checksum(path, item.get("sha256"), "release artifact")
+    return _summary_from_manifest(root, manifest, reused=True)
+
+
+def finalize_release(
+    source_root: str | Path,
+    generation_root: str | Path,
+    release_root: str | Path,
+    *,
+    git_sha: str,
+    git_dirty: bool,
+) -> ReleaseSummary:
+    """Validate collected generation state and atomically write a local release."""
+    source = Path(source_root)
+    generation = Path(generation_root)
+    release = Path(release_root)
+    if not isinstance(git_sha, str) or not git_sha:
+        raise ValueError("git_sha must be a non-empty string")
+    source_manifest, passages_path = _validate_source(source)
+    state, records, targets, context, ordered_ids, bindings = _validate_generation_inputs(source_manifest, generation)
+    fingerprint = _release_fingerprint(source_manifest, state, git_sha=git_sha, git_dirty=git_dirty)
+    if release.exists():
+        return _validate_existing_release(release, fingerprint)
+
+    generation_config = state["generation_config"]
+    frames = materialize_release_frames(
+        records=records,
+        targets=targets,
+        corpus=pl.read_parquet(passages_path),
+        bindings=bindings,
+        generator_model=str(generation_config["model"]),
+    )
+    review = _audit_frame(records, targets, context, ordered_ids, bindings)
+    temporary = release.with_name(f".{release.name}.{uuid.uuid4().hex}.tmp")
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    try:
+        for split in ("train", "validation", "test"):
+            pair_path = temporary / "data/pairs" / f"{split}.parquet"
+            pair_path.parent.mkdir(parents=True, exist_ok=True)
+            frames.pairs.filter(pl.col("split") == split).write_parquet(pair_path, compression="zstd")
+            _fsync_file(pair_path)
+            split_qrels = (
+                frames.qrels.join(
+                    frames.pairs.filter(pl.col("split") == split).select("query_id"),
+                    on="query_id",
+                    how="semi",
+                )
+                .select(list(QREL_SCHEMA))
+                .sort("query_id")
+            )
+            qrel_path = temporary / "data/qrels" / f"{split}.parquet"
+            qrel_path.parent.mkdir(parents=True, exist_ok=True)
+            split_qrels.write_parquet(qrel_path, compression="zstd")
+            _fsync_file(qrel_path)
+        corpus_path = temporary / "data/corpus-100k/corpus.parquet"
+        corpus_path.parent.mkdir(parents=True, exist_ok=True)
+        frames.corpus.write_parquet(corpus_path, compression="zstd")
+        _fsync_file(corpus_path)
+        review_path = temporary / "audit/pilot-review.csv"
+        review_path.parent.mkdir(parents=True, exist_ok=True)
+        review.write_csv(review_path)
+        _fsync_file(review_path)
+        _write_text(temporary / "README.md", _dataset_card())
+
+        artifacts: list[dict[str, Any]] = []
+        for path in sorted(item for item in temporary.rglob("*") if item.is_file()):
+            artifacts.append(
+                {
+                    "path": path.relative_to(temporary).as_posix(),
+                    "sha256": sha256_file(path),
+                    "bytes": path.stat().st_size,
+                }
+            )
+        split_counts = {split: frames.pairs.filter(pl.col("split") == split).height for split in ("train", "validation", "test")}
+        manifest = {
+            "version": 1,
+            "fingerprint": fingerprint,
+            "source": {
+                "corpus_fingerprint": source_manifest["fingerprint"],
+                "passages_sha256": source_manifest["passages_sha256"],
+                "chunker_version": source_manifest["chunker_version"],
+            },
+            "generation": {
+                "fingerprint": state.get("generation_fingerprint"),
+                "model": generation_config["model"],
+                "collected_sha256": state["collected_sha256"],
+            },
+            "git": {"sha": git_sha, "dirty": bool(git_dirty)},
+            "counts": {
+                "pairs": frames.pairs.height,
+                "pair_splits": split_counts,
+                "corpus": frames.corpus.height,
+                "qrels": frames.qrels.height,
+                "audit_rows": review.height,
+            },
+            "schemas": {
+                "pairs": {name: str(dtype) for name, dtype in frames.pairs.schema.items()},
+                "corpus": {name: str(dtype) for name, dtype in frames.corpus.schema.items()},
+                "qrels": {name: str(dtype) for name, dtype in frames.qrels.schema.items()},
+            },
+            "artifacts": artifacts,
+        }
+        manifest_path = temporary / "data/manifests/release-manifest.json"
+        _write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        release.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(temporary, release)
+        return _summary_from_manifest(release, manifest, reused=False)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
 __all__ = [
     "GenerationBinding",
     "ReleaseFrames",
+    "ReleaseSummary",
+    "finalize_release",
     "materialize_release_frames",
     "stable_pair_id",
     "stable_query_id",
