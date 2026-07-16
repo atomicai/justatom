@@ -256,6 +256,26 @@ def test_prepare_rejects_a_generation_run_from_an_unapproved_source_corpus(tmp_p
         prepare_generation_batches([row], context(row), GeneratorConfig(), tmp_path, source_corpus_fingerprint="different-corpus")
 
 
+def test_prompt_cache_mode_changes_generation_fingerprint(tmp_path: Path):
+    row = target()
+    auto = prepare_generation_batches(
+        [row],
+        context(row),
+        GeneratorConfig(),
+        tmp_path / "auto",
+        source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT,
+    )
+    explicit = prepare_generation_batches(
+        [row],
+        context(row),
+        GeneratorConfig(prompt_cache_mode="explicit"),
+        tmp_path / "explicit",
+        source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT,
+    )
+
+    assert auto["generation_fingerprint"] != explicit["generation_fingerprint"]
+
+
 def test_submit_is_idempotent(tmp_path: Path):
     state = prepare_generation_batches(
         [target()], context(target()), GeneratorConfig(), tmp_path, source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT

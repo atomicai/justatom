@@ -89,6 +89,23 @@ def test_request_uses_responses_input_text_low_reasoning_and_strict_schema():
     assert request["body"]["text"]["format"]["schema"] == GENERATOR_SCHEMA
 
 
+def test_explicit_prompt_cache_mode_disables_implicit_breakpoint():
+    request = build_generator_request(slot(), context(), config(prompt_cache_mode="explicit"))
+
+    assert request["body"]["prompt_cache_options"] == {"mode": "explicit"}
+
+
+def test_auto_prompt_cache_mode_preserves_api_default():
+    request = build_generator_request(slot(), context(), config())
+
+    assert "prompt_cache_options" not in request["body"]
+
+
+def test_prompt_cache_mode_rejects_unknown_values():
+    with pytest.raises(ValueError, match="prompt_cache_mode"):
+        GeneratorConfig(prompt_cache_mode="disabled")
+
+
 def test_full_checked_in_generation_mapping_is_accepted_without_relaxing_shard_limits():
     generation_mapping = yaml.safe_load(
         (Path(__file__).parents[1] / "configs" / "datasets" / "habr-ir.yaml").read_text(encoding="utf-8")

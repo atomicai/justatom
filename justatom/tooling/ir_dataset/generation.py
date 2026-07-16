@@ -122,6 +122,7 @@ _CONTENT_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 class GeneratorConfig:
     model: str = "gpt-5.6-terra"
     reasoning_effort: str = "low"
+    prompt_cache_mode: str = "auto"
     attempt: int = 1
     accepted_max_tokens: int = 504
     max_requests_per_shard: int = 1_000
@@ -134,6 +135,8 @@ class GeneratorConfig:
             raise ValueError("generation.model must be gpt-5.6-terra")
         if self.reasoning_effort != "low":
             raise ValueError("generation.reasoning_effort must be low")
+        if self.prompt_cache_mode not in {"auto", "explicit"}:
+            raise ValueError("generation.prompt_cache_mode must be one of: auto, explicit")
         if self.attempt < 1:
             raise ValueError("generation.attempt must be >= 1")
         if self.accepted_max_tokens < 1:
@@ -337,34 +340,37 @@ def build_generator_request(
     context = _require_valid_context(slot, _records(generation_context))
     user_prompt = _render_user_prompt(slot, context)
     prompt_hash = _prompt_hash(user_prompt)
+    body: dict[str, Any] = {
+        "model": active_config.model,
+        "input": [
+            {"role": "system", "content": [{"type": "input_text", "text": GENERATOR_SYSTEM_PROMPT}]},
+            {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
+        ],
+        "reasoning": {"effort": active_config.reasoning_effort},
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "habr_ir_generator_result",
+                "strict": True,
+                "schema": GENERATOR_SCHEMA,
+            }
+        },
+        "store": False,
+        "metadata": {
+            "prompt_hash": prompt_hash,
+            "article_id": str(slot["article_id"]),
+            "passage_id": str(slot["passage_id"]),
+            "source_hash": str(slot["source_hash"]),
+            "generation_attempt": str(active_config.attempt),
+        },
+    }
+    if active_config.prompt_cache_mode == "explicit":
+        body["prompt_cache_options"] = {"mode": "explicit"}
     return {
         "custom_id": _custom_id(slot, prompt_hash, active_config.attempt),
         "method": "POST",
         "url": "/v1/responses",
-        "body": {
-            "model": active_config.model,
-            "input": [
-                {"role": "system", "content": [{"type": "input_text", "text": GENERATOR_SYSTEM_PROMPT}]},
-                {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
-            ],
-            "reasoning": {"effort": active_config.reasoning_effort},
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "habr_ir_generator_result",
-                    "strict": True,
-                    "schema": GENERATOR_SCHEMA,
-                }
-            },
-            "store": False,
-            "metadata": {
-                "prompt_hash": prompt_hash,
-                "article_id": str(slot["article_id"]),
-                "passage_id": str(slot["passage_id"]),
-                "source_hash": str(slot["source_hash"]),
-                "generation_attempt": str(active_config.attempt),
-            },
-        },
+        "body": body,
     }
 
 

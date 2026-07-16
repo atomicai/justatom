@@ -196,6 +196,7 @@ def _generation_fingerprint(
         "target_context_fingerprint": target_context_fingerprint,
         "model": config.model,
         "reasoning_effort": config.reasoning_effort,
+        "prompt_cache_mode": config.prompt_cache_mode,
         "attempt": config.attempt,
         "max_requests_per_shard": config.max_requests_per_shard,
         "max_shard_bytes": config.max_shard_bytes,
