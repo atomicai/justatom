@@ -1,0 +1,51 @@
+display_name: mMARCO-ru-selected
+source: justatom/mmarco-ru-selected
+upstream_source: ir_datasets:mmarco/v2/ru
+name_or_path: justatom/mmarco-ru-selected
+labels_field: query
+content_field: positive
+split: train
+limit: null
+chunk_id_col: pair_id
+keywords_col: null
+keywords_nested_col: null
+explanation_nested_col: null
+
+train:
+  name_or_path: justatom/mmarco-ru-selected
+  split: train
+  labels_field: query
+  content_field: positive
+  chunk_id_col: pair_id
+
+eval:
+  name_or_path: justatom/mmarco-ru-selected
+  split: dev
+  labels_field: query
+  content_field: positive
+  chunk_id_col: pair_id
+
+corpus:
+  name_or_path: justatom/mmarco-ru-selected
+  split: corpus
+  content_field: content
+  chunk_id_col: doc_id
+
+manifest_path: hf://datasets/justatom/mmarco-ru-selected/manifest.json
+
+selection:
+  seed: 42
+  train_rows: 50000
+  dev_queries: 5000
+  eval_corpus_docs: 50000
+  query_min_chars: 3
+  query_max_chars: 256
+  positive_min_chars: 50
+  positive_max_chars: 1500
+  verified_docpairs_only: true
+  no_train_dev_query_overlap: true
+  notes:
+    - Training rows are positive query-passage pairs from mMARCO train qrels.
+    - Hard-negative metadata comes only from docpairs where the positive side is qrels-verified.
+    - Dev rows come from the original mMARCO dev split.
+    - The eval corpus contains selected dev positives plus deterministic hard/random negatives.

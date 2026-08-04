@@ -44,18 +44,18 @@ class FocalLoss(nn.Module):
                         vector of weights for each class (analogous to weight argument for CrossEntropyLoss)
         gamma (float): Focusing parameter :math:`\gamma >= 0`. When 0 is equal to CrossEntropyLoss
         reduction (Optional[str]): Specifies the reduction to apply to the
-         output: ‘none’ | ‘mean’ | ‘sum’.
-         ‘none’: no reduction will be applied,
-         ‘mean’: the sum of the output will be divided by the number of elements
+         output: ânoneâ | âmeanâ | âsumâ.
+         ânoneâ: no reduction will be applied,
+         âmeanâ: the sum of the output will be divided by the number of elements
                 in the output, uses geometric mean if alpha set to list of weights
-         ‘sum’: the output will be summed. Default: ‘none’.
+         âsumâ: the output will be summed. Default: ânoneâ.
         ignore_index (Optional[int]): specifies indexes that are ignored during loss calculation
          (identical to PyTorch's CrossEntropyLoss 'ignore_index' parameter). Default: -100
 
     Shape:
         - Input: :math:`(N, C)` where C = number of classes.
         - Target: :math:`(N)` where each value is
-          :math:`0 ≤ targets[i] ≤ C−1`.
+          :math:`0 â¤ targets[i] â¤ Câ1`.
     Examples:
         >>> C = 5  # num_classes
         >>> N = 1 # num_examples
@@ -185,9 +185,9 @@ class MultiMarginLoss(nn.Module):
 
 
 class DiceLoss(nn.Module):
-    r"""Criterion that computes Sørensen-Dice Coefficient loss.
+    r"""Criterion that computes SÃ¸rensen-Dice Coefficient loss.
 
-    According to [1], we compute the Sørensen-Dice Coefficient as follows:
+    According to [1], we compute the SÃ¸rensen-Dice Coefficient as follows:
 
     .. math::
 
@@ -208,7 +208,7 @@ class DiceLoss(nn.Module):
     Shape:
         - Input: :math:`(N, C)` where C = number of classes.
         - Target: :math:`(N,)` where each value is
-          :math:`0 ≤ targets[i] ≤ C−1`.
+          :math:`0 â¤ targets[i] â¤ Câ1`.
 
     Examples:
         >>> N = 5  # num_classes
@@ -300,7 +300,7 @@ class TverskyLoss(nn.Module):
     Shape:
         - Input: :math:`(N, C)` where C = number of classes.
         - Target: :math:`(N,)` where each value is
-          :math:`0 ≤ targets[i] ≤ C−1`.
+          :math:`0 â¤ targets[i] â¤ Câ1`.
 
     Examples:
         >>> N = 5  # num_classes
@@ -458,19 +458,19 @@ class ContrastiveLoss(nn.Module):
 
     Combines four well-studied stabilizers behind a single, ablation-friendly API:
 
-    1. **Learnable temperature** $\tau = \exp(\log\tau)$ — clamped to $[10^{-3}, 1.0]$.
+    1. **Learnable temperature** $\tau = \exp(\log\tau)$ â clamped to $[10^{-3}, 1.0]$.
        Initialized with the user-supplied ``temperature`` argument. Following CLIP /
        SigLIP, optimizing $\log\tau$ jointly with the encoder yields better
        calibration than a fixed schedule (Radford et al. 2021; Zhai et al. 2023).
-    2. **Decoupled InfoNCE (DCL)** — the positive logit is removed from the
+    2. **Decoupled InfoNCE (DCL)** â the positive logit is removed from the
        denominator (Yeh et al. 2022, ``arXiv:2110.06848``). This unties the
        gradient on the positive pair from negatives in the same batch and avoids
-       the negative–positive coupling pathology of vanilla InfoNCE.
-    3. **SimCSE-style dropout positives** — a second forward of the *queries*
+       the negativeâpositive coupling pathology of vanilla InfoNCE.
+    3. **SimCSE-style dropout positives** â a second forward of the *queries*
        through the encoder (with a different dropout mask) provides a cheap
        data-free positive view, which is then contrasted as an additional
        InfoNCE term (Gao, Yao & Chen 2021, ``arXiv:2104.08821``).
-    4. **Soft false-negative attractive term** — the top-$k$ off-diagonal
+    4. **Soft false-negative attractive term** â the top-$k$ off-diagonal
        candidates per query are pulled *toward* the anchor instead of being
        repelled, mimicking the soft-positive treatment from Huynh et al. 2021
        (``arXiv:2104.07939``) and GISTEmbed (Solatorio 2024, ``arXiv:2402.16829``).
@@ -585,22 +585,28 @@ class ContrastiveLoss(nn.Module):
         pos_queries: torch.Tensor,
         neg_queries: torch.Tensor | None = None,
         reduction: str | None = None,
-        tau_per_query: torch.Tensor | None = None,
         memory_negatives: torch.Tensor | None = None,
         memory_negative_mask: torch.Tensor | None = None,
+        memory_log_weights: torch.Tensor | None = None,
+        memory_margin: torch.Tensor | None = None,
+        memory_soft_beta: float | None = None,
+        memory_soft_eps: float = 1e-8,
     ) -> torch.Tensor:
         """InfoNCE / DCL on (queries, pos_queries) with in-batch negatives.
 
         If ``neg_queries`` is supplied (paired or unpaired), the legacy
         explicit-negative path is used and ``decoupled`` is ignored.
 
-        ``tau_per_query`` (shape ``[B]`` or ``[B, 1]``) overrides the scalar
-        ``self.tau`` with a per-query temperature (N3: query-conditional τ).
-        When supplied, the scaling is row-wise: ``logits / tau_q[:, None]``.
-
         ``memory_negatives`` can add a detached FIFO bank of document vectors to
         the denominator. ``memory_negative_mask`` has shape ``[B, M]`` and marks
         which bank entries are safe negatives for each current query.
+
+        ``memory_log_weights`` has shape ``[B, M]`` and adds per-entry
+        ``log(weight)`` to memory logits before masking.
+
+        ``memory_margin`` enables differentiable soft admission for memory-bank
+        negatives: bank logits receive ``log(sigmoid((pos - margin - bank) /
+        beta))`` before the hard key-collision mask is applied.
         """
         if queries.dim() != 2 or pos_queries.dim() != 2:
             raise ValueError("queries and pos_queries must be 2D")
@@ -612,6 +618,7 @@ class ContrastiveLoss(nn.Module):
         reduction = reduction or self.reduction
         q, p, n, m = self.normalize(queries, pos_queries, neg_queries, memory_negatives)
         memory_logits = None
+        memory_soft_log_weight = None
         memory_mask = None
         # NEW: NaN/Inf guard. If the bank contains corrupted embeddings
         # (e.g. a stale all-zeros row from a frozen encoder), drop the
@@ -620,9 +627,7 @@ class ContrastiveLoss(nn.Module):
             if m.dim() != 2:
                 raise ValueError(f"memory_negatives must be 2D, got shape={tuple(m.shape)}")
             if m.shape[1] != q.shape[1]:
-                raise ValueError(
-                    f"memory_negatives dim must match queries, got {tuple(m.shape)} vs query dim={q.shape[1]}"
-                )
+                raise ValueError(f"memory_negatives dim must match queries, got {tuple(m.shape)} vs query dim={q.shape[1]}")
             memory_logits = q @ self.transpose(m)
             if torch.isnan(memory_logits).any() or torch.isinf(memory_logits).any():
                 logger.warning("info_nce: memory_logits contain NaN/Inf, dropping memory bank this step")
@@ -635,15 +640,30 @@ class ContrastiveLoss(nn.Module):
                         f"got {tuple(memory_negative_mask.shape)} vs {tuple(memory_logits.shape)}"
                     )
                 memory_mask = memory_negative_mask.to(device=q.device, dtype=torch.bool)
-
-        if tau_per_query is None:
-            tau_scale = self.tau
-        else:
-            if tau_per_query.shape[0] != q.shape[0]:
-                raise ValueError(
-                    f"tau_per_query batch dim must match queries, got {tuple(tau_per_query.shape)} vs B={q.shape[0]}"
+            if memory_log_weights is not None and memory_logits is not None:
+                if memory_log_weights.shape != memory_logits.shape:
+                    raise ValueError(
+                        "memory_log_weights must have shape [batch, memory_size], "
+                        f"got {tuple(memory_log_weights.shape)} vs {tuple(memory_logits.shape)}"
+                    )
+                memory_soft_log_weight = memory_log_weights.to(device=q.device, dtype=q.dtype)
+            if memory_margin is not None and memory_logits is not None:
+                if memory_soft_beta is None or float(memory_soft_beta) <= 0.0:
+                    raise ValueError("memory_soft_beta must be > 0 when memory_margin is provided")
+                if memory_margin.shape[0] != q.shape[0]:
+                    raise ValueError(
+                        f"memory_margin batch dim must match queries, got {tuple(memory_margin.shape)} vs B={q.shape[0]}"
+                    )
+                margin = memory_margin.to(device=q.device, dtype=q.dtype).view(-1, 1)
+                positive_cos = torch.sum(q * p, dim=1, keepdim=True)
+                gate_arg = (positive_cos - margin - memory_logits) / float(memory_soft_beta)
+                gate = torch.sigmoid(gate_arg)
+                margin_log_weight = torch.log(gate.clamp_min(float(memory_soft_eps)))
+                memory_soft_log_weight = (
+                    margin_log_weight if memory_soft_log_weight is None else memory_soft_log_weight + margin_log_weight
                 )
-            tau_scale = tau_per_query.view(-1, 1).clamp(min=self._TAU_MIN, max=self._TAU_MAX)
+
+        tau_scale = self.tau
 
         if n is not None:
             positive_logit = torch.sum(q * p, dim=1, keepdim=True) / tau_scale
@@ -656,6 +676,8 @@ class ContrastiveLoss(nn.Module):
             negative_logits = negative_logits / tau_scale
             if memory_logits is not None:
                 memory_logits = memory_logits / tau_scale
+                if memory_soft_log_weight is not None:
+                    memory_logits = memory_logits + memory_soft_log_weight
                 if memory_mask is not None:
                     memory_logits = memory_logits.masked_fill(
                         ~memory_mask,
@@ -671,6 +693,8 @@ class ContrastiveLoss(nn.Module):
         sim = q @ self.transpose(p) / tau_scale  # [B, B]
         if memory_logits is not None:
             memory_logits = memory_logits / tau_scale
+            if memory_soft_log_weight is not None:
+                memory_logits = memory_logits + memory_soft_log_weight
             if memory_mask is None:
                 memory_mask = torch.ones(memory_logits.shape, dtype=torch.bool, device=memory_logits.device)
             else:

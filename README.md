@@ -148,6 +148,8 @@ model:
 Training config example:
 
 ```yaml
+method: atomic
+
 dataset:
   id: null
   name_or_path: data/train.jsonl
@@ -155,13 +157,20 @@ dataset:
   content_field: content
 
 model:
-  name: intfloat/multilingual-e5-small
+  name_or_path: intfloat/multilingual-e5-small
 
-training:
+optimization:
   batch_size: 8
-  n_epochs: 3
-  freeze_encoder: true
+  epochs: 3
+
+objective:
+  temperature: 0.05
 ```
+
+Training exposes exactly three methods: `vanilla` (InfoNCE), `atom_gate`
+(`alpha(q)` without a bank), and `atomic` (`alpha(q)` plus the adaptive memory
+bank and query-conditional margin `m(q)`). See [Training](docs/training.md) for
+the equations, canonical profiles, artifacts, and ablation rules.
 
 If `dataset.id` is set, `justatom` will try to resolve a preset from `configs/dataset/<id>.yaml` and then apply explicit scenario-level overrides on top.
 
@@ -237,9 +246,9 @@ python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id demo-eva
 python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id justatom
 
 python -m justatom.api.train --config configs/train.yaml
-python -m justatom.api.train --config configs/train.yaml --training.batch_size 16 --training.n_epochs 5
-python -m justatom.api.train --config configs/train.yaml --dataset.id demo-train
-python -m justatom.api.train --config configs/train.yaml --dataset.id justatom
+python -m justatom.api.train --config configs/train.yaml --method vanilla --dataset.id demo-train
+python -m justatom.api.train --config configs/train.yaml --method atom_gate --dataset.id justatom
+python -m justatom.api.train --config configs/train.yaml --method atomic --dataset.id justatom --optimization.batch-size 16 --optimization.epochs 2
 ```
 
 Programmatic usage with direct dictionaries is also supported:
@@ -257,8 +266,9 @@ await eval_run(
 
 train_run(
     config={
+        "method": "atomic",
         "dataset": {"name_or_path": "data/train.jsonl"},
-        "training": {"batch_size": 16, "n_epochs": 3},
+        "optimization": {"batch_size": 16, "epochs": 3},
     }
 )
 ```

@@ -1,0 +1,12 @@
+display_name: mMARCO-ru-selected train
+source: justatom/mmarco-ru-selected
+upstream_source: ir_datasets:mmarco/v2/ru/train
+name_or_path: justatom/mmarco-ru-selected
+labels_field: query
+content_field: positive
+split: train
+limit: null
+chunk_id_col: pair_id
+keywords_col: null
+keywords_nested_col: null
+explanation_nested_col: null

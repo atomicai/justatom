@@ -16,7 +16,6 @@ GRANTED_PROCESSOR_NAMES = [
     "PosFreeEncoderProcessor",
     "EncoderProcessor",
     "BiEncoderProcessor",
-    "GammaHybridProcessor",
     "RuntimeProcessor",
 ]
 

@@ -1,4 +1,4 @@
-"""Geometric diagnostics for contrastive embeddings on the unit hypersphere.
+r"""Geometric diagnostics for contrastive embeddings on the unit hypersphere.
 
 These metrics support PhD-style analysis of representation quality. All metrics
 are computed *per training step* on the current mini-batch and are intended for
@@ -104,6 +104,14 @@ def embedding_geometry_metrics(
     Returns:
         Flat dictionary of float metrics keyed by ``prefix + Name``.
     """
+    # Keep diagnostics off the MPS hot path. The training loss already ran on
+    # device; metrics such as SVD and repeated scalar reads are logging-only and
+    # can otherwise serialize the MPS queue every step.
+    q_vecs = q_vecs.detach().float().cpu()
+    d_vecs = d_vecs.detach().float().cpu()
+    if isinstance(tau, torch.Tensor):
+        tau = tau.detach().float().cpu()
+
     metrics: dict[str, float] = {}
     batch_size = int(q_vecs.shape[0])
     metrics[f"{prefix}BatchSize"] = float(batch_size)

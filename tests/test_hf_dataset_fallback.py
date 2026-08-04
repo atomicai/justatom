@@ -19,12 +19,12 @@ def test_hf_dataset_falls_back_to_cached_parquet_when_builder_breaks(tmp_path, m
     monkeypatch.setattr(
         dataset_module,
         "list_repo_files",
-        lambda repo_id, repo_type: ["data/train-00000-of-00001.parquet"],
+        lambda repo_id, repo_type, **kwargs: ["data/train-00000-of-00001.parquet"],
     )
     monkeypatch.setattr(
         dataset_module,
         "hf_hub_download",
-        lambda repo_id, filename, repo_type: str(parquet_path),
+        lambda repo_id, filename, repo_type, **kwargs: str(parquet_path),
     )
     dataset_module.HFDataset._repo_files.cache_clear()
 
@@ -54,12 +54,12 @@ def test_hf_dataset_lazy_fallback_returns_lazyframe(tmp_path, monkeypatch):
     monkeypatch.setattr(
         dataset_module,
         "list_repo_files",
-        lambda repo_id, repo_type: ["data/train-00000-of-00001.parquet"],
+        lambda repo_id, repo_type, **kwargs: ["data/train-00000-of-00001.parquet"],
     )
     monkeypatch.setattr(
         dataset_module,
         "hf_hub_download",
-        lambda repo_id, filename, repo_type: str(parquet_path),
+        lambda repo_id, filename, repo_type, **kwargs: str(parquet_path),
     )
     dataset_module.HFDataset._repo_files.cache_clear()
 

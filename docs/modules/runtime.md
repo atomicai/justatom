@@ -9,8 +9,6 @@ The `justatom.running` package is where orchestration lives. It connects encoder
 - `retriever.py`: retrieval flow composition
 - `indexer.py`: indexing pipeline logic
 - `evaluator.py`: evaluation runtime layer
-- `trainer.py`: training runtime layer
-- `trainer_jobs.py`: job-oriented training helpers
 - `service.py`: service wrappers and runtime glue
 - `llm.py`: LLM-facing runtime helpers
 - `clusters.py`: clustering-oriented runtime flows
@@ -30,3 +28,6 @@ Think of `justatom.running` as the coordination layer between:
 2. Runtime objects inside `justatom.running` resolve encoders, retrievers, and scenario settings.
 3. Data is loaded or normalized.
 4. Results are evaluated, indexed, or served.
+
+Training orchestration lives in `justatom.training` and enters through
+`justatom.api.train`; it is intentionally separate from retrieval runtime.

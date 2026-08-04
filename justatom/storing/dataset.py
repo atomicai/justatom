@@ -25,6 +25,15 @@ from justatom.storing.mask import IDataset
 
 
 _HF_REPO_DATASET_RE = re.compile(r"^[^/\s]+/[^/\s]+(?:\?.*)?$")
+_HF_TOKEN_ENV_NAMES = ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_HUB_TOKEN", "HF_API_KEY")
+
+
+def _hf_token() -> str | None:
+    for name in _HF_TOKEN_ENV_NAMES:
+        value = os.environ.get(name)
+        if value and str(value).strip():
+            return str(value).strip()
+    return None
 
 
 def _looks_like_hf_repo_dataset(value: str) -> bool:
@@ -184,7 +193,7 @@ class HFDataset(IDataset):
         if list_repo_files is None:
             return ()
         try:
-            return tuple(list_repo_files(repo_id=dataset_name, repo_type="dataset"))
+            return tuple(list_repo_files(repo_id=dataset_name, repo_type="dataset", token=_hf_token()))
         except Exception as ex:
             logger.warning("Failed to inspect HF dataset repo files for [{}]: {}", dataset_name, ex)
             return ()
@@ -232,7 +241,14 @@ class HFDataset(IDataset):
         local_paths: list[str] = []
         for repo_file in parquet_files:
             try:
-                local_paths.append(hf_hub_download(repo_id=dataset_name, filename=repo_file, repo_type="dataset"))
+                local_paths.append(
+                    hf_hub_download(
+                        repo_id=dataset_name,
+                        filename=repo_file,
+                        repo_type="dataset",
+                        token=_hf_token(),
+                    )
+                )
             except Exception as ex:
                 logger.warning(
                     "Failed to cache HF parquet shard [{}] from [{}]: {}",
@@ -272,6 +288,9 @@ class HFDataset(IDataset):
             )
         effective_streaming = False
         split_candidates = self._split_candidates(split_override or split)
+        token = _hf_token()
+        if token and "token" not in kwargs:
+            kwargs["token"] = token
 
         last_error: Exception | None = None
         for candidate in split_candidates:

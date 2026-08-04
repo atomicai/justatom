@@ -183,6 +183,7 @@ class TrainWithContrastiveProcessor(IProcessor):
         self,
         tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
         max_seq_len: int = 512,
+        max_query_seq_len: int | None = None,
         queries_prefix: str = "query:",
         queries_field: str = "query",
         pos_queries_field: str = "content",
@@ -192,6 +193,7 @@ class TrainWithContrastiveProcessor(IProcessor):
         super().__init__()
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
+        self.max_query_seq_len = max_seq_len if max_query_seq_len is None else max_query_seq_len
         self.queries_field = queries_field
         self.queries_prefix = queries_prefix
         self.pos_queries_prefix = pos_queries_prefix
@@ -227,7 +229,12 @@ class TrainWithContrastiveProcessor(IProcessor):
             for x in dicts
         ]
         # ---
-        tokenized_queries_batch = self.tokenizer(queries, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_queries_batch = self.tokenizer(
+            queries,
+            truncation=True,
+            max_length=self.max_query_seq_len,
+            padding="max_length",
+        )
         tokenized_pos_queries_batch = self.tokenizer(
             pos_queries,
             truncation=True,
@@ -342,40 +349,6 @@ class BiEncoderProcessor(IProcessor):
         super(BiEncoderProcessor, self).__init__()  # noqa: UP008
         if metric:
             pass
-
-    def dataset_from_dicts(self, dicts):
-        pass
-
-
-class GammaHybridProcessor(IProcessor):
-    """
-    (1) This processor uses two different tokenizers. First one transforms `queries` while the second one - `passages`.
-    (2) It DOES expect each `query` to have its own `label`.
-    (3) It is designed to work with `justatom.modeling.prime.GammaHybridLoss` loss function.
-    """
-
-    def __init__(
-        self,
-        query_tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,  # type: ignore
-        passage_tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,  # type: ignore
-        do_lower_case_query: bool = False,
-        do_lower_case_passage: bool = False,
-        max_seq_len_query: int = 128,
-        max_seq_len_passage: int = 512,
-        data_dir: str = "",
-        metric=None,  # type: ignore
-        dev_split: float = 0.1,
-        proxies: dict | None = None,
-        max_samples: int | None = None,
-        embed_title: bool = True,
-        num_positives: int = 1,
-        num_hard_negatives: int = 1,
-        shuffle_negatives: bool = True,
-        shuffle_positives: bool = False,
-        label_list: list[str] | None = None,
-        label_queries_list: list[str] | None = None,
-    ):
-        super(GammaHybridProcessor, self).__init__()  # noqa: UP008
 
     def dataset_from_dicts(self, dicts):
         pass

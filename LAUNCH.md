@@ -355,9 +355,10 @@ python -m justatom.api.train --config configs/train.yaml --dataset.id mlnavigato
 ```bash
 python -m justatom.api.train \
   --config configs/train.yaml \
-  --dataset.name_or_path justatom \
-  --dataset.content_field content \
-  --dataset.labels_field queries
+  --method vanilla \
+  --dataset.name-or-path justatom \
+  --dataset.content-field content \
+  --dataset.labels-field queries
 ```
 
 ### Useful training overrides
@@ -365,16 +366,20 @@ python -m justatom.api.train \
 ```bash
 python -m justatom.api.train \
   --config configs/train.yaml \
+  --method atomic \
   --dataset.id justatom \
-  --training.batch_size 16 \
-  --training.n_epochs 3 \
-  --training.freeze_encoder false
+  --optimization.batch-size 16 \
+  --optimization.epochs 2 \
+  --objective.temperature 0.05
 ```
 
 Notes:
 
 - Training does not require Weaviate.
 - `configs/train.yaml` is the base config; CLI dotted flags override it.
+- Supported methods are exactly `vanilla`, `atom_gate`, and `atomic`.
+- Structural controls must set `--experiment.role ablation`; canonical runs keep the registered method structure.
+- Each run writes a deployable `encoder/`, a research checkpoint, a resolved manifest, and batch metrics.
 
 ## Direct Python Usage
 
