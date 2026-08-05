@@ -1,7 +1,7 @@
 # Dataset Loading Design
 
 **Date:** 2026-08-05
-**Status:** Approved for implementation planning
+**Status:** Implemented
 **Scope:** root `justatom` package only
 
 ## 1. Context

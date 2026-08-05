@@ -93,7 +93,7 @@ All non-canonical source fields are stored in `meta` (for example: `instruction`
 from pathlib import Path
 from justatom.tooling.dataset import DatasetRecordAdapter
 
-dataset_path = Path.home() / "IDataset" / "electrical_engineering_ru.parquet"
+dataset_path = Path.home() / "datasets" / "electrical_engineering_ru.parquet"
 
 adapter = DatasetRecordAdapter.from_source(
   dataset_path,

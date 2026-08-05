@@ -1,6 +1,4 @@
 import abc
-from collections.abc import Generator
-
 import numpy as np
 from loguru import logger
 
@@ -208,12 +206,6 @@ class INNDocStore(abc.ABC):
 
     @abc.abstractmethod
     async def search(self, **props):
-        pass
-
-
-class IDataset:
-    @abc.abstractmethod
-    def iterator(self, **kwargs) -> Generator:
         pass
 
 
