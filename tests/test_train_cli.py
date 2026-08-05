@@ -28,9 +28,7 @@ def test_train_cli_rejects_retired_method_aliases(retired):
 
 
 def test_resolve_train_config_applies_dataset_preset_and_method_profile():
-    config = train.resolve_train_config(
-        config={"method": "atomic", "dataset": {"id": "justatom"}}
-    )
+    config = train.resolve_train_config(config={"method": "atomic", "dataset": {"id": "justatom"}})
 
     assert config.method.value == "atomic"
     assert config.dataset.name_or_path == "justatom"

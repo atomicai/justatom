@@ -34,9 +34,7 @@ def resolve_train_config(
     config_path: str | Path | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> TrainConfig:
-    return parse_train_config(
-        load_train_config(config=config, config_path=config_path, overrides=overrides)
-    )
+    return parse_train_config(load_train_config(config=config, config_path=config_path, overrides=overrides))
 
 
 def run(
@@ -45,9 +43,7 @@ def run(
     config_path: str | Path | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> TrainingResult:
-    return TrainingJob(
-        resolve_train_config(config=config, config_path=config_path, overrides=overrides)
-    ).run()
+    return TrainingJob(resolve_train_config(config=config, config_path=config_path, overrides=overrides)).run()
 
 
 def _parse_args(argv: list[str] | None = None) -> dict[str, Any]:

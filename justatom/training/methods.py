@@ -85,7 +85,9 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
 
     if role is ExperimentRole.CANONICAL:
         if not bank.adaptive.enabled:
-            raise ValueError("canonical atomic requires memory_bank.adaptive.enabled=true; use experiment.role=ablation for controls")
+            raise ValueError(
+                "canonical atomic requires memory_bank.adaptive.enabled=true; use experiment.role=ablation for controls"
+            )
         if bank.margin.mode is not MarginMode.QUERY:
             raise ValueError("canonical atomic requires query margin; set experiment.role=ablation for a fixed-margin control")
 

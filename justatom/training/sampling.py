@@ -45,9 +45,7 @@ def sample_safe_negative_indices(
     all_indices = torch.arange(batch_size, device=device)
     allowed_modes = {"safe-random", "semi-hard-idf", "hard-idf"}
     if negative_sampling_mode not in allowed_modes:
-        raise ValueError(
-            f"negative_sampling_mode must be one of: {', '.join(sorted(allowed_modes))}"
-        )
+        raise ValueError(f"negative_sampling_mode must be one of: {', '.join(sorted(allowed_modes))}")
     if hard_negative_top_k is not None and hard_negative_top_k < 1:
         raise ValueError("hard_negative_top_k must be >= 1 when provided")
 
@@ -66,18 +64,14 @@ def sample_safe_negative_indices(
 
         any_valid = valid.any(dim=1)
         if not bool(any_valid.all().item()):
-            fallback_valid = torch.ones(
-                batch_size, batch_size, dtype=torch.bool, device=device
-            ).fill_diagonal_(False)
+            fallback_valid = torch.ones(batch_size, batch_size, dtype=torch.bool, device=device).fill_diagonal_(False)
             fallback_valid &= doc_key_ids.unsqueeze(0) != doc_key_ids.unsqueeze(1)
             if content_key_ids is not None:
                 fallback_valid &= content_key_ids.unsqueeze(0) != content_key_ids.unsqueeze(1)
             valid = torch.where((~any_valid).unsqueeze(1), fallback_valid, valid)
             any_valid = valid.any(dim=1)
             if not bool(any_valid.all().item()):
-                hard_fallback = torch.ones(
-                    batch_size, batch_size, dtype=torch.bool, device=device
-                ).fill_diagonal_(False)
+                hard_fallback = torch.ones(batch_size, batch_size, dtype=torch.bool, device=device).fill_diagonal_(False)
                 fallback_count = int((~any_valid).sum().item())
                 valid = torch.where(any_valid.unsqueeze(1), valid, hard_fallback)
 
@@ -110,23 +104,15 @@ def sample_safe_negative_indices(
             for candidate_idx in candidate_indices.detach().cpu().tolist():
                 candidate_doc = docs[candidate_idx]
                 sparse_text = (
-                    lexical_text_by_content.get(candidate_doc, candidate_doc)
-                    if lexical_text_by_content
-                    else candidate_doc
+                    lexical_text_by_content.get(candidate_doc, candidate_doc) if lexical_text_by_content else candidate_doc
                 )
                 scored.append((candidate_idx, inverse_idf_recall_fn(query, sparse_text)))
 
             safe = [
-                item
-                for item in scored
-                if max_negative_inverse_idf_recall is None
-                or item[1] <= max_negative_inverse_idf_recall
+                item for item in scored if max_negative_inverse_idf_recall is None or item[1] <= max_negative_inverse_idf_recall
             ]
             preferred = [
-                item
-                for item in safe
-                if min_negative_inverse_idf_recall is None
-                or item[1] >= min_negative_inverse_idf_recall
+                item for item in safe if min_negative_inverse_idf_recall is None or item[1] >= min_negative_inverse_idf_recall
             ]
             if negative_sampling_mode == "safe-random":
                 chosen = safe
@@ -156,22 +142,15 @@ def inverse_idf_recall(
     punctuation = (stopsyms or "«»:\"'") + string.punctuation
     if isinstance(doc_text, list):
         words = [
-            word
-            for text in doc_text
-            for word in "".join(char for char in text.lower().strip() if char not in punctuation).split()
+            word for text in doc_text for word in "".join(char for char in text.lower().strip() if char not in punctuation).split()
         ]
         document_words = Counter(words)
     else:
         document_words = Counter(
-            "".join(char for char in word.lower().strip() if char not in punctuation)
-            for word in doc_text.split()
+            "".join(char for char in word.lower().strip() if char not in punctuation) for word in doc_text.split()
         )
 
     query_words = "".join(char for char in query if char not in punctuation).lower().strip().split()
-    numerator = sum(
-        1.0 / math.log(1 + document_words.get(word, 1))
-        for word in query_words
-        if word in document_words
-    )
+    numerator = sum(1.0 / math.log(1 + document_words.get(word, 1)) for word in query_words if word in document_words)
     denominator = sum(1.0 / math.log(1 + document_words.get(word, 1)) for word in query_words)
     return numerator / denominator if denominator > 0 else 0.0

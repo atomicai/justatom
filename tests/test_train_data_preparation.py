@@ -24,9 +24,7 @@ def test_prepare_training_data_prefers_frame_batches(monkeypatch):
     monkeypatch.setattr(
         training_data.DatasetRecordAdapter,
         "from_source",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("frame-backed sources must not use the adapter fallback")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("frame-backed sources must not use the adapter fallback")),
     )
     try:
         frame, rows, lexical_lookup = training_data.prepare_training_data(
@@ -72,10 +70,7 @@ def test_prepare_training_data_uses_lazy_adapter_for_iterable_sources(monkeypatc
 
 
 def test_reservoir_sampling_is_bounded_and_deterministic():
-    source = [
-        {"chunk_id": str(index), "content": f"doc-{index}", "queries": [f"q-{index}"]}
-        for index in range(20)
-    ]
+    source = [{"chunk_id": str(index), "content": f"doc-{index}", "queries": [f"q-{index}"]} for index in range(20)]
     path = _write_jsonl(source)
     try:
         first, _ = training_data.sample_training_rows(

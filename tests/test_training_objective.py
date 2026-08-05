@@ -45,9 +45,7 @@ def test_objective_atom_gate_uses_augment_formula():
     )
 
     assert output.simcse_per_row is not None
-    expected = (
-        output.main_per_row + (1.0 - alpha) * 0.1 * output.simcse_per_row
-    ).mean()
+    expected = (output.main_per_row + (1.0 - alpha) * 0.1 * output.simcse_per_row).mean()
     torch.testing.assert_close(output.loss, expected)
     output.loss.backward()
     assert alpha.grad is not None and float(alpha.grad.abs().sum()) > 0.0
@@ -113,9 +111,7 @@ def test_objective_atomic_forwards_bank_columns_and_live_margin():
 
 
 def test_objective_rejects_alpha_without_auxiliary_view():
-    objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=1.0, learnable_temperature=False, simcse_dropout_weight=0.1)
-    )
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=1.0, learnable_temperature=False, simcse_dropout_weight=0.1))
     embeddings = F.normalize(torch.eye(3), dim=-1)
 
     try:

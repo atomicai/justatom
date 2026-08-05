@@ -107,42 +107,28 @@ class ContrastiveObjective(nn.Module):
             "temperature": self.kernel.tau.detach(),
         }
 
-        if (
-            inputs.alpha is not None
-            and inputs.semantic_pair_scores is not None
-            and inputs.lexical_pair_scores is not None
-        ):
+        if inputs.alpha is not None and inputs.semantic_pair_scores is not None and inputs.lexical_pair_scores is not None:
             alpha_column = inputs.alpha.view(-1, 1)
-            mixed_pair = (
-                alpha_column * inputs.semantic_pair_scores
-                + (1.0 - alpha_column) * inputs.lexical_pair_scores
-            )
+            mixed_pair = alpha_column * inputs.semantic_pair_scores + (1.0 - alpha_column) * inputs.lexical_pair_scores
             if mixed_pair.ndim != 2 or mixed_pair.shape[1] != 2:
                 raise ValueError("pair scores must have shape [batch, 2] for positive and negative")
             positive_distance = 1.0 - mixed_pair[:, 0]
             negative_distance = 1.0 - mixed_pair[:, 1]
             positive_loss = 0.5 * positive_distance.pow(2)
-            negative_loss = 0.5 * torch.relu(
-                self.config.pairwise_margin - negative_distance
-            ).pow(2)
+            negative_loss = 0.5 * torch.relu(self.config.pairwise_margin - negative_distance).pow(2)
             mix_loss = (positive_loss + negative_loss).mean()
             loss = loss + inputs.alpha_mix_weight * mix_loss
             metrics["loss/lexical_mix"] = mix_loss.detach()
 
         if inputs.alpha is not None and inputs.alpha_entropy_weight > 0.0:
             alpha_safe = inputs.alpha.clamp(1e-6, 1.0 - 1e-6)
-            entropy = -(
-                alpha_safe * alpha_safe.log()
-                + (1.0 - alpha_safe) * (1.0 - alpha_safe).log()
-            ).mean()
+            entropy = -(alpha_safe * alpha_safe.log() + (1.0 - alpha_safe) * (1.0 - alpha_safe).log()).mean()
             entropy_bonus = inputs.alpha_entropy_weight * entropy
             loss = loss - entropy_bonus
             metrics["loss/alpha_entropy_bonus"] = entropy_bonus.detach()
 
         if margin_config is not None and inputs.raw_margin is not None:
-            regularization = margin_config.regularization_weight * (
-                inputs.raw_margin - margin_config.base
-            ).pow(2).mean()
+            regularization = margin_config.regularization_weight * (inputs.raw_margin - margin_config.base).pow(2).mean()
             loss = loss + regularization
             metrics["loss/memory_margin_regularization"] = regularization.detach()
             metrics["loss/memory_margin_regularization_tensor"] = regularization

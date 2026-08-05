@@ -73,15 +73,9 @@ def finite_output():
 
 
 def test_module_constructs_only_components_required_by_method():
-    vanilla = ContrastiveTrainingModule.build(
-        TinyEncoder(), canonical_method_config(TrainingMethod.VANILLA)
-    )
-    gate = ContrastiveTrainingModule.build(
-        TinyEncoder(), canonical_method_config(TrainingMethod.ATOM_GATE)
-    )
-    atomic = ContrastiveTrainingModule.build(
-        TinyEncoder(), canonical_method_config(TrainingMethod.ATOMIC)
-    )
+    vanilla = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.VANILLA))
+    gate = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.ATOM_GATE))
+    atomic = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.ATOMIC))
 
     assert vanilla.alpha_gate is None and vanilla.memory_bank is None and vanilla.margin_head is None
     assert isinstance(gate.alpha_gate, QueryAlphaGate) and gate.memory_bank is None
@@ -89,9 +83,7 @@ def test_module_constructs_only_components_required_by_method():
 
 
 def test_optimizer_contains_encoder_temperature_alpha_and_margin_parameters_once():
-    module = ContrastiveTrainingModule.build(
-        TinyEncoder(), canonical_method_config(TrainingMethod.ATOMIC)
-    )
+    module = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.ATOMIC))
 
     optimizer = module.configure_optimizers()
     parameter_ids = [id(parameter) for group in optimizer.param_groups for parameter in group["params"]]
@@ -102,9 +94,7 @@ def test_optimizer_contains_encoder_temperature_alpha_and_margin_parameters_once
 
 
 def test_atomic_enqueues_documents_after_objective(monkeypatch):
-    module = ContrastiveTrainingModule.build(
-        TinyEncoder(), canonical_method_config(TrainingMethod.ATOMIC)
-    )
+    module = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.ATOMIC))
     events: list[str] = []
     monkeypatch.setattr(module, "_encode_dropout_query_view", lambda batch: module.encoder.encode_queries(batch))
     monkeypatch.setattr(module, "_semantic_pair_scores", lambda q, p, batch: torch.ones(2, 2))
@@ -136,9 +126,7 @@ def test_alpha_mix_weight_uses_exact_linear_warmup():
 
 
 def test_compute_training_step_rejects_nonfinite_loss(monkeypatch):
-    module = ContrastiveTrainingModule.build(
-        TinyEncoder(), canonical_method_config(TrainingMethod.VANILLA)
-    )
+    module = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.VANILLA))
     bad_output = ObjectiveOutput(
         loss=torch.tensor(float("nan")),
         main_per_row=torch.ones(2),

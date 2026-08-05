@@ -44,18 +44,18 @@ class FocalLoss(nn.Module):
                         vector of weights for each class (analogous to weight argument for CrossEntropyLoss)
         gamma (float): Focusing parameter :math:`\gamma >= 0`. When 0 is equal to CrossEntropyLoss
         reduction (Optional[str]): Specifies the reduction to apply to the
-         output: ‘none’ | ‘mean’ | ‘sum’.
-         ‘none’: no reduction will be applied,
-         ‘mean’: the sum of the output will be divided by the number of elements
+         output: ânoneâ | âmeanâ | âsumâ.
+         ânoneâ: no reduction will be applied,
+         âmeanâ: the sum of the output will be divided by the number of elements
                 in the output, uses geometric mean if alpha set to list of weights
-         ‘sum’: the output will be summed. Default: ‘none’.
+         âsumâ: the output will be summed. Default: ânoneâ.
         ignore_index (Optional[int]): specifies indexes that are ignored during loss calculation
          (identical to PyTorch's CrossEntropyLoss 'ignore_index' parameter). Default: -100
 
     Shape:
         - Input: :math:`(N, C)` where C = number of classes.
         - Target: :math:`(N)` where each value is
-          :math:`0 ≤ targets[i] ≤ C−1`.
+          :math:`0 â¤ targets[i] â¤ Câ1`.
     Examples:
         >>> C = 5  # num_classes
         >>> N = 1 # num_examples
@@ -185,9 +185,9 @@ class MultiMarginLoss(nn.Module):
 
 
 class DiceLoss(nn.Module):
-    r"""Criterion that computes Sørensen-Dice Coefficient loss.
+    r"""Criterion that computes SÃ¸rensen-Dice Coefficient loss.
 
-    According to [1], we compute the Sørensen-Dice Coefficient as follows:
+    According to [1], we compute the SÃ¸rensen-Dice Coefficient as follows:
 
     .. math::
 
@@ -208,7 +208,7 @@ class DiceLoss(nn.Module):
     Shape:
         - Input: :math:`(N, C)` where C = number of classes.
         - Target: :math:`(N,)` where each value is
-          :math:`0 ≤ targets[i] ≤ C−1`.
+          :math:`0 â¤ targets[i] â¤ Câ1`.
 
     Examples:
         >>> N = 5  # num_classes
@@ -300,7 +300,7 @@ class TverskyLoss(nn.Module):
     Shape:
         - Input: :math:`(N, C)` where C = number of classes.
         - Target: :math:`(N,)` where each value is
-          :math:`0 ≤ targets[i] ≤ C−1`.
+          :math:`0 â¤ targets[i] â¤ Câ1`.
 
     Examples:
         >>> N = 5  # num_classes
@@ -458,19 +458,19 @@ class ContrastiveLoss(nn.Module):
 
     Combines four well-studied stabilizers behind a single, ablation-friendly API:
 
-    1. **Learnable temperature** $\tau = \exp(\log\tau)$ — clamped to $[10^{-3}, 1.0]$.
+    1. **Learnable temperature** $\tau = \exp(\log\tau)$ â clamped to $[10^{-3}, 1.0]$.
        Initialized with the user-supplied ``temperature`` argument. Following CLIP /
        SigLIP, optimizing $\log\tau$ jointly with the encoder yields better
        calibration than a fixed schedule (Radford et al. 2021; Zhai et al. 2023).
-    2. **Decoupled InfoNCE (DCL)** — the positive logit is removed from the
+    2. **Decoupled InfoNCE (DCL)** â the positive logit is removed from the
        denominator (Yeh et al. 2022, ``arXiv:2110.06848``). This unties the
        gradient on the positive pair from negatives in the same batch and avoids
-       the negative–positive coupling pathology of vanilla InfoNCE.
-    3. **SimCSE-style dropout positives** — a second forward of the *queries*
+       the negativeâpositive coupling pathology of vanilla InfoNCE.
+    3. **SimCSE-style dropout positives** â a second forward of the *queries*
        through the encoder (with a different dropout mask) provides a cheap
        data-free positive view, which is then contrasted as an additional
        InfoNCE term (Gao, Yao & Chen 2021, ``arXiv:2104.08821``).
-    4. **Soft false-negative attractive term** — the top-$k$ off-diagonal
+    4. **Soft false-negative attractive term** â the top-$k$ off-diagonal
        candidates per query are pulled *toward* the anchor instead of being
        repelled, mimicking the soft-positive treatment from Huynh et al. 2021
        (``arXiv:2104.07939``) and GISTEmbed (Solatorio 2024, ``arXiv:2402.16829``).
@@ -627,9 +627,7 @@ class ContrastiveLoss(nn.Module):
             if m.dim() != 2:
                 raise ValueError(f"memory_negatives must be 2D, got shape={tuple(m.shape)}")
             if m.shape[1] != q.shape[1]:
-                raise ValueError(
-                    f"memory_negatives dim must match queries, got {tuple(m.shape)} vs query dim={q.shape[1]}"
-                )
+                raise ValueError(f"memory_negatives dim must match queries, got {tuple(m.shape)} vs query dim={q.shape[1]}")
             memory_logits = q @ self.transpose(m)
             if torch.isnan(memory_logits).any() or torch.isinf(memory_logits).any():
                 logger.warning("info_nce: memory_logits contain NaN/Inf, dropping memory bank this step")
@@ -640,7 +638,7 @@ class ContrastiveLoss(nn.Module):
                     raise ValueError(
                         "memory_negative_mask must have shape [batch, memory_size], "
                         f"got {tuple(memory_negative_mask.shape)} vs {tuple(memory_logits.shape)}"
-                )
+                    )
                 memory_mask = memory_negative_mask.to(device=q.device, dtype=torch.bool)
             if memory_log_weights is not None and memory_logits is not None:
                 if memory_log_weights.shape != memory_logits.shape:
@@ -662,9 +660,7 @@ class ContrastiveLoss(nn.Module):
                 gate = torch.sigmoid(gate_arg)
                 margin_log_weight = torch.log(gate.clamp_min(float(memory_soft_eps)))
                 memory_soft_log_weight = (
-                    margin_log_weight
-                    if memory_soft_log_weight is None
-                    else memory_soft_log_weight + margin_log_weight
+                    margin_log_weight if memory_soft_log_weight is None else memory_soft_log_weight + margin_log_weight
                 )
 
         tau_scale = self.tau

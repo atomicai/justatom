@@ -44,9 +44,7 @@ class QueryMarginHead(nn.Module):
 
     def forward(self, queries: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if queries.ndim != 2 or queries.shape[-1] != self.embedding_dim:
-            raise ValueError(
-                f"queries must have shape [batch, {self.embedding_dim}], got {tuple(queries.shape)}"
-            )
+            raise ValueError(f"queries must have shape [batch, {self.embedding_dim}], got {tuple(queries.shape)}")
         delta = self.config.scale * torch.tanh(self.network(queries)).squeeze(-1)
         raw = self.config.base + delta
         return raw, raw.clamp(self.config.minimum, self.config.maximum)
@@ -110,12 +108,7 @@ class ContrastiveMemoryBank:
         positive_vectors: torch.Tensor,
         step: int,
     ) -> MemorySelection:
-        if (
-            not self.enabled
-            or self.embeddings is None
-            or self.current_size == 0
-            or int(step) < self.config.warmup_steps
-        ):
+        if not self.enabled or self.embeddings is None or self.current_size == 0 or int(step) < self.config.warmup_steps:
             return self._noop_selection()
         if query_vectors.ndim != 2 or positive_vectors.shape != query_vectors.shape:
             raise ValueError("query_vectors and positive_vectors must have matching [batch, dim] shapes")
@@ -216,10 +209,7 @@ class ContrastiveMemoryBank:
             bank_max - positive_similarities,
             torch.zeros_like(positive_similarities),
         )
-        raw_weights = torch.sigmoid(
-            (self.config.adaptive.collision_threshold - collision_g)
-            / self.config.adaptive.collision_beta
-        )
+        raw_weights = torch.sigmoid((self.config.adaptive.collision_threshold - collision_g) / self.config.adaptive.collision_beta)
         hard_weights = torch.where(has_candidate, raw_weights, torch.ones_like(raw_weights))
         return collision_g, hard_weights
 

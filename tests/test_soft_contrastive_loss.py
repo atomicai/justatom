@@ -31,9 +31,7 @@ def test_soft_contrastive_loss_applies_temperature_to_similarity():
 
     positive_distance = 1.0 - 0.1
     negative_distance = 1.0
-    expected = torch.tensor(
-        (0.5 * positive_distance**2 + 0.5 * max(0.0, 0.5 - negative_distance) ** 2) / 2.0
-    )
+    expected = torch.tensor((0.5 * positive_distance**2 + 0.5 * max(0.0, 0.5 - negative_distance) ** 2) / 2.0)
     torch.testing.assert_close(loss, expected)
 
 

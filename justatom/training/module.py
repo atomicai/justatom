@@ -46,9 +46,7 @@ class ContrastiveTrainingModule(L.LightningModule):
         self.margin_head = margin_head
         self.lexical_lookup = lexical_lookup
         self._last_negative_indices: torch.Tensor | None = None
-        self.metrics_path = (
-            None if config.telemetry.metrics_path is None else Path(config.telemetry.metrics_path)
-        )
+        self.metrics_path = None if config.telemetry.metrics_path is None else Path(config.telemetry.metrics_path)
         self.metrics_logger = CSVLogger(self.metrics_path) if self.metrics_path is not None else None
 
     @classmethod
@@ -61,16 +59,8 @@ class ContrastiveTrainingModule(L.LightningModule):
     ) -> "ContrastiveTrainingModule":
         config = resolve_method(config)
         embedding_dim = int(getattr(encoder, "output_dims"))
-        alpha_gate = (
-            QueryAlphaGate(embedding_dim, config.alpha_gate)
-            if config.alpha_gate.enabled
-            else None
-        )
-        memory_bank = (
-            ContrastiveMemoryBank(config.memory_bank)
-            if config.memory_bank.enabled
-            else None
-        )
+        alpha_gate = QueryAlphaGate(embedding_dim, config.alpha_gate) if config.alpha_gate.enabled else None
+        memory_bank = ContrastiveMemoryBank(config.memory_bank) if config.memory_bank.enabled else None
         margin_head = (
             QueryMarginHead(embedding_dim, config.memory_bank.margin)
             if config.memory_bank.margin.mode is MarginMode.QUERY
@@ -149,20 +139,13 @@ class ContrastiveTrainingModule(L.LightningModule):
                 return None
             queries = tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=True)
             documents = tokenizer.batch_decode(batch["pos_input_ids"], skip_special_tokens=True)
-            queries = [
-                self._remove_text_prefix(text, self.config.model.query_prefix)
-                for text in queries
-            ]
-            documents = [
-                self._remove_text_prefix(text, self.config.model.content_prefix)
-                for text in documents
-            ]
+            queries = [self._remove_text_prefix(text, self.config.model.query_prefix) for text in queries]
+            documents = [self._remove_text_prefix(text, self.config.model.content_prefix) for text in documents]
         documents = [self.lexical_lookup.get(str(document), str(document)) for document in documents]
         negative_indices = self._last_negative_indices.detach().cpu().tolist()
         positive_scores = [inverse_idf_recall(str(query), str(document)) for query, document in zip(queries, documents)]
         negative_scores = [
-            inverse_idf_recall(str(query), str(documents[negative_idx]))
-            for query, negative_idx in zip(queries, negative_indices)
+            inverse_idf_recall(str(query), str(documents[negative_idx])) for query, negative_idx in zip(queries, negative_indices)
         ]
         return torch.tensor(
             list(zip(positive_scores, negative_scores)),
@@ -248,11 +231,7 @@ class ContrastiveTrainingModule(L.LightningModule):
     def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
         output = self.compute_training_step(batch, step=int(self.global_step))
         metrics = resolve_metric_tensors(output.metrics)
-        numeric_metrics = {
-            key: value
-            for key, value in metrics.items()
-            if isinstance(value, (int, float))
-        }
+        numeric_metrics = {key: value for key, value in metrics.items() if isinstance(value, (int, float))}
         if self.metrics_logger is not None:
             self.metrics_logger.log_metrics(
                 {
@@ -291,9 +270,7 @@ class ContrastiveTrainingModule(L.LightningModule):
                 }
             )
         head_modules = [module for module in (self.alpha_gate, self.margin_head) if module is not None]
-        head_parameters = unique(
-            parameter for module in head_modules for parameter in module.parameters()
-        )
+        head_parameters = unique(parameter for module in head_modules for parameter in module.parameters())
         if head_parameters:
             groups.append(
                 {

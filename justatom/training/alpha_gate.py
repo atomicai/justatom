@@ -46,9 +46,7 @@ class QueryAlphaGate(nn.Module):
         if queries.ndim != 2:
             raise ValueError(f"queries must have shape [batch, dim], got {tuple(queries.shape)}")
         if queries.shape[-1] != self.embedding_dim:
-            raise ValueError(
-                f"queries embedding dimension must be {self.embedding_dim}, got {queries.shape[-1]}"
-            )
+            raise ValueError(f"queries embedding dimension must be {self.embedding_dim}, got {queries.shape[-1]}")
         return torch.sigmoid(self.network(queries)).squeeze(-1)
 
     def parameters_for_optimizer(self) -> Iterator[nn.Parameter]:
