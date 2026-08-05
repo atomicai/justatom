@@ -1,4 +1,6 @@
-name_or_path: hf://unicamp-dl/mmarco?config=russian
+name_or_path: unicamp-dl/mmarco
+lazy: true
+config: russian
 labels_field: query
 content_field: positive
 split: train

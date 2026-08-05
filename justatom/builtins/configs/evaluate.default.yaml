@@ -5,6 +5,8 @@ dataset:
   id: null
   config_path: null
   name_or_path: null
+  lazy: true
+  config: null
   labels_field: null
   content_field: content
   split: null
@@ -13,6 +15,7 @@ dataset:
   keywords_col: null
   keywords_nested_col: null
   explanation_nested_col: null
+  drop_columns: null
 
 output:
   save_results_to_dir: null

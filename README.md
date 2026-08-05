@@ -61,7 +61,7 @@ from pathlib import Path
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 dataset_path = Path.cwd() / ".data" / "polaroids.ai.data.json"
-adapter = DatasetRecordAdapter.from_source(dataset_path, lazy=True)
+adapter = DatasetRecordAdapter.from_source(dataset_path, lazy=False)
 js_docs = list(adapter.iterator())
 ```
 </pre>
@@ -71,7 +71,7 @@ js_docs = list(adapter.iterator())
 
 > Load large datasets lazily and map custom columns to `Document` schema with one adapter.
 
-Supported input formats (via `justatom.storing.dataset.API`):
+Supported input formats (via `justatom.storing.datasets.DatasetLoader`):
 - `json`
 - `jsonl`
 - `parquet`
@@ -80,7 +80,7 @@ Supported input formats (via `justatom.storing.dataset.API`):
 
 Notes about lazy loading:
 - `jsonl`, `parquet` and `csv` are the best options for large lazy/streaming workflows.
-- `json` is still supported, but `lazy=True` currently falls back to eager load with a warning. For truly large corpora prefer `jsonl` or `parquet`.
+- `.json` and `.xlsx` require `lazy=False`; requesting lazy mode raises a clear error instead of silently loading the whole file.
 
 `DatasetRecordAdapter` maps your source columns to canonical `Document` fields:
 - `content_col` -> `content`
@@ -114,14 +114,14 @@ print(first_doc["meta"]["instruction"])     # extra source field moved to meta
 
 `justatom` now treats scenario configs as the primary interface for training and evaluation:
 
-See `LAUNCH.md` for a step-by-step tutorial covering `dataset.id`, direct dataset URIs, and ready-to-run `train` / `eval` commands.
+See `LAUNCH.md` for a step-by-step tutorial covering `dataset.id`, direct dataset sources, and ready-to-run `train` / `eval` commands.
 
 - `configs/evaluate.yaml`
 - `configs/train.yaml`
 - optional dataset presets in `configs/dataset/<id>.yaml`
 - repo-local preset in `configs/dataset/justatom.yaml`
 - packaged demo presets in `justatom/builtins/configs/dataset/demo-eval.yaml` and `justatom/builtins/configs/dataset/demo-train.yaml`
-- packaged HF preset in `justatom/builtins/configs/dataset/mlnavigator-russian-retrieval.yaml`
+- Hugging Face presets in `configs/dataset/*.yaml`
 
 Packaged builtins inside `justatom/builtins/configs/*.default.yaml` are used as fallbacks, and legacy runtime defaults now come directly from builtin scenario/default config files.
 
@@ -174,11 +174,11 @@ the equations, canonical profiles, artifacts, and ablation rules.
 
 If `dataset.id` is set, `justatom` will try to resolve a preset from `configs/dataset/<id>.yaml` and then apply explicit scenario-level overrides on top.
 
-Built-in datasets can also be referenced directly through `builtin://...` URIs. For example, `builtin://datasets/demo_retrieval.jsonl` points to a tiny packaged JSONL dataset that is safe to use in tests and smoke runs.
+Use `name_or_path: demo` for the tiny packaged JSONL dataset used by tests and smoke runs.
 
-The repository-local `justatom` dataset can be referenced through the named source `justatom`. It resolves to `.data/polaroids.ai.data.json` when you run from the repo root.
+The repository-local `justatom` preset resolves to `.data/polaroids.ai.data.json` with `lazy: false`.
 
-Hugging Face datasets can be referenced through `hf://...` URIs. For example, `hf://MLNavigator/russian-retrieval` with `dataset.split=train` loads the `train` split through the `datasets` package. You can also use split fallback chains like `dataset.split=dev|test` to try the first available split.
+Hugging Face datasets use their ordinary Hub ID. For example, `MLNavigator/russian-retrieval` with `dataset.split=train` loads the `train` split. Named subsets use a separate `dataset.config` field. Split fallback chains such as `dataset.split=dev|test` remain supported.
 
 Smoke-ready examples with the packaged demo dataset:
 
@@ -197,7 +197,7 @@ dataset:
 ```yaml
 # eval or train with HF preset
 dataset:
-  id: mlnavigator-russian-retrieval
+  id: boolq-ru
 ```
 
 ```yaml
@@ -212,7 +212,7 @@ Equivalent direct-path usage:
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 adapter = DatasetRecordAdapter.from_source(
-    "builtin://datasets/demo_retrieval.jsonl",
+    "demo",
     content_col="content",
     queries_col="labels",
     chunk_id_col="chunk_id",
@@ -220,7 +220,7 @@ adapter = DatasetRecordAdapter.from_source(
 )
 
 hf_adapter = DatasetRecordAdapter.from_source(
-  "hf://MLNavigator/russian-retrieval",
+  "MLNavigator/russian-retrieval",
   content_col="text",
   queries_col="q",
   split="train",
@@ -228,11 +228,11 @@ hf_adapter = DatasetRecordAdapter.from_source(
 )
 
 repo_adapter = DatasetRecordAdapter.from_source(
-    "justatom",
+    ".data/polaroids.ai.data.json",
     content_col="content",
     queries_col="queries",
     chunk_id_col="chunk_id",
-    lazy=True,
+    lazy=False,
 )
 ```
 

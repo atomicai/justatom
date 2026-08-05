@@ -1,4 +1,6 @@
 name_or_path: justatom/meme-russian-ir
+lazy: true
+config: null
 labels_field: generated
 content_field: description
 split: train

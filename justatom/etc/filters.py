@@ -1,8 +1,8 @@
 from typing import Any
 
+import polars as pl
 import weaviate
 from dateutil import parser
-from pandas import DataFrame
 from weaviate.collections.classes.filters import Filter, FilterReturn
 
 from justatom.etc.errors import FilterError
@@ -136,7 +136,7 @@ def _greater_than(field: str, value: Any) -> FilterReturn:
                 "Strings are only comparable if they are ISO formatted dates."
             )
             raise FilterError(msg) from exc
-    if type(value) in [list, DataFrame]:
+    if isinstance(value, (list, pl.DataFrame)):
         msg = f"Filter value can't be of type {type(value)} using operators '>', '>=', '<', '<='"
         raise FilterError(msg)
     return weaviate.classes.query.Filter.by_property(field).greater_than(_handle_date(value))
@@ -158,7 +158,7 @@ def _greater_than_equal(field: str, value: Any) -> FilterReturn:
                 "Strings are only comparable if they are ISO formatted dates."
             )
             raise FilterError(msg) from exc
-    if type(value) in [list, DataFrame]:
+    if isinstance(value, (list, pl.DataFrame)):
         msg = f"Filter value can't be of type {type(value)} using operators '>', '>=', '<', '<='"
         raise FilterError(msg)
     return weaviate.classes.query.Filter.by_property(field).greater_or_equal(_handle_date(value))
@@ -180,7 +180,7 @@ def _less_than(field: str, value: Any) -> FilterReturn:
                 "Strings are only comparable if they are ISO formatted dates."
             )
             raise FilterError(msg) from exc
-    if type(value) in [list, DataFrame]:
+    if isinstance(value, (list, pl.DataFrame)):
         msg = f"Filter value can't be of type {type(value)} using operators '>', '>=', '<', '<='"
         raise FilterError(msg)
     return weaviate.classes.query.Filter.by_property(field).less_than(_handle_date(value))
@@ -202,7 +202,7 @@ def _less_than_equal(field: str, value: Any) -> FilterReturn:
                 "Strings are only comparable if they are ISO formatted dates."
             )
             raise FilterError(msg) from exc
-    if type(value) in [list, DataFrame]:
+    if isinstance(value, (list, pl.DataFrame)):
         msg = f"Filter value can't be of type {type(value)} using operators '>', '>=', '<', '<='"
         raise FilterError(msg)
     return weaviate.classes.query.Filter.by_property(field).less_or_equal(_handle_date(value))
@@ -255,8 +255,8 @@ def _parse_comparison_condition(condition: dict[str, Any]) -> FilterReturn:
         raise FilterError(msg)
     operator: str = condition["operator"]
     value: Any = condition["value"]
-    if isinstance(value, DataFrame):
-        value = value.to_json()
+    if isinstance(value, pl.DataFrame):
+        value = value.write_json()
 
     return COMPARISON_OPERATORS[operator](field, value)
 

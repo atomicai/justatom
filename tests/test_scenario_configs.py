@@ -6,7 +6,6 @@ from pathlib import Path
 
 from justatom.api.eval import resolve_eval_kwargs
 from justatom.api.train import resolve_train_config
-from justatom.configuring.builtins import resolve_builtin_path
 from justatom.configuring.scenarios import load_scenario_config
 from justatom.etc.errors import DocumentStoreError
 from justatom.storing.weaviate import WeaviateDocStore
@@ -116,15 +115,10 @@ class ScenarioConfigTest(unittest.TestCase):
     def test_builtin_eval_dataset_preset_resolves_from_packaged_defaults(self):
         kwargs = resolve_eval_kwargs(config={"dataset": {"id": "demo-eval"}})
 
-        self.assertEqual(kwargs["dataset_name_or_path"], "builtin://datasets/demo_retrieval.jsonl")
+        self.assertEqual(kwargs["dataset_name_or_path"], "demo")
+        self.assertTrue(kwargs["dataset_lazy"])
         self.assertEqual(kwargs["labels_field"], "labels")
         self.assertEqual(kwargs["chunk_id_col"], "chunk_id")
-
-    def test_builtin_uri_resolves_to_packaged_dataset_path(self):
-        path = resolve_builtin_path("builtin://datasets/demo_retrieval.jsonl")
-
-        self.assertTrue(path.exists())
-        self.assertEqual(path.name, "demo_retrieval.jsonl")
 
     def test_dotted_dataset_id_override_loads_dataset_preset(self):
         kwargs = resolve_eval_kwargs(
@@ -138,7 +132,7 @@ class ScenarioConfigTest(unittest.TestCase):
             },
         )
 
-        self.assertEqual(kwargs["dataset_name_or_path"], "hf://d0rj/boolq-ru")
+        self.assertEqual(kwargs["dataset_name_or_path"], "d0rj/boolq-ru")
         self.assertEqual(kwargs["labels_field"], "question")
         self.assertEqual(kwargs["content_field"], "passage")
         self.assertEqual(kwargs["split"], "validation|train")
@@ -147,7 +141,8 @@ class ScenarioConfigTest(unittest.TestCase):
     def test_repo_justatom_dataset_preset_resolves_for_eval(self):
         kwargs = resolve_eval_kwargs(config={"dataset": {"id": "justatom"}})
 
-        self.assertEqual(kwargs["dataset_name_or_path"], "justatom")
+        self.assertEqual(kwargs["dataset_name_or_path"], ".data/polaroids.ai.data.json")
+        self.assertFalse(kwargs["dataset_lazy"])
         self.assertEqual(kwargs["labels_field"], "queries")
         self.assertEqual(kwargs["content_field"], "content")
         self.assertEqual(kwargs["chunk_id_col"], "chunk_id")
@@ -170,7 +165,7 @@ class ScenarioConfigTest(unittest.TestCase):
 
         self.assertEqual(
             kwargs["dataset_name_or_path"],
-            "hf://d0rj/Electrical-engineering-ru",
+            "d0rj/Electrical-engineering-ru",
         )
         self.assertEqual(kwargs["labels_field"], "input")
         self.assertEqual(kwargs["content_field"], "output")
@@ -182,7 +177,7 @@ class ScenarioConfigTest(unittest.TestCase):
 
         self.assertEqual(
             kwargs["dataset_name_or_path"],
-            "hf://d0rj/boolq-ru",
+            "d0rj/boolq-ru",
         )
         self.assertEqual(kwargs["labels_field"], "question")
         self.assertEqual(kwargs["content_field"], "passage")
@@ -197,6 +192,13 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(kwargs["content_field"], "description")
         self.assertEqual(kwargs["split"], "train")
         self.assertIsNone(kwargs["limit"])
+
+    def test_mmarco_config_is_separate_from_hugging_face_dataset_id(self):
+        kwargs = resolve_eval_kwargs(config={"dataset": {"id": "mmarco-russian"}})
+
+        self.assertEqual(kwargs["dataset_name_or_path"], "unicamp-dl/mmarco")
+        self.assertEqual(kwargs["dataset_config"], "russian")
+        self.assertTrue(kwargs["dataset_lazy"])
 
     def test_repo_meme_russian_ir_dataset_preset_resolves_for_train(self):
         config = resolve_train_config(config={"dataset": {"id": "meme-russian-ir"}})
@@ -260,7 +262,10 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(dataset["eval"]["split"], "dev")
         self.assertEqual(dataset["corpus"]["name_or_path"], "justatom/mmarco-ru-selected")
         self.assertEqual(dataset["corpus"]["split"], "corpus")
-        self.assertEqual(dataset["manifest_path"], "hf://datasets/justatom/mmarco-ru-selected/manifest.json")
+        self.assertEqual(
+            dataset["manifest_path"],
+            "https://huggingface.co/datasets/justatom/mmarco-ru-selected/resolve/main/manifest.json",
+        )
 
     def test_train_supports_direct_dict_config(self):
         config = resolve_train_config(
@@ -296,14 +301,16 @@ class ScenarioConfigTest(unittest.TestCase):
     def test_builtin_train_dataset_preset_resolves_from_packaged_defaults(self):
         config = resolve_train_config(config={"dataset": {"id": "demo-train"}})
 
-        self.assertEqual(config.dataset.name_or_path, "builtin://datasets/demo_retrieval.jsonl")
+        self.assertEqual(config.dataset.name_or_path, "demo")
+        self.assertTrue(config.dataset.lazy)
         self.assertEqual(config.dataset.labels_field, "queries")
         self.assertEqual(config.dataset.content_field, "content")
 
     def test_repo_justatom_dataset_preset_resolves_for_train(self):
         config = resolve_train_config(config={"dataset": {"id": "justatom"}})
 
-        self.assertEqual(config.dataset.name_or_path, "justatom")
+        self.assertEqual(config.dataset.name_or_path, ".data/polaroids.ai.data.json")
+        self.assertFalse(config.dataset.lazy)
         self.assertEqual(config.dataset.labels_field, "queries")
         self.assertEqual(config.dataset.content_field, "content")
         self.assertIsNone(config.dataset.split)
@@ -341,7 +348,7 @@ class ScenarioConfigTest(unittest.TestCase):
             overrides={"dataset": {"split": "validation|train", "limit": 25}},
         )
 
-        self.assertEqual(kwargs["dataset_name_or_path"], "hf://d0rj/boolq-ru")
+        self.assertEqual(kwargs["dataset_name_or_path"], "d0rj/boolq-ru")
         self.assertEqual(kwargs["split"], "validation|train")
         self.assertEqual(kwargs["limit"], 25)
 

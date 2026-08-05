@@ -2,6 +2,8 @@ dataset:
   # Optional preset id from configs/dataset/<id>.yaml or builtins configs/dataset/<id>.yaml
   id: null
   name_or_path: null
+  lazy: true
+  config: null
   content_field: content
   split: null
   limit: 100
@@ -31,8 +33,9 @@ output:
   snapshot_backend: loguru
 
 prompt:
-  system_path: builtin://prompts/datasets_system_prompt.txt
-  user_template_path: builtin://prompts/datasets_user_template_prompt.txt
+  # null selects the packaged default; otherwise use a normal local path.
+  system_path: null
+  user_template_path: null
   variables: {}
 
 runtime:

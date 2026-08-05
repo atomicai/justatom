@@ -1,4 +1,6 @@
-name_or_path: hf://d0rj/boolq-ru
+name_or_path: d0rj/boolq-ru
+lazy: true
+config: null
 labels_field: question
 content_field: passage
 split: train

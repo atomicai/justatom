@@ -160,7 +160,7 @@ def _cfg_to_main_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         collection_name = resolve_collection_name(
             collection_name,
             model_name_or_path=model.get("name"),
-            dataset_name_or_path=dataset.get("name_or_path") or dataset.get("id"),
+            dataset_name_or_path=dataset.get("id") or dataset.get("name_or_path"),
             collection_tag=collection_tag,
         )
 

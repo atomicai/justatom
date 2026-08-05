@@ -1,4 +1,6 @@
-name_or_path: builtin://datasets/demo_retrieval.jsonl
+name_or_path: demo
+lazy: true
+config: null
 labels_field: queries
 content_field: content
 split: null

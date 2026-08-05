@@ -32,18 +32,19 @@ This keeps scenario files short while still allowing richer dataset definitions.
 
 ## Supported Dataset Sources
 
-### Repo-local named dataset
+### Repo-local dataset preset
 
 ```yaml
-name_or_path: justatom
+id: justatom
 ```
 
-Resolves to the repository's local working dataset.
+Resolves to `.data/polaroids.ai.data.json` with `lazy: false`.
 
 ### Packaged built-in dataset
 
 ```yaml
-name_or_path: builtin://datasets/demo_retrieval.jsonl
+name_or_path: demo
+lazy: true
 ```
 
 Useful for smoke tests and tiny examples.
@@ -51,7 +52,9 @@ Useful for smoke tests and tiny examples.
 ### Hugging Face dataset
 
 ```yaml
-name_or_path: hf://MLNavigator/russian-retrieval
+name_or_path: MLNavigator/russian-retrieval
+config: null
+lazy: true
 split: train
 ```
 
@@ -69,6 +72,9 @@ name_or_path: /absolute/path/to/train.parquet
 ```
 
 Supported formats include `.json`, `.jsonl`, `.parquet`, `.csv`, and `.xlsx`.
+Lazy mode is a real row iterator for `.jsonl`, `.parquet`, and `.csv`. Use
+`lazy: false` for `.json` and `.xlsx`; these formats raise a clear error when
+lazy mode is requested.
 
 ## Current Preset IDs
 
@@ -87,10 +93,10 @@ Supported formats include `.json`, `.jsonl`, `.parquet`, `.csv`, and `.xlsx`.
 - Source: `justatom/builtins/configs/dataset/demo-train.yaml`
 - Best for: training smoke tests
 
-### `mlnavigator-russian-retrieval`
+### `boolq-ru`
 
-- Source: `justatom/builtins/configs/dataset/mlnavigator-russian-retrieval.yaml`
-- Best for: realistic HF-backed Russian retrieval experiments
+- Source: `configs/dataset/boolq-ru.yaml`
+- Best for: compact Russian QA retrieval experiments backed by Hugging Face
 
 ## Quick Start: Evaluation
 
@@ -109,7 +115,7 @@ python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id demo-eva
 ### Evaluate with MLNavigator on Hugging Face
 
 ```bash
-python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id mlnavigator-russian-retrieval
+python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id boolq-ru
 ```
 
 ### Evaluate with direct overrides
@@ -117,7 +123,7 @@ python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id mlnaviga
 ```bash
 python -m justatom.api.eval \
   --config configs/evaluate.yaml \
-  --dataset.name_or_path hf://MLNavigator/russian-retrieval \
+  --dataset.name_or_path MLNavigator/russian-retrieval \
   --dataset.split train \
   --dataset.content_field text \
   --dataset.labels_field q
