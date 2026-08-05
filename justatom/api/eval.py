@@ -2,6 +2,7 @@ import argparse
 import asyncio as asio
 import inspect
 import os
+import re
 import sys
 from collections.abc import Iterable
 from pathlib import Path
@@ -31,6 +32,11 @@ logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK
 # looks like an e5 family member and the user did not pass an explicit prefix.
 E5_QUERY_PREFIX = "query: "
 E5_PASSAGE_PREFIX = "passage: "
+_INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _portable_filename(value: str) -> str:
+    return _INVALID_FILENAME_CHARS.sub("_", value).rstrip(" .")
 
 
 def _looks_like_e5_model(model_name_or_path: str | Path | None) -> bool:
@@ -427,7 +433,8 @@ async def main(
         snap_props = "|" if snap_props == "" else f"|{snap_props}|"
 
         save_results_to_dir.mkdir(exist_ok=True, parents=True)
-        save_final_path = (save_results_to_dir / f"{search_pipeline}{snap_props}{snap_name}.csv").resolve()
+        result_filename = _portable_filename(f"{search_pipeline}{snap_props}{snap_name}.csv")
+        save_final_path = (save_results_to_dir / result_filename).resolve()
         pl_metrics.write_csv(str(save_final_path))
         logger.info(
             "Evaluation metrics were saved to [{}]",

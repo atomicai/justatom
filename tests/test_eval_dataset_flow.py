@@ -75,6 +75,9 @@ def test_eval_opens_dataset_once_and_captures_labels_during_indexing(tmp_path):
     assert source_calls[0][1]["config"] == "russian"
     assert indexed_documents == documents
     assert evaluated_queries == ["q1", "q2", "q3"]
+    result_files = list(tmp_path.glob("*.csv"))
+    assert len(result_files) == 1
+    assert "|" not in result_files[0].name
 
 
 def test_eval_captures_labels_when_existing_index_skips_documents(tmp_path):

@@ -37,6 +37,7 @@ def test_local_path_expands_user_home(tmp_path, monkeypatch):
     dataset_path = tmp_path / "dataset.jsonl"
     dataset_path.write_text('{"id": 1}\n', encoding="utf-8")
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     source = resolve_dataset_source("~/dataset.jsonl")
 
