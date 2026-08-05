@@ -195,6 +195,50 @@ def _normalize_atom_gate_config(cfg: dict[str, Any]) -> dict[str, Any]:
                     "too_hard_margin",
                     training_cfg.get("memory_bank_too_hard_margin"),
                 ),
+                "memory_bank_hard_similarity_cap": bank_cfg.get(
+                    "hard_similarity_cap",
+                    training_cfg.get("memory_bank_hard_similarity_cap"),
+                ),
+                "memory_bank_adaptive_hard": _enabled(
+                    bank_cfg.get("adaptive_hard", training_cfg.get("memory_bank_adaptive_hard", False))
+                ),
+                "memory_bank_adaptive_hard_mode": str(
+                    bank_cfg.get(
+                        "adaptive_hard_mode",
+                        training_cfg.get("memory_bank_adaptive_hard_mode", "hard"),
+                    )
+                ),
+                "memory_bank_hard_collision_threshold": float(
+                    bank_cfg.get(
+                        "hard_collision_threshold",
+                        training_cfg.get("memory_bank_hard_collision_threshold", 0.0),
+                    )
+                    or 0.0
+                ),
+                "memory_bank_hard_collision_beta": float(
+                    bank_cfg.get(
+                        "hard_collision_beta",
+                        training_cfg.get("memory_bank_hard_collision_beta", 0.05),
+                    )
+                    or 0.05
+                ),
+                "memory_bank_soft_mode": str(
+                    bank_cfg.get("soft_mode", training_cfg.get("memory_bank_soft_mode", "hard"))
+                ),
+                "memory_bank_soft_beta": bank_cfg.get(
+                    "soft_beta",
+                    training_cfg.get("memory_bank_soft_beta"),
+                ),
+                "memory_bank_margin_head": _enabled(
+                    bank_cfg.get("margin_head", training_cfg.get("memory_bank_margin_head", False))
+                ),
+                "memory_bank_margin_regularization_weight": float(
+                    bank_cfg.get(
+                        "margin_regularization_weight",
+                        training_cfg.get("memory_bank_margin_regularization_weight", 0.0),
+                    )
+                    or 0.0
+                ),
             }
         )
 
@@ -309,6 +353,25 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
             if training.get("memory_bank_too_hard_margin") is None
             else float(training.get("memory_bank_too_hard_margin"))
         ),
+        memory_bank_hard_similarity_cap=(
+            None
+            if training.get("memory_bank_hard_similarity_cap") is None
+            else float(training.get("memory_bank_hard_similarity_cap"))
+        ),
+        memory_bank_adaptive_hard=_enabled(training.get("memory_bank_adaptive_hard", False)),
+        memory_bank_adaptive_hard_mode=str(training.get("memory_bank_adaptive_hard_mode", "hard")),
+        memory_bank_hard_collision_threshold=float(
+            training.get("memory_bank_hard_collision_threshold", 0.0) or 0.0
+        ),
+        memory_bank_hard_collision_beta=float(training.get("memory_bank_hard_collision_beta", 0.05) or 0.05),
+        memory_bank_soft_mode=str(training.get("memory_bank_soft_mode", "hard")),
+        memory_bank_soft_beta=(
+            None if training.get("memory_bank_soft_beta") is None else float(training.get("memory_bank_soft_beta"))
+        ),
+        memory_bank_margin_head=_enabled(training.get("memory_bank_margin_head", False)),
+        memory_bank_margin_regularization_weight=float(
+            training.get("memory_bank_margin_regularization_weight", 0.0) or 0.0
+        ),
         focal_gamma=float(training.get("focal_gamma", 2.0)),
     )
 
@@ -329,6 +392,13 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "num_samples": int(training.get("num_samples", 100)),
         "batch_size": int(training.get("batch_size", 4)),
         "max_seq_len": int(training.get("max_seq_len", 512)),
+        "max_query_seq_len": (
+            None
+            if training.get("max_query_seq_len") is None
+            else int(training.get("max_query_seq_len"))
+        ),
+        "query_prefix": str(training.get("query_prefix", "query:")),
+        "content_prefix": str(training.get("content_prefix", "passage:")),
         "freeze_encoder": bool(training.get("freeze_encoder", True)),
         "gamma_joint": bool(training.get("gamma_joint", False)),
         "include_semantic_gamma": bool(training.get("include_semantic_gamma", True)),
@@ -380,6 +450,25 @@ def _cfg_to_train_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
             None
             if training.get("memory_bank_too_hard_margin") is None
             else float(training.get("memory_bank_too_hard_margin"))
+        ),
+        "memory_bank_hard_similarity_cap": (
+            None
+            if training.get("memory_bank_hard_similarity_cap") is None
+            else float(training.get("memory_bank_hard_similarity_cap"))
+        ),
+        "memory_bank_adaptive_hard": _enabled(training.get("memory_bank_adaptive_hard", False)),
+        "memory_bank_adaptive_hard_mode": str(training.get("memory_bank_adaptive_hard_mode", "hard")),
+        "memory_bank_hard_collision_threshold": float(
+            training.get("memory_bank_hard_collision_threshold", 0.0) or 0.0
+        ),
+        "memory_bank_hard_collision_beta": float(training.get("memory_bank_hard_collision_beta", 0.05) or 0.05),
+        "memory_bank_soft_mode": str(training.get("memory_bank_soft_mode", "hard")),
+        "memory_bank_soft_beta": (
+            None if training.get("memory_bank_soft_beta") is None else float(training.get("memory_bank_soft_beta"))
+        ),
+        "memory_bank_margin_head": _enabled(training.get("memory_bank_margin_head", False)),
+        "memory_bank_margin_regularization_weight": float(
+            training.get("memory_bank_margin_regularization_weight", 0.0) or 0.0
         ),
         "min_negative_inverse_idf_recall": (
             None

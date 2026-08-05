@@ -32,6 +32,33 @@ def _normalize_optimizer_name(name: str | None, *, default: str) -> str:
     return aliases[normalized]
 
 
+@torch.no_grad()
+def _scalar_distribution_metrics(values: torch.Tensor, prefix: str) -> dict[str, float]:
+    """Return compact distribution telemetry for a per-row scalar tensor."""
+    values = values.detach().float().reshape(-1).cpu()
+    if values.numel() == 0:
+        return {
+            f"{prefix}Mean": float("nan"),
+            f"{prefix}Std": float("nan"),
+            f"{prefix}Min": float("nan"),
+            f"{prefix}P05": float("nan"),
+            f"{prefix}P50": float("nan"),
+            f"{prefix}P95": float("nan"),
+            f"{prefix}Max": float("nan"),
+        }
+
+    quantiles = torch.quantile(values, torch.tensor([0.05, 0.50, 0.95], dtype=values.dtype))
+    return {
+        f"{prefix}Mean": float(values.mean().item()),
+        f"{prefix}Std": float(values.std(unbiased=False).item()),
+        f"{prefix}Min": float(values.min().item()),
+        f"{prefix}P05": float(quantiles[0].item()),
+        f"{prefix}P50": float(quantiles[1].item()),
+        f"{prefix}P95": float(quantiles[2].item()),
+        f"{prefix}Max": float(values.max().item()),
+    }
+
+
 def _sample_negative_derangement(batch_size: int, device: torch.device) -> torch.Tensor:
     if batch_size < 2:
         raise ValueError("loss=soft-contrastive requires batch_size >= 2 to construct negative pairs")
@@ -360,6 +387,15 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         memory_bank_hard_warmup_steps: int = 0,
         memory_bank_hard_ramp_steps: int = 1,
         memory_bank_too_hard_margin: float | None = None,
+        memory_bank_hard_similarity_cap: float | None = None,
+        memory_bank_adaptive_hard: bool = False,
+        memory_bank_adaptive_hard_mode: str = "hard",
+        memory_bank_hard_collision_threshold: float = 0.0,
+        memory_bank_hard_collision_beta: float = 0.05,
+        memory_bank_soft_mode: str = "hard",
+        memory_bank_soft_beta: float | None = None,
+        memory_bank_margin_head: bool = False,
+        memory_bank_margin_regularization_weight: float = 0.0,
         lexical_text_by_content: dict[str, str] | None = None,
         save_dir: str | Path | None = None,
         metrics_path: str | Path | None = None,
@@ -394,6 +430,40 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         self.contrastive_soft_fn_attract_weight = float(contrastive_soft_fn_attract_weight)
         self.contrastive_soft_fn_topk = max(int(contrastive_soft_fn_topk), 1)
         self.contrastive_loss_alpha_gate = bool(contrastive_loss_alpha_gate)
+        self.memory_bank_soft_mode = str(memory_bank_soft_mode).strip().lower()
+        if self.memory_bank_soft_mode not in {"hard", "soft-const", "soft"}:
+            raise ValueError("memory_bank_soft_mode must be one of: hard, soft-const, soft")
+        self.memory_bank_margin_head = bool(memory_bank_margin_head)
+        if self.memory_bank_margin_head and self.memory_bank_soft_mode == "hard":
+            self.memory_bank_soft_mode = "soft"
+        if self.memory_bank_margin_head and self.memory_bank_soft_mode == "soft-const":
+            raise ValueError("memory_bank_margin_head=True requires memory_bank_soft_mode=soft")
+        self.memory_bank_soft_beta = None if memory_bank_soft_beta is None else float(memory_bank_soft_beta)
+        if self.memory_bank_soft_mode != "hard":
+            if memory_bank_too_hard_margin is None:
+                memory_bank_too_hard_margin = 0.05
+            if self.memory_bank_soft_beta is None:
+                self.memory_bank_soft_beta = 0.05
+            if self.memory_bank_soft_beta <= 0.0:
+                raise ValueError(f"memory_bank_soft_beta must be > 0, got {self.memory_bank_soft_beta}")
+        self.memory_bank_too_hard_margin = None if memory_bank_too_hard_margin is None else float(memory_bank_too_hard_margin)
+        self.memory_bank_adaptive_hard = bool(memory_bank_adaptive_hard)
+        self.memory_bank_adaptive_hard_mode = str(memory_bank_adaptive_hard_mode).strip().lower()
+        if self.memory_bank_adaptive_hard_mode not in {"hard", "soft"}:
+            raise ValueError("memory_bank_adaptive_hard_mode must be one of: hard, soft")
+        self.memory_bank_hard_collision_threshold = float(memory_bank_hard_collision_threshold)
+        self.memory_bank_hard_collision_beta = float(memory_bank_hard_collision_beta)
+        if self.memory_bank_hard_collision_beta <= 0.0:
+            raise ValueError(
+                f"memory_bank_hard_collision_beta must be > 0, got {self.memory_bank_hard_collision_beta}"
+            )
+        self.memory_bank_margin_head = self.memory_bank_soft_mode == "soft"
+        self.memory_bank_margin_regularization_weight = float(memory_bank_margin_regularization_weight)
+        if self.memory_bank_margin_regularization_weight < 0.0:
+            raise ValueError(
+                "memory_bank_margin_regularization_weight must be >= 0, "
+                f"got {self.memory_bank_margin_regularization_weight}"
+            )
         self.memory_bank = _ContrastiveMemoryBank(
             memory_bank_size,
             warmup_steps=memory_bank_warmup_steps,
@@ -402,7 +472,13 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             random_negatives=memory_bank_random_negatives,
             hard_warmup_steps=memory_bank_hard_warmup_steps,
             hard_ramp_steps=memory_bank_hard_ramp_steps,
-            too_hard_margin=memory_bank_too_hard_margin,
+            too_hard_margin=self.memory_bank_too_hard_margin,
+            hard_similarity_cap=memory_bank_hard_similarity_cap,
+            adaptive_hard=self.memory_bank_adaptive_hard,
+            adaptive_hard_mode=self.memory_bank_adaptive_hard_mode,
+            hard_collision_threshold=self.memory_bank_hard_collision_threshold,
+            hard_collision_beta=self.memory_bank_hard_collision_beta,
+            soft_mode=self.memory_bank_soft_mode,
         )
         mode = str(contrastive_loss_alpha_gate_mode).lower()
         if mode not in {"augment", "convex"}:
@@ -624,6 +700,8 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             metrics = {"Grad_norm_alpha_head": self._grad_norm(self.runner.alpha_parameters())}
             if self.runner.query_diagonal_gate:
                 metrics["Grad_norm_query_diagonal_head"] = self._grad_norm(self.runner.query_diagonal_parameters())
+            if getattr(self.runner, "margin_head", None) is not None:
+                metrics["Grad_norm_margin_head"] = self._grad_norm(self.runner.margin_parameters())
             return metrics
         return {
             "Grad_norm_gamma1": (self._grad_norm([self.runner.gamma1]) if self.runner.include_semantic_gamma else 0.0),
@@ -734,6 +812,36 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         scores = q_vecs @ d_vecs.T
         return q_vecs, d_vecs, scores
 
+    def _memory_bank_margin_weights(self, q_vecs: torch.Tensor) -> torch.Tensor | None:
+        if self.memory_bank_soft_mode == "hard":
+            return None
+        if self.memory_bank_soft_mode == "soft-const":
+            if self.memory_bank_too_hard_margin is None:
+                raise RuntimeError("memory_bank_soft_mode=soft-const requires memory_bank_too_hard_margin")
+            return q_vecs.new_full((int(q_vecs.shape[0]),), float(self.memory_bank_too_hard_margin))
+        if self.memory_bank_soft_mode == "soft":
+            if not self.memory_bank_margin_head:
+                raise RuntimeError("memory_bank_soft_mode=soft requires memory_bank_margin_head=True")
+            if not getattr(self.runner, "margin_query_conditional", False) or getattr(self.runner, "margin_head", None) is None:
+                raise RuntimeError("memory_bank_soft_mode=soft requires a query-conditional margin head on the runner")
+            return self.runner.margin_weights(q_vecs)
+        raise RuntimeError(f"Unsupported memory_bank_soft_mode={self.memory_bank_soft_mode!r}")
+
+    def _memory_bank_margin_regularization(
+        self,
+        memory_margin_raw: torch.Tensor | None,
+    ) -> tuple[torch.Tensor | None, float]:
+        if memory_margin_raw is None or self.memory_bank_margin_regularization_weight <= 0.0:
+            return None, float(self.memory_bank_too_hard_margin if self.memory_bank_too_hard_margin is not None else 0.05)
+        runner_target = getattr(self.runner, "margin_base", None)
+        target = float(
+            runner_target
+            if runner_target is not None
+            else (self.memory_bank_too_hard_margin if self.memory_bank_too_hard_margin is not None else 0.05)
+        )
+        penalty = self.memory_bank_margin_regularization_weight * (memory_margin_raw - target).pow(2).mean()
+        return penalty, target
+
     def _compute_contrastive_loss(
         self,
         *,
@@ -759,15 +867,32 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             metrics["TauQueryStd"] = tau_per_query.detach().std(unbiased=False)
             metrics["TauQueryMin"] = tau_per_query.detach().min()
             metrics["TauQueryMax"] = tau_per_query.detach().max()
-        memory_negatives, memory_negative_mask, memory_metrics = self.memory_bank.get(
+        memory_negatives, memory_negative_mask, memory_log_weights, memory_metrics = self.memory_bank.get(
             batch,
             device=q_vecs.device,
             dtype=q_vecs.dtype,
             query_vectors=q_vecs,
             positive_vectors=d_vecs,
             step=int(self.global_step),
+            return_log_weights=True,
         )
         metrics.update(memory_metrics)
+        memory_margin = self._memory_bank_margin_weights(q_vecs)
+        memory_margin_raw = None
+        if memory_margin is not None:
+            metrics.update(_scalar_distribution_metrics(memory_margin, "ContrastiveMemoryMargin"))
+            if self.memory_bank_soft_mode == "soft" and hasattr(self.runner, "margin_raw_weights"):
+                memory_margin_raw = self.runner.margin_raw_weights(q_vecs)
+            else:
+                memory_margin_raw = memory_margin
+            metrics.update(_scalar_distribution_metrics(memory_margin_raw, "ContrastiveMemoryMarginRaw"))
+            metrics["ContrastiveMemorySoftBeta"] = float(self.memory_bank_soft_beta)
+            metrics["ContrastiveMemorySoftMode"] = {
+                "hard": 0.0,
+                "soft-const": 1.0,
+                "soft": 2.0,
+            }[self.memory_bank_soft_mode]
+        margin_reg_loss, margin_reg_target = self._memory_bank_margin_regularization(memory_margin_raw)
         main_per_row = loss_fn.info_nce(
             q_vecs,
             d_vecs,
@@ -775,6 +900,9 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             tau_per_query=tau_per_query,
             memory_negatives=memory_negatives,
             memory_negative_mask=memory_negative_mask,
+            memory_log_weights=memory_log_weights,
+            memory_margin=memory_margin,
+            memory_soft_beta=self.memory_bank_soft_beta,
         )
         with torch.no_grad():
             in_batch_negatives = float(max(int(q_vecs.shape[0]) - 1, 0))
@@ -838,7 +966,7 @@ class _BaseGammaLightningTrainer(L.LightningModule):
                 loss = loss - ent_bonus
                 metrics["AlphaGateEntropyBonus"] = ent_bonus.detach()
             metrics["ContrastiveLossAlphaGate"] = 1.0
-            metrics["ContrastiveLossAlphaGateAlphaMean"] = alpha_q.detach().mean()
+            metrics.update(_scalar_distribution_metrics(alpha_q, "ContrastiveLossAlphaGateAlpha"))
             metrics["ContrastiveLossAlphaGateMode"] = 1.0 if self.contrastive_loss_alpha_gate_mode == "augment" else 0.0
             metrics["AlphaGatePriorWeight"] = float(self._alpha_gate_prior_weight)
             metrics["AlphaGatePriorTarget"] = float(self._alpha_gate_prior_target)
@@ -851,6 +979,12 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             if aux_per_row is not None:
                 loss = loss + aux_per_row.mean()
             metrics["ContrastiveLossAlphaGate"] = float(int(self.contrastive_loss_alpha_gate))
+
+        if margin_reg_loss is not None:
+            loss = loss + margin_reg_loss
+            metrics["ContrastiveMemoryMarginRegLoss"] = margin_reg_loss.detach()
+        metrics["ContrastiveMemoryMarginRegWeight"] = float(self.memory_bank_margin_regularization_weight)
+        metrics["ContrastiveMemoryMarginRegTarget"] = float(margin_reg_target)
 
         with torch.no_grad():
             metrics["ContrastiveMainLoss"] = main_per_row.mean().detach()
@@ -1171,6 +1305,15 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
         memory_bank_hard_warmup_steps: int = 0,
         memory_bank_hard_ramp_steps: int = 1,
         memory_bank_too_hard_margin: float | None = None,
+        memory_bank_hard_similarity_cap: float | None = None,
+        memory_bank_adaptive_hard: bool = False,
+        memory_bank_adaptive_hard_mode: str = "hard",
+        memory_bank_hard_collision_threshold: float = 0.0,
+        memory_bank_hard_collision_beta: float = 0.05,
+        memory_bank_soft_mode: str = "hard",
+        memory_bank_soft_beta: float | None = None,
+        memory_bank_margin_head: bool = False,
+        memory_bank_margin_regularization_weight: float = 0.0,
         lexical_text_by_content: dict[str, str] | None = None,
         save_dir: str | Path | None = None,
         metrics_path: str | Path | None = None,
@@ -1192,6 +1335,35 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
         self.contrastive_simcse_dropout_weight = float(contrastive_simcse_dropout_weight)
         self.contrastive_soft_fn_attract_weight = float(contrastive_soft_fn_attract_weight)
         self.contrastive_soft_fn_topk = max(int(contrastive_soft_fn_topk), 1)
+        self.memory_bank_soft_mode = str(memory_bank_soft_mode).strip().lower()
+        if self.memory_bank_soft_mode not in {"hard", "soft-const", "soft"}:
+            raise ValueError("memory_bank_soft_mode must be one of: hard, soft-const, soft")
+        if memory_bank_margin_head and self.memory_bank_soft_mode == "hard":
+            self.memory_bank_soft_mode = "soft"
+        if self.memory_bank_soft_mode == "soft" or memory_bank_margin_head:
+            raise ValueError("query-conditional memory margins require GammaHybridRunner/Atom Gate training")
+        self.memory_bank_soft_beta = None if memory_bank_soft_beta is None else float(memory_bank_soft_beta)
+        if self.memory_bank_soft_mode != "hard":
+            if memory_bank_too_hard_margin is None:
+                memory_bank_too_hard_margin = 0.05
+            if self.memory_bank_soft_beta is None:
+                self.memory_bank_soft_beta = 0.05
+            if self.memory_bank_soft_beta <= 0.0:
+                raise ValueError(f"memory_bank_soft_beta must be > 0, got {self.memory_bank_soft_beta}")
+        self.memory_bank_too_hard_margin = None if memory_bank_too_hard_margin is None else float(memory_bank_too_hard_margin)
+        self.memory_bank_adaptive_hard = bool(memory_bank_adaptive_hard)
+        self.memory_bank_adaptive_hard_mode = str(memory_bank_adaptive_hard_mode).strip().lower()
+        if self.memory_bank_adaptive_hard_mode not in {"hard", "soft"}:
+            raise ValueError("memory_bank_adaptive_hard_mode must be one of: hard, soft")
+        self.memory_bank_hard_collision_threshold = float(memory_bank_hard_collision_threshold)
+        self.memory_bank_hard_collision_beta = float(memory_bank_hard_collision_beta)
+        if self.memory_bank_hard_collision_beta <= 0.0:
+            raise ValueError(
+                f"memory_bank_hard_collision_beta must be > 0, got {self.memory_bank_hard_collision_beta}"
+            )
+        self.memory_bank_margin_regularization_weight = float(memory_bank_margin_regularization_weight)
+        if self.memory_bank_margin_regularization_weight != 0.0:
+            raise ValueError("memory_bank_margin_regularization_weight requires GammaHybridRunner/Atom Gate training")
         self.memory_bank = _ContrastiveMemoryBank(
             memory_bank_size,
             warmup_steps=memory_bank_warmup_steps,
@@ -1200,7 +1372,13 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
             random_negatives=memory_bank_random_negatives,
             hard_warmup_steps=memory_bank_hard_warmup_steps,
             hard_ramp_steps=memory_bank_hard_ramp_steps,
-            too_hard_margin=memory_bank_too_hard_margin,
+            too_hard_margin=self.memory_bank_too_hard_margin,
+            hard_similarity_cap=memory_bank_hard_similarity_cap,
+            adaptive_hard=self.memory_bank_adaptive_hard,
+            adaptive_hard_mode=self.memory_bank_adaptive_hard_mode,
+            hard_collision_threshold=self.memory_bank_hard_collision_threshold,
+            hard_collision_beta=self.memory_bank_hard_collision_beta,
+            soft_mode=self.memory_bank_soft_mode,
         )
         if self.contrastive_simcse_dropout_weight < 0.0:
             raise ValueError("contrastive_simcse_dropout_weight must be >= 0")
@@ -1379,20 +1557,32 @@ class EncoderOnlyLightningTrainer(L.LightningModule):
         else:
             safe_negative_fallbacks = 0
             loss_fn: ContrastiveLoss = self.loss_fn
-            memory_negatives, memory_negative_mask, memory_metrics = self.memory_bank.get(
+            memory_negatives, memory_negative_mask, memory_log_weights, memory_metrics = self.memory_bank.get(
                 batch,
                 device=q_vecs.device,
                 dtype=q_vecs.dtype,
                 query_vectors=q_vecs,
                 positive_vectors=d_vecs,
                 step=int(self.global_step),
+                return_log_weights=True,
             )
+            memory_margin = None
+            if self.memory_bank_soft_mode == "soft-const":
+                if self.memory_bank_too_hard_margin is None:
+                    raise RuntimeError("memory_bank_soft_mode=soft-const requires memory_bank_too_hard_margin")
+                memory_margin = q_vecs.new_full((int(q_vecs.shape[0]),), float(self.memory_bank_too_hard_margin))
+                contrastive_aux_metrics.update(_scalar_distribution_metrics(memory_margin, "ContrastiveMemoryMargin"))
+                contrastive_aux_metrics["ContrastiveMemorySoftBeta"] = float(self.memory_bank_soft_beta)
+                contrastive_aux_metrics["ContrastiveMemorySoftMode"] = 1.0
             main_per_row = loss_fn.info_nce(
                 q_vecs,
                 d_vecs,
                 reduction="none",
                 memory_negatives=memory_negatives,
                 memory_negative_mask=memory_negative_mask,
+                memory_log_weights=memory_log_weights,
+                memory_margin=memory_margin,
+                memory_soft_beta=self.memory_bank_soft_beta,
             )
             extra = main_per_row.new_zeros(())
             simcse_per_row = None

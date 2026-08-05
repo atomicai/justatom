@@ -128,6 +128,8 @@ class DatasetRecordAdapter:
         raw = value.strip()
         if raw == "":
             return value
+        if raw[0] not in "[{":
+            return value
         repaired_obj = json_repair_loads(raw)
         if repaired_obj == "" and raw not in {'""', "''"}:
             return value

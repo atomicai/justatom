@@ -183,6 +183,7 @@ class TrainWithContrastiveProcessor(IProcessor):
         self,
         tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
         max_seq_len: int = 512,
+        max_query_seq_len: int | None = None,
         queries_prefix: str = "query:",
         queries_field: str = "query",
         pos_queries_field: str = "content",
@@ -192,6 +193,7 @@ class TrainWithContrastiveProcessor(IProcessor):
         super().__init__()
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
+        self.max_query_seq_len = max_seq_len if max_query_seq_len is None else max_query_seq_len
         self.queries_field = queries_field
         self.queries_prefix = queries_prefix
         self.pos_queries_prefix = pos_queries_prefix
@@ -227,7 +229,12 @@ class TrainWithContrastiveProcessor(IProcessor):
             for x in dicts
         ]
         # ---
-        tokenized_queries_batch = self.tokenizer(queries, truncation=True, max_length=self.max_seq_len, padding="max_length")
+        tokenized_queries_batch = self.tokenizer(
+            queries,
+            truncation=True,
+            max_length=self.max_query_seq_len,
+            padding="max_length",
+        )
         tokenized_pos_queries_batch = self.tokenizer(
             pos_queries,
             truncation=True,

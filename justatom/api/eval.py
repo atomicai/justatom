@@ -3,16 +3,13 @@ import asyncio as asio
 import inspect
 import os
 import sys
-from collections.abc import Generator, Iterable
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 import dotenv
-import numpy as np
 import polars as pl
-import torch
 from loguru import logger
-from torch.utils.data import ConcatDataset
 from tqdm.auto import tqdm
 
 from justatom.configuring.scenarios import deep_merge
@@ -28,6 +25,35 @@ from justatom.tooling import stl
 dotenv.load_dotenv()
 
 logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK', -1)}")
+
+
+# Training always wraps queries with `query: ` and passages with `passage: ` (see
+# justatom.processing.prime defaults). Skipping them at eval silently degrades
+# every e5 checkpoint by ~3-5 pp HR@1, so we auto-inject when the model name
+# looks like an e5 family member and the user did not pass an explicit prefix.
+E5_QUERY_PREFIX = "query: "
+E5_PASSAGE_PREFIX = "passage: "
+
+
+def _looks_like_e5_model(model_name_or_path: str | Path | None) -> bool:
+    if model_name_or_path is None:
+        return False
+    name = str(model_name_or_path).lower()
+    if "/e5" in name or "-e5-" in name or name.startswith("e5") or "multilingual-e5" in name:
+        return True
+    # For local fine-tuned checkpoints the path itself rarely mentions e5 (e.g.
+    # .tmp_runs/.../BiGamma/epoch1). Fall back to the checkpoint's config.json
+    # `_name_or_path`, which preserves the original base model identifier.
+    try:
+        cfg_path = Path(model_name_or_path) / "config.json"
+        if cfg_path.is_file():
+            import json
+
+            base = str(json.loads(cfg_path.read_text()).get("_name_or_path", "")).lower()
+            return "e5" in base
+    except (OSError, ValueError):
+        pass
+    return False
 
 
 def _legacy_cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
@@ -248,33 +274,6 @@ def _parse_args(argv: list[str] | None = None) -> dict:
     )
 
 
-def to_numpy(container):
-    try:
-        return container.cpu().numpy()
-    except AttributeError:
-        return container
-
-
-def random_split(ds: ConcatDataset, lengths: list[int]):
-    if sum(lengths) != len(ds):
-        raise ValueError("Sum of input lengths does not equal the length of the input dataset!")
-
-    try:
-        idx_dataset = np.where(np.array(ds.cumulative_sizes) > lengths[0])[0][0]
-    except IndexError as ex:
-        raise Exception(
-            "All dataset chunks are being assigned to train set leaving no samples for dev set. "
-            "Either consider increasing dev_split or setting it to 0.0\n"
-            f"Cumulative chunk sizes: {ds.cumulative_sizes}\n"
-            f"train/dev split: {lengths}"
-        ) from ex
-
-    assert idx_dataset >= 1, "Dev_split ratio is too large, there is no data in train set."
-    train = ConcatDataset(ds.datasets[:idx_dataset])
-    test = ConcatDataset(ds.datasets[idx_dataset:])
-    return train, test
-
-
 async def main(
     model_name_or_path: str | None = None,
     search_pipeline: str = "embedding",
@@ -306,6 +305,19 @@ async def main(
 ):
     ir_runner = None
     collection_name = collection_name or "Document"
+
+    # Auto-inject e5 prefixes when the model looks like an e5 family checkpoint
+    # and the caller did not pass an explicit prefix. Training side always wraps
+    # queries/passages with these prefixes (justatom.processing.prime defaults),
+    # so eval must mirror them or we silently lose ~3-5 pp HR@1 on every metric.
+    if _looks_like_e5_model(model_name_or_path):
+        if query_prefix is None:
+            query_prefix = E5_QUERY_PREFIX
+            logger.info("Auto-injected e5 query prefix: {!r}", query_prefix)
+        if content_prefix is None:
+            content_prefix = E5_PASSAGE_PREFIX
+            logger.info("Auto-injected e5 content prefix: {!r}", content_prefix)
+
     if dataset_name_or_path is None:
         resolved_dataset_name_or_path = None
     else:

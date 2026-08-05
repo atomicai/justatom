@@ -207,6 +207,61 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(kwargs["split"], "train")
         self.assertIsNone(kwargs["limit"])
 
+    def test_repo_mmarco_ru_selected_dataset_preset_resolves_for_train(self):
+        kwargs = resolve_train_kwargs(config={"dataset": {"id": "mmarco-ru-selected"}})
+
+        self.assertEqual(
+            kwargs["dataset_name_or_path"],
+            "justatom/mmarco-ru-selected",
+        )
+        self.assertEqual(kwargs["labels_field"], "query")
+        self.assertEqual(kwargs["content_field"], "positive")
+        self.assertEqual(kwargs["chunk_id_col"], "pair_id")
+        self.assertEqual(kwargs["split"], "train")
+        self.assertIsNone(kwargs["limit"])
+
+    def test_repo_mmarco_ru_selected_train_and_dev_presets_resolve(self):
+        train_kwargs = resolve_train_kwargs(config={"dataset": {"id": "mmarco-ru-selected-train"}})
+        eval_kwargs = resolve_eval_kwargs(config={"dataset": {"id": "mmarco-ru-selected-dev"}})
+
+        self.assertEqual(
+            train_kwargs["dataset_name_or_path"],
+            "justatom/mmarco-ru-selected",
+        )
+        self.assertEqual(train_kwargs["labels_field"], "query")
+        self.assertEqual(train_kwargs["content_field"], "positive")
+        self.assertEqual(train_kwargs["chunk_id_col"], "pair_id")
+        self.assertEqual(train_kwargs["split"], "train")
+
+        self.assertEqual(
+            eval_kwargs["dataset_name_or_path"],
+            "justatom/mmarco-ru-selected",
+        )
+        self.assertEqual(eval_kwargs["labels_field"], "query")
+        self.assertEqual(eval_kwargs["content_field"], "positive")
+        self.assertEqual(eval_kwargs["chunk_id_col"], "pair_id")
+        self.assertEqual(eval_kwargs["split"], "dev")
+
+    def test_repo_mmarco_ru_selected_preset_records_selection_contract(self):
+        cfg = load_scenario_config("train", config={"dataset": {"id": "mmarco-ru-selected"}})
+        dataset = cfg["dataset"]
+
+        self.assertEqual(dataset["display_name"], "mMARCO-ru-selected")
+        self.assertEqual(dataset["source"], "justatom/mmarco-ru-selected")
+        self.assertEqual(dataset["upstream_source"], "ir_datasets:mmarco/v2/ru")
+        self.assertEqual(dataset["split"], "train")
+        self.assertEqual(dataset["selection"]["seed"], 42)
+        self.assertEqual(dataset["selection"]["train_rows"], 50_000)
+        self.assertEqual(dataset["selection"]["dev_queries"], 5_000)
+        self.assertEqual(dataset["selection"]["eval_corpus_docs"], 50_000)
+        self.assertEqual(dataset["train"]["name_or_path"], "justatom/mmarco-ru-selected")
+        self.assertEqual(dataset["train"]["split"], "train")
+        self.assertEqual(dataset["eval"]["name_or_path"], "justatom/mmarco-ru-selected")
+        self.assertEqual(dataset["eval"]["split"], "dev")
+        self.assertEqual(dataset["corpus"]["name_or_path"], "justatom/mmarco-ru-selected")
+        self.assertEqual(dataset["corpus"]["split"], "corpus")
+        self.assertEqual(dataset["manifest_path"], "hf://datasets/justatom/mmarco-ru-selected/manifest.json")
+
     def test_train_supports_direct_dict_config(self):
         kwargs = resolve_train_kwargs(
             config={

@@ -25,6 +25,7 @@ NSAMPLES="${NSAMPLES:-}"
 BATCH_SIZE="${BATCH_SIZE:-96}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-64}"
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-512}"
+MAX_QUERY_SEQ_LEN="${MAX_QUERY_SEQ_LEN:-}"
 EPOCHS="${EPOCHS:-1}"
 GRAD_ACC_STEPS="${GRAD_ACC_STEPS:-6}"
 LR_ENCODER="${LR_ENCODER:-2e-5}"
@@ -37,6 +38,15 @@ MEMORY_BANK_RANDOM_NEGATIVES="${MEMORY_BANK_RANDOM_NEGATIVES:-0}"
 MEMORY_BANK_HARD_WARMUP_STEPS="${MEMORY_BANK_HARD_WARMUP_STEPS:-0}"
 MEMORY_BANK_HARD_RAMP_STEPS="${MEMORY_BANK_HARD_RAMP_STEPS:-1}"
 MEMORY_BANK_TOO_HARD_MARGIN="${MEMORY_BANK_TOO_HARD_MARGIN:-}"
+MEMORY_BANK_HARD_SIMILARITY_CAP="${MEMORY_BANK_HARD_SIMILARITY_CAP:-}"
+MEMORY_BANK_ADAPTIVE_HARD="${MEMORY_BANK_ADAPTIVE_HARD:-0}"
+MEMORY_BANK_ADAPTIVE_HARD_MODE="${MEMORY_BANK_ADAPTIVE_HARD_MODE:-hard}"
+MEMORY_BANK_HARD_COLLISION_THRESHOLD="${MEMORY_BANK_HARD_COLLISION_THRESHOLD:-0.0}"
+MEMORY_BANK_HARD_COLLISION_BETA="${MEMORY_BANK_HARD_COLLISION_BETA:-0.05}"
+MEMORY_BANK_SOFT_MODE="${MEMORY_BANK_SOFT_MODE:-hard}"
+MEMORY_BANK_SOFT_BETA="${MEMORY_BANK_SOFT_BETA:-}"
+MEMORY_BANK_MARGIN_HEAD="${MEMORY_BANK_MARGIN_HEAD:-0}"
+MEMORY_BANK_MARGIN_REG_WEIGHT="${MEMORY_BANK_MARGIN_REG_WEIGHT:-0.0}"
 ADD_ALPHA_GATE="${ADD_ALPHA_GATE:-0}"
 ALPHA_GATE_LAYERS="${ALPHA_GATE_LAYERS:-}"
 ALPHA_GATE_HIDDEN_DIM="${ALPHA_GATE_HIDDEN_DIM:-}"
@@ -76,10 +86,20 @@ CONTRASTIVE_LOSS_ALPHA_GATE_MODE="${CONTRASTIVE_LOSS_ALPHA_GATE_MODE:-}"
 SEARCH_PIPELINE="${SEARCH_PIPELINE:-}"
 SEARCH_TOP_K="${TOP_K:-}"
 INDEX_BATCH_SIZE_OVERRIDE="${INDEX_BATCH_SIZE:-}"
+QUERY_PREFIX_EXPLICIT=0
+CONTENT_PREFIX_EXPLICIT=0
+if [[ ${QUERY_PREFIX+x} == x ]]; then
+  QUERY_PREFIX_EXPLICIT=1
+fi
+if [[ ${CONTENT_PREFIX+x} == x ]]; then
+  CONTENT_PREFIX_EXPLICIT=1
+fi
 QUERY_PREFIX="${QUERY_PREFIX:-}"
 CONTENT_PREFIX="${CONTENT_PREFIX:-}"
 AUTO_E5_PREFIXES="${AUTO_E5_PREFIXES:-0}"
 EXTRA_EVAL_ARGS="${EXTRA_EVAL_ARGS:-}"
+PIPELINE_RESOURCE_LOG="${PIPELINE_RESOURCE_LOG:-1}"
+PIPELINE_RESOURCE_TOP_N="${PIPELINE_RESOURCE_TOP_N:-8}"
 SUMMARY_LOG=""
 
 usage() {
@@ -130,6 +150,7 @@ Advanced options:
   --batch-size N             Train batch size
   --eval-batch-size N        Eval batch size
   --max-seq-len N            Max sequence length for eval
+  --max-query-seq-len N      Optional shorter query length for training
   --epochs N                 Number of epochs
   --grad-acc-steps N         Gradient accumulation steps
   --lr-encoder VALUE         Encoder learning rate
@@ -148,9 +169,26 @@ Advanced options:
                              Steps to ramp hard negatives to max
   --memory-bank-too-hard-margin VALUE
                              Drop bank negatives with sim > pos_sim - VALUE
+  --memory-bank-hard-similarity-cap VALUE
+                             Exclude hard-mined bank candidates with sim > VALUE
+  --memory-bank-adaptive-hard
+                             Per-query hard gate: suppress hard bank negatives when bank_max_sim > pos_sim + threshold
+  --memory-bank-adaptive-hard-mode MODE
+                             hard | soft. soft keeps hard negatives and adds log(sigmoid((threshold-g)/beta))
+  --memory-bank-hard-collision-threshold VALUE
+                             Threshold for --memory-bank-adaptive-hard, default 0.0
+  --memory-bank-hard-collision-beta VALUE
+                             Beta for --memory-bank-adaptive-hard-mode soft, default 0.05
+  --memory-bank-soft-mode MODE
+                             hard | soft-const | soft
+  --memory-bank-soft-beta VALUE
+                             Soft admission sigmoid temperature for bank gating
+  --memory-bank-margin-head  Enable query-conditional m(q) head for soft bank gating
+  --memory-bank-margin-reg-weight VALUE
+                             L2 weight anchoring learned m(q) to the base margin
   --index-batch-size N       Index batch size for eval stages
-  --query-prefix TEXT        Query prefix override for eval stages
-  --content-prefix TEXT      Content prefix override for eval stages
+  --query-prefix TEXT        Query prefix override for train and eval stages
+  --content-prefix TEXT      Content prefix override for train and eval stages
   --auto-e5-prefixes         Auto-set e5-compatible query/content prefixes for eval stages
 
 Examples:
@@ -266,10 +304,24 @@ log() {
   printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$message" | tee -a "$SUMMARY_LOG"
 }
 
+log_rss() {
+  local label="$1"
+  local snapshot=""
+  if [[ "$PIPELINE_RESOURCE_LOG" != "1" ]]; then
+    return 0
+  fi
+  if snapshot="$("$PYTHON_BIN" -m justatom.tooling.resources --label "$label" --pid "$$" --top "$PIPELINE_RESOURCE_TOP_N" 2>/dev/null)"; then
+    log "$snapshot"
+  else
+    log "RSS $label: unavailable"
+  fi
+}
+
 run_cmd() {
   local label="$1"
   local logfile="$2"
   shift 2
+  log_rss "before $label"
   log "START $label"
   set +e
   if [[ "${PIPELINE_TEE_OUTPUT:-1}" == "1" ]]; then
@@ -281,6 +333,7 @@ run_cmd() {
   fi
   set -e
   log "END $label exit=$code"
+  log_rss "after $label"
   return $code
 }
 
@@ -317,6 +370,16 @@ resolve_dataset_id() {
       printf '%s' "$1"
       ;;
   esac
+}
+
+resolve_eval_dataset_id() {
+  local dataset_id="$1"
+  local dev_preset="$REPO_ROOT/configs/dataset/${dataset_id}-dev.yaml"
+  if [[ -f "$dev_preset" ]]; then
+    printf '%s-dev' "$dataset_id"
+    return
+  fi
+  printf '%s' "$dataset_id"
 }
 
 extract_metric() {
@@ -542,6 +605,10 @@ while [[ $# -gt 0 ]]; do
       MAX_SEQ_LEN="$2"
       shift 2
       ;;
+    --max-query-seq-len)
+      MAX_QUERY_SEQ_LEN="$2"
+      shift 2
+      ;;
     --epochs)
       EPOCHS="$2"
       shift 2
@@ -590,16 +657,54 @@ while [[ $# -gt 0 ]]; do
       MEMORY_BANK_TOO_HARD_MARGIN="$2"
       shift 2
       ;;
+    --memory-bank-hard-similarity-cap)
+      MEMORY_BANK_HARD_SIMILARITY_CAP="$2"
+      shift 2
+      ;;
+    --memory-bank-adaptive-hard)
+      MEMORY_BANK_ADAPTIVE_HARD=1
+      shift
+      ;;
+    --memory-bank-adaptive-hard-mode)
+      MEMORY_BANK_ADAPTIVE_HARD_MODE="$2"
+      shift 2
+      ;;
+    --memory-bank-hard-collision-threshold)
+      MEMORY_BANK_HARD_COLLISION_THRESHOLD="$2"
+      shift 2
+      ;;
+    --memory-bank-hard-collision-beta)
+      MEMORY_BANK_HARD_COLLISION_BETA="$2"
+      shift 2
+      ;;
+    --memory-bank-soft-mode)
+      MEMORY_BANK_SOFT_MODE="$2"
+      shift 2
+      ;;
+    --memory-bank-soft-beta)
+      MEMORY_BANK_SOFT_BETA="$2"
+      shift 2
+      ;;
+    --memory-bank-margin-head)
+      MEMORY_BANK_MARGIN_HEAD=1
+      shift
+      ;;
+    --memory-bank-margin-reg-weight|--memory-bank-margin-regularization-weight)
+      MEMORY_BANK_MARGIN_REG_WEIGHT="$2"
+      shift 2
+      ;;
     --index-batch-size)
       INDEX_BATCH_SIZE_OVERRIDE="$2"
       shift 2
       ;;
     --query-prefix)
       QUERY_PREFIX="$2"
+      QUERY_PREFIX_EXPLICIT=1
       shift 2
       ;;
     --content-prefix)
       CONTENT_PREFIX="$2"
+      CONTENT_PREFIX_EXPLICIT=1
       shift 2
       ;;
     --auto-e5-prefixes)
@@ -639,10 +744,12 @@ esac
 
 if [[ "$AUTO_E5_PREFIXES" == "1" ]] && [[ -z "$QUERY_PREFIX" ]] && should_use_e5_prefixes; then
   QUERY_PREFIX="query: "
+  QUERY_PREFIX_EXPLICIT=1
 fi
 
 if [[ "$AUTO_E5_PREFIXES" == "1" ]] && [[ -z "$CONTENT_PREFIX" ]] && should_use_e5_prefixes; then
   CONTENT_PREFIX="passage: "
+  CONTENT_PREFIX_EXPLICIT=1
 fi
 
 if [[ -n "$RECIPE" ]]; then
@@ -765,6 +872,53 @@ case "$MEMORY_BANK_MINING_MODE" in
     ;;
 esac
 
+case "$MEMORY_BANK_SOFT_MODE" in
+  hard|soft-const|soft)
+    ;;
+  *)
+    echo "Unsupported --memory-bank-soft-mode: $MEMORY_BANK_SOFT_MODE" >&2
+    exit 1
+    ;;
+esac
+
+case "$MEMORY_BANK_MARGIN_HEAD" in
+  0|1)
+    ;;
+  *)
+    echo "Unsupported --memory-bank-margin-head value: $MEMORY_BANK_MARGIN_HEAD" >&2
+    exit 1
+    ;;
+esac
+
+case "$MEMORY_BANK_ADAPTIVE_HARD" in
+  0|1|true|false|yes|no|on|off)
+    ;;
+  *)
+    echo "Unsupported --memory-bank-adaptive-hard value: $MEMORY_BANK_ADAPTIVE_HARD" >&2
+    exit 1
+    ;;
+esac
+
+case "$MEMORY_BANK_ADAPTIVE_HARD_MODE" in
+  hard|soft)
+    ;;
+  *)
+    echo "Unsupported --memory-bank-adaptive-hard-mode: $MEMORY_BANK_ADAPTIVE_HARD_MODE" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$MEMORY_BANK_MARGIN_HEAD" == "1" && "$MEMORY_BANK_SOFT_MODE" == "soft-const" ]]; then
+  echo "--memory-bank-margin-head requires --memory-bank-soft-mode soft" >&2
+  exit 1
+fi
+if [[ "$MEMORY_BANK_MARGIN_HEAD" == "1" && "$MEMORY_BANK_SOFT_MODE" == "hard" ]]; then
+  MEMORY_BANK_SOFT_MODE="soft"
+fi
+if [[ "$MEMORY_BANK_SOFT_MODE" == "soft" ]]; then
+  MEMORY_BANK_MARGIN_HEAD=1
+fi
+
 if [[ "$RUN_MODE" == "eval-only" ]]; then
   RUN_STAMP="$(date +%Y%m%d_%H%M%S)_eval_only_$(slugify "$MODEL_NAME_OR_PATH")"
 else
@@ -802,11 +956,11 @@ else
     ALPHA_LABEL="enabled(mode=$ALPHA_MODE,mix=$ALPHA_MIX_WEIGHT)"
   fi
   METHOD_LABEL="$LOSS_LABEL + alpha=$ALPHA_LABEL"
-  METHOD_SUMMARY="optimizer=$OPTIMIZER_NAME, temperature=$TEMPERATURE, memory_bank=$MEMORY_BANK_SIZE/$MEMORY_BANK_MINING_MODE"
+  METHOD_SUMMARY="optimizer=$OPTIMIZER_NAME, temperature=$TEMPERATURE, memory_bank=$MEMORY_BANK_SIZE/$MEMORY_BANK_MINING_MODE, bank_soft=$MEMORY_BANK_SOFT_MODE"
   if [[ -n "$RECIPE" ]]; then
     METHOD_SUMMARY="$METHOD_SUMMARY, preset=$RECIPE"
   fi
-  RESOLVED_CONFIG="loss=$LOSS_NAME,opt=$OPTIMIZER_NAME,temp=$TEMPERATURE,alpha=$ALPHA_MODE,mix=$ALPHA_MIX_WEIGHT,memory_bank=$MEMORY_BANK_SIZE,bank_mode=$MEMORY_BANK_MINING_MODE,bank_warmup=$MEMORY_BANK_WARMUP_STEPS,bank_hard=$MEMORY_BANK_HARD_NEGATIVES,bank_random=$MEMORY_BANK_RANDOM_NEGATIVES"
+  RESOLVED_CONFIG="loss=$LOSS_NAME,opt=$OPTIMIZER_NAME,temp=$TEMPERATURE,alpha=$ALPHA_MODE,mix=$ALPHA_MIX_WEIGHT,memory_bank=$MEMORY_BANK_SIZE,bank_mode=$MEMORY_BANK_MINING_MODE,bank_warmup=$MEMORY_BANK_WARMUP_STEPS,bank_hard=$MEMORY_BANK_HARD_NEGATIVES,bank_random=$MEMORY_BANK_RANDOM_NEGATIVES,bank_hard_cap=${MEMORY_BANK_HARD_SIMILARITY_CAP:-none},bank_adaptive_hard=$MEMORY_BANK_ADAPTIVE_HARD,bank_adaptive_hard_mode=$MEMORY_BANK_ADAPTIVE_HARD_MODE,bank_hard_collision_threshold=$MEMORY_BANK_HARD_COLLISION_THRESHOLD,bank_hard_collision_beta=$MEMORY_BANK_HARD_COLLISION_BETA,bank_soft=$MEMORY_BANK_SOFT_MODE,bank_soft_beta=${MEMORY_BANK_SOFT_BETA:-none},bank_margin_head=$MEMORY_BANK_MARGIN_HEAD,bank_margin_reg=$MEMORY_BANK_MARGIN_REG_WEIGHT"
   if [[ -n "$NSAMPLES" ]]; then
     RESOLVED_CONFIG="$RESOLVED_CONFIG,nsamples=$NSAMPLES"
   fi
@@ -838,29 +992,35 @@ log "Loss: $LOSS_LABEL"
 log "Temperature: $TEMPERATURE"
 log "Alpha: $ALPHA_LABEL"
 log "Memory bank size: $MEMORY_BANK_SIZE"
-log "Memory bank mining: mode=$MEMORY_BANK_MINING_MODE warmup=$MEMORY_BANK_WARMUP_STEPS hard=$MEMORY_BANK_HARD_NEGATIVES random=$MEMORY_BANK_RANDOM_NEGATIVES hard_warmup=$MEMORY_BANK_HARD_WARMUP_STEPS hard_ramp=$MEMORY_BANK_HARD_RAMP_STEPS too_hard_margin=${MEMORY_BANK_TOO_HARD_MARGIN:-none}"
+log "Memory bank mining: mode=$MEMORY_BANK_MINING_MODE warmup=$MEMORY_BANK_WARMUP_STEPS hard=$MEMORY_BANK_HARD_NEGATIVES random=$MEMORY_BANK_RANDOM_NEGATIVES hard_warmup=$MEMORY_BANK_HARD_WARMUP_STEPS hard_ramp=$MEMORY_BANK_HARD_RAMP_STEPS too_hard_margin=${MEMORY_BANK_TOO_HARD_MARGIN:-none} hard_similarity_cap=${MEMORY_BANK_HARD_SIMILARITY_CAP:-none} adaptive_hard=$MEMORY_BANK_ADAPTIVE_HARD adaptive_hard_mode=$MEMORY_BANK_ADAPTIVE_HARD_MODE hard_collision_threshold=$MEMORY_BANK_HARD_COLLISION_THRESHOLD hard_collision_beta=$MEMORY_BANK_HARD_COLLISION_BETA"
 log "Run mode: $RUN_MODE"
 log "N samples: ${NSAMPLES:-all}"
 log "Weaviate: ${WEAVIATE_HOST_VALUE}:${WEAVIATE_PORT_VALUE}"
 log "Method summary: $METHOD_SUMMARY"
 log "Resolved config: $RESOLVED_CONFIG"
 log "Datasets: $DATASET_IDS_RAW"
+log_rss "pipeline start"
 
 WEAVIATE_READY=1
 if ! check_weaviate "$WEAVIATE_HOST_VALUE" "$WEAVIATE_PORT_VALUE"; then
   WEAVIATE_READY=0
   log "WARNING Weaviate is unavailable at ${WEAVIATE_HOST_VALUE}:${WEAVIATE_PORT_VALUE}; eval stages will be skipped"
 fi
+log_rss "after weaviate check"
 
 IFS=',' read -r -a RAW_DATASET_IDS <<< "$DATASET_IDS_RAW"
 for raw_id in "${RAW_DATASET_IDS[@]}"; do
   dataset_id="$(trim "$raw_id")"
   [[ -n "$dataset_id" ]] || continue
   config_id="$(resolve_dataset_id "$dataset_id")"
+  eval_config_id="$(resolve_eval_dataset_id "$config_id")"
   dataset_dir="$RUN_ROOT/$(slugify "$config_id")"
-  baseline_collection="$(weaviate_class_name "${COLLECTION_PREFIX}_${config_id}_baseline_${RUN_STAMP}")"
-  tuned_collection="$(weaviate_class_name "${COLLECTION_PREFIX}_${config_id}_tuned_${RUN_STAMP}")"
+  baseline_collection="$(weaviate_class_name "${COLLECTION_PREFIX}_${eval_config_id}_baseline_${RUN_STAMP}")"
+  tuned_collection="$(weaviate_class_name "${COLLECTION_PREFIX}_${eval_config_id}_tuned_${RUN_STAMP}")"
   mkdir -p "$dataset_dir"
+  if [[ "$eval_config_id" != "$config_id" ]]; then
+    log "Eval dataset preset for $config_id: $eval_config_id"
+  fi
 
   eval_limit_args=()
   train_sample_count="1000000000"
@@ -873,14 +1033,14 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
     eval_status="FAILED"
     eval_log="$dataset_dir/eval_only.log"
     eval_out_dir="$dataset_dir/eval_only"
-    eval_collection="$(weaviate_class_name "${COLLECTION_PREFIX}_${config_id}_${RUN_STAMP}")"
+    eval_collection="$(weaviate_class_name "${COLLECTION_PREFIX}_${eval_config_id}_${RUN_STAMP}")"
     eval_csv=""
 
     if [[ "$WEAVIATE_READY" -eq 0 ]]; then
       eval_status="SKIPPED_NO_WEAVIATE"
       log "SKIP $config_id eval-only because Weaviate is unavailable"
     else
-      if evaluate_model "$config_id eval-only" "$eval_log" "$MODEL_NAME_OR_PATH" "$eval_collection" "$eval_out_dir" "$config_id"; then
+      if evaluate_model "$config_id eval-only" "$eval_log" "$MODEL_NAME_OR_PATH" "$eval_collection" "$eval_out_dir" "$eval_config_id"; then
         eval_csv="$EVAL_LAST_CSV"
         cp "$eval_csv" "$RUN_ROOT/$(slugify "$config_id")__$(slugify "$MODEL_NAME_OR_PATH").csv"
         eval_status="OK"
@@ -901,7 +1061,7 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
     else
       baseline_eval_dir="$dataset_dir/baseline_eval"
       mkdir -p "$baseline_eval_dir"
-      baseline_cache_key="$(slugify "$MODEL_NAME_OR_PATH")__$(slugify "$config_id").csv"
+      baseline_cache_key="$(slugify "$MODEL_NAME_OR_PATH")__$(slugify "$eval_config_id").csv"
       baseline_cache_path="$BASELINE_CACHE_DIR/$baseline_cache_key"
       if [[ "$BASELINE_REFRESH" -ne 1 && -s "$baseline_cache_path" ]]; then
         baseline_csv="$baseline_eval_dir/$(basename "$baseline_cache_path")"
@@ -909,7 +1069,7 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
         baseline_status="CACHED"
         log "CACHE-HIT $config_id baseline reused from $baseline_cache_path"
       else
-        if evaluate_model "$config_id baseline" "$baseline_log" "$MODEL_NAME_OR_PATH" "$baseline_collection" "$baseline_eval_dir" "$config_id"; then
+        if evaluate_model "$config_id baseline" "$baseline_log" "$MODEL_NAME_OR_PATH" "$baseline_collection" "$baseline_eval_dir" "$eval_config_id"; then
           baseline_csv="$EVAL_LAST_CSV"
           baseline_status="OK"
           mkdir -p "$BASELINE_CACHE_DIR"
@@ -946,6 +1106,12 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
     --training.memory_bank_random_negatives "$MEMORY_BANK_RANDOM_NEGATIVES"
     --training.memory_bank_hard_warmup_steps "$MEMORY_BANK_HARD_WARMUP_STEPS"
     --training.memory_bank_hard_ramp_steps "$MEMORY_BANK_HARD_RAMP_STEPS"
+    --training.memory_bank_adaptive_hard "$MEMORY_BANK_ADAPTIVE_HARD"
+    --training.memory_bank_adaptive_hard_mode "$MEMORY_BANK_ADAPTIVE_HARD_MODE"
+    --training.memory_bank_hard_collision_threshold "$MEMORY_BANK_HARD_COLLISION_THRESHOLD"
+    --training.memory_bank_hard_collision_beta "$MEMORY_BANK_HARD_COLLISION_BETA"
+    --training.memory_bank_soft_mode "$MEMORY_BANK_SOFT_MODE"
+    --training.memory_bank_margin_regularization_weight "$MEMORY_BANK_MARGIN_REG_WEIGHT"
     --output.save_dir "$dataset_dir/tuned"
     --output.metrics_path "$dataset_dir/tuned_metrics.csv"
   )
@@ -955,6 +1121,15 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
   fi
   if [[ "$ADD_ALPHA_GATE" == "1" ]]; then
     train_args+=(--add-alpha-gate)
+  fi
+  if [[ -n "$MAX_QUERY_SEQ_LEN" ]]; then
+    train_args+=(--training.max_query_seq_len "$MAX_QUERY_SEQ_LEN")
+  fi
+  if [[ "$QUERY_PREFIX_EXPLICIT" == "1" ]]; then
+    train_args+=(--training.query_prefix "$QUERY_PREFIX")
+  fi
+  if [[ "$CONTENT_PREFIX_EXPLICIT" == "1" ]]; then
+    train_args+=(--training.content_prefix "$CONTENT_PREFIX")
   fi
   if [[ -n "$ALPHA_GATE_LAYERS" ]]; then
     train_args+=(--alpha-gate.alpha-query.layers "$ALPHA_GATE_LAYERS")
@@ -970,6 +1145,15 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
   fi
   if [[ -n "$MEMORY_BANK_TOO_HARD_MARGIN" ]]; then
     train_args+=(--training.memory_bank_too_hard_margin "$MEMORY_BANK_TOO_HARD_MARGIN")
+  fi
+  if [[ -n "$MEMORY_BANK_HARD_SIMILARITY_CAP" ]]; then
+    train_args+=(--training.memory_bank_hard_similarity_cap "$MEMORY_BANK_HARD_SIMILARITY_CAP")
+  fi
+  if [[ -n "$MEMORY_BANK_SOFT_BETA" ]]; then
+    train_args+=(--training.memory_bank_soft_beta "$MEMORY_BANK_SOFT_BETA")
+  fi
+  if [[ "$MEMORY_BANK_MARGIN_HEAD" == "1" ]]; then
+    train_args+=(--training.memory_bank_margin_head true)
   fi
   if [[ -n "$NSAMPLES" ]]; then
     train_args+=(--dataset.limit "$NSAMPLES")
@@ -1003,10 +1187,11 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
     train_args+=(--training.contrastive_loss_alpha_gate_mode "$CONTRASTIVE_LOSS_ALPHA_GATE_MODE")
   fi
 
-  checkpoint_rel="BiGamma/epoch1"
+  checkpoint_epoch="epoch${EPOCHS}"
+  checkpoint_rel="BiGamma/$checkpoint_epoch"
   case "$ALPHA_MODE" in
     off)
-      checkpoint_rel="Encoder/epoch1"
+      checkpoint_rel="Encoder/$checkpoint_epoch"
       train_args+=(
         --training.gamma_joint false
         --training.include_semantic_gamma false
@@ -1031,7 +1216,7 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
       ;;
   esac
   if [[ "$ADD_ALPHA_GATE" == "1" ]]; then
-    checkpoint_rel="BiGamma/epoch1"
+    checkpoint_rel="BiGamma/$checkpoint_epoch"
   fi
 
   if [[ "$WANDB_MODE_VALUE" == "disabled" ]]; then
@@ -1055,7 +1240,7 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
     else
       tuned_eval_dir="$dataset_dir/tuned_eval"
       mkdir -p "$tuned_eval_dir"
-      if evaluate_model "$config_id tuned eval" "$tuned_eval_log" "$dataset_dir/tuned/$checkpoint_rel" "$tuned_collection" "$tuned_eval_dir" "$config_id"; then
+      if evaluate_model "$config_id tuned eval" "$tuned_eval_log" "$dataset_dir/tuned/$checkpoint_rel" "$tuned_collection" "$tuned_eval_dir" "$eval_config_id"; then
         tuned_csv="$EVAL_LAST_CSV"
         tuned_status="OK"
       fi
@@ -1066,4 +1251,5 @@ for raw_id in "${RAW_DATASET_IDS[@]}"; do
 done
 
 log "PIPELINE FINISHED"
+log_rss "pipeline end"
 log "Results table: $TABLE_RESULTS_PATH"

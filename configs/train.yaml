@@ -45,6 +45,9 @@ training:
   num_samples: 100
   batch_size: 4
   max_seq_len: 512
+  max_query_seq_len: null
+  query_prefix: "query:"
+  content_prefix: "passage:"
   n_epochs: 1
   freeze_encoder: true
   gamma_joint: false
@@ -74,6 +77,15 @@ training:
   memory_bank_hard_warmup_steps: 0
   memory_bank_hard_ramp_steps: 1
   memory_bank_too_hard_margin: null
+  memory_bank_hard_similarity_cap: null
+  memory_bank_adaptive_hard: false
+  memory_bank_adaptive_hard_mode: hard
+  memory_bank_hard_collision_threshold: 0.0
+  memory_bank_hard_collision_beta: 0.05
+  memory_bank_soft_mode: hard
+  memory_bank_soft_beta: null
+  memory_bank_margin_head: false
+  memory_bank_margin_regularization_weight: 0.0
   min_negative_inverse_idf_recall: null
   negative_sampling_mode: safe-random
   hard_negative_top_k: null

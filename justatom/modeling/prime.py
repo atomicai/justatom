@@ -49,7 +49,16 @@ class Qwen3EmbeddingModel(EmbeddingPoolingWrapper):
             AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
         )
         self.name = "Qwen/Qwen3-Embedding-0.6B"
-        self.model.to(device)
+        self.to(device)
+
+    def to(self, *args, **kwargs):
+        target = kwargs.get("device")
+        if target is None and args and isinstance(args[0], (str, torch.device)):
+            target = args[0]
+        explicit_dtype = "dtype" in kwargs or (len(args) > 1 and isinstance(args[1], torch.dtype))
+        if target is not None and torch.device(target).type == "mps" and not explicit_dtype:
+            kwargs["dtype"] = torch.float32
+        return super().to(*args, **kwargs)
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):

@@ -139,3 +139,6 @@ dmypy.json
 wandb/
 artifacts/
 evals/
+justatom-rc/
+.worktrees/
+phd.paper/

@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,7 +42,10 @@ class EvalDataNormalizationTest(unittest.TestCase):
             }
         ]
 
-        with patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked:
+        with patch.dict(
+            os.environ,
+            {"HF_TOKEN": "", "HUGGINGFACE_HUB_TOKEN": "", "HF_HUB_TOKEN": "", "HF_API_KEY": ""},
+        ), patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked:
             adapter = DatasetRecordAdapter.from_source(
                 dataset_name_or_path="hf://miracl/miracl?config=ru&split=train",
                 content_col="text",
@@ -76,7 +80,10 @@ class EvalDataNormalizationTest(unittest.TestCase):
             }
         ]
 
-        with patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked:
+        with patch.dict(
+            os.environ,
+            {"HF_TOKEN": "", "HUGGINGFACE_HUB_TOKEN": "", "HF_HUB_TOKEN": "", "HF_API_KEY": ""},
+        ), patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked:
             adapter = DatasetRecordAdapter.from_source(
                 dataset_name_or_path="justatom/meme-russian-ir",
                 content_col="text",
@@ -393,6 +400,16 @@ class EvalDataNormalizationTest(unittest.TestCase):
 
     def test_normalize_queries_handles_json_string(self):
         self.assertEqual(DatasetRecordAdapter.normalize_queries('["q1", "q2"]'), ["q1", "q2"])
+
+    def test_normalize_queries_keeps_json_like_human_text(self):
+        self.assertEqual(
+            DatasetRecordAdapter.normalize_queries("что такое PowerShell, где {$ _."),
+            ["что такое PowerShell, где {$ _."],
+        )
+        self.assertEqual(
+            DatasetRecordAdapter.normalize_queries("что такое angular.module ('myapp', [])"),
+            ["что такое angular.module ('myapp', [])"],
+        )
 
     def test_normalize_keywords_handles_all_supported_shapes(self):
         self.assertEqual(

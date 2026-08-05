@@ -318,6 +318,11 @@ class GammaHybridRunner(EncoderRunner):
         query_diagonal_gate: bool = False,
         query_diagonal_gate_scale: float = 0.25,
         query_diagonal_gate_mode: str = "raw",
+        margin_query_conditional: bool | None = None,
+        margin_base: float = 0.05,
+        margin_scale: float = 0.02,
+        margin_min: float = 0.0,
+        margin_max: float = 0.15,
     ):
         super(GammaHybridRunner, self).__init__(
             model=model,
@@ -349,6 +354,21 @@ class GammaHybridRunner(EncoderRunner):
         self.query_diagonal_gate = query_diagonal_gate
         self.query_diagonal_gate_scale = float(query_diagonal_gate_scale)
         self.query_diagonal_gate_mode = self._resolve_query_diagonal_gate_mode(query_diagonal_gate_mode)
+        self.margin_query_conditional = (
+            bool(int(os.environ.get("MARGIN_QUERY_CONDITIONAL", "0")))
+            if margin_query_conditional is None
+            else bool(margin_query_conditional)
+        )
+        self.margin_base = float(os.environ.get("MARGIN_QUERY_BASE", str(margin_base)))
+        self.margin_scale = float(os.environ.get("MARGIN_QUERY_SCALE", str(margin_scale)))
+        self.margin_min = float(os.environ.get("MARGIN_QUERY_MIN", str(margin_min)))
+        self.margin_max = float(os.environ.get("MARGIN_QUERY_MAX", str(margin_max)))
+        if self.margin_scale < 0.0:
+            raise ValueError(f"margin_scale must be >= 0, got {self.margin_scale}")
+        if self.margin_min < 0.0 or self.margin_max < self.margin_min:
+            raise ValueError(
+                f"invalid margin bounds: margin_min={self.margin_min}, margin_max={self.margin_max}"
+            )
         if self.model is None:
             raise RuntimeError("GammaHybridRunner model has not been initialised")
         alpha_hidden_dim = (
@@ -445,6 +465,24 @@ class GammaHybridRunner(EncoderRunner):
                 self.tau_head[-1].bias.zero_()
             self.tau_head.to(device)
 
+        # QC-CH m(q): query-conditional too-hard margin.
+        # m(q) = margin_base + margin_scale * tanh(head(q)); final layer is
+        # zero-initialized so step 0 starts exactly at the constant baseline.
+        self.margin_head = None
+        self.margin_head_hidden_dim: int | None = None
+        if self.margin_query_conditional:
+            margin_hidden = max(32, min(256, int(self.model.output_dims) // 2))
+            self.margin_head_hidden_dim = margin_hidden
+            self.margin_head = torch.nn.Sequential(
+                torch.nn.Linear(int(self.model.output_dims), margin_hidden),
+                torch.nn.GELU(),
+                torch.nn.Linear(margin_hidden, 1),
+            )
+            with torch.no_grad():
+                self.margin_head[-1].weight.zero_()
+                self.margin_head[-1].bias.zero_()
+            self.margin_head.to(device)
+
     @staticmethod
     def _resolve_activation(name: str):
         normalized = str(name).strip().lower()
@@ -491,14 +529,20 @@ class GammaHybridRunner(EncoderRunner):
             return []
         return list(self.tau_head.parameters())
 
+    def margin_parameters(self) -> list[torch.nn.Parameter]:
+        if self.margin_head is None:
+            return []
+        return list(self.margin_head.parameters())
+
     def mixing_parameters(self) -> list[torch.nn.Parameter]:
         if self.gamma_joint:
             return [
                 *self.alpha_parameters(),
                 *self.query_diagonal_parameters(),
                 *self.tau_parameters(),
+                *self.margin_parameters(),
             ]
-        return [*self.gamma_parameters(), *self.tau_parameters()]
+        return [*self.gamma_parameters(), *self.tau_parameters(), *self.margin_parameters()]
 
     def gamma_weights(self) -> tuple[float, float]:
         semantic_weight = float(self.activation(self.gamma1).detach().item()) if self.include_semantic_gamma else 1.0
@@ -544,6 +588,15 @@ class GammaHybridRunner(EncoderRunner):
                 "hidden_dim": self.tau_head_hidden_dim,
                 "log_scale": self.tau_query_log_scale,
                 "parameterization": "tau_base * exp(log_scale * tanh(head(q)))",
+            },
+            "margin_query_conditional": {
+                "enabled": self.margin_query_conditional,
+                "hidden_dim": self.margin_head_hidden_dim,
+                "base": self.margin_base,
+                "scale": self.margin_scale,
+                "min": self.margin_min,
+                "max": self.margin_max,
+                "parameterization": "clip(base + scale * tanh(head(q)), min, max)",
             },
             "semantic_gamma": {
                 "enabled": self.include_semantic_gamma,
@@ -646,6 +699,17 @@ class GammaHybridRunner(EncoderRunner):
             base = torch.tensor(float(tau_base), device=delta.device, dtype=delta.dtype)
         return base * torch.exp(delta)
 
+    def margin_raw_weights(self, query_vectors: torch.Tensor) -> torch.Tensor:
+        """Unclamped per-query margin before hard admission bounds."""
+        if self.margin_head is None:
+            raise RuntimeError("margin_raw_weights() requires margin_query_conditional=True")
+        delta = torch.tanh(self.margin_head(query_vectors)).view(-1) * self.margin_scale
+        return self.margin_base + delta
+
+    def margin_weights(self, query_vectors: torch.Tensor) -> torch.Tensor:
+        """Per-query too-hard margin m(q), used only in training loss."""
+        return self.margin_raw_weights(query_vectors).clamp(min=self.margin_min, max=self.margin_max)
+
     def adaptive_semantic_pair_scores(
         self,
         query_vectors: torch.Tensor,
@@ -725,6 +789,8 @@ class GammaHybridRunner(EncoderRunner):
             torch.save(self.alpha_head.state_dict(), Path(save_dir) / "alpha_gate.pt")
         if self.query_diagonal_gate and self.query_diagonal_head is not None:
             torch.save(self.query_diagonal_head.state_dict(), Path(save_dir) / "query_diagonal_gate.pt")
+        if self.margin_query_conditional and self.margin_head is not None:
+            torch.save(self.margin_head.state_dict(), Path(save_dir) / "margin_head.pt")
 
     @classmethod
     def load(cls, data_dir: Path | str, config=None, **props):
@@ -753,6 +819,7 @@ class GammaHybridRunner(EncoderRunner):
         alpha_cfg = gamma_hybrid.get("alpha_head", {})
         alpha_residual_cfg = alpha_cfg.get("residual", {}) if isinstance(alpha_cfg, dict) else {}
         query_diagonal_cfg = gamma_hybrid.get("query_diagonal_gate", {})
+        margin_cfg = gamma_hybrid.get("margin_query_conditional", {})
         runner = cls(
             model=model,
             prediction_heads=heads,
@@ -773,6 +840,11 @@ class GammaHybridRunner(EncoderRunner):
             query_diagonal_gate=query_diagonal_cfg.get("enabled", False),
             query_diagonal_gate_scale=query_diagonal_cfg.get("scale", 0.25),
             query_diagonal_gate_mode=query_diagonal_cfg.get("mode", "raw"),
+            margin_query_conditional=margin_cfg.get("enabled", False),
+            margin_base=margin_cfg.get("base", 0.05),
+            margin_scale=margin_cfg.get("scale", 0.02),
+            margin_min=margin_cfg.get("min", 0.0),
+            margin_max=margin_cfg.get("max", 0.15),
         )
         alpha_gate_path = Path(data_dir) / "alpha_gate.pt"
         if runner.gamma_joint and alpha_gate_path.exists():
@@ -780,4 +852,7 @@ class GammaHybridRunner(EncoderRunner):
         query_diagonal_gate_path = Path(data_dir) / "query_diagonal_gate.pt"
         if runner.query_diagonal_gate and runner.query_diagonal_head is not None and query_diagonal_gate_path.exists():
             runner.query_diagonal_head.load_state_dict(torch.load(query_diagonal_gate_path, map_location="cpu"))
+        margin_head_path = Path(data_dir) / "margin_head.pt"
+        if runner.margin_query_conditional and runner.margin_head is not None and margin_head_path.exists():
+            runner.margin_head.load_state_dict(torch.load(margin_head_path, map_location="cpu"))
         return runner

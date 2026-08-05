@@ -92,13 +92,11 @@ class IModel(nn.Module, abc.ABC):
         :param state_dict: A dictionary containing the whole state of the module, including names of layers. By default, the unchanged state dictionary of the module is used.
         """  # noqa: E501
         Path(save_dir).mkdir(parents=True, exist_ok=True)
-        # Save Weights
-        save_name = Path(save_dir) / "pytorch_model.bin"
         model_to_save = self.model.module if hasattr(self.model, "module") else self.model  # Only save the model itself
-
         if not state_dict:
             state_dict = model_to_save.state_dict()  # type: ignore [union-attr]
-        torch.save(state_dict, save_name)
+        # safetensors instead of legacy pytorch_model.bin: HF transformers >=4.45 blocks torch.load on .bin (CVE-2025-32434).
+        model_to_save.save_pretrained(str(save_dir), state_dict=state_dict, safe_serialization=True)
         self.save_config(save_dir)
 
 
@@ -214,13 +212,11 @@ class ILanguageModel(nn.Module, abc.ABC):
         :param state_dict: A dictionary containing the whole state of the module, including names of layers. By default, the unchanged state dictionary of the module is used.
         """  # noqa: E501
         Path(save_dir).mkdir(parents=True, exist_ok=True)
-        # Save Weights
-        save_name = Path(save_dir) / "pytorch_model.bin"
         model_to_save = self.model.module if hasattr(self.model, "module") else self.model  # Only save the model itself
-
         if not state_dict:
             state_dict = model_to_save.state_dict()  # type: ignore [union-attr]
-        torch.save(state_dict, save_name)
+        # safetensors instead of legacy pytorch_model.bin: HF transformers >=4.45 blocks torch.load on .bin (CVE-2025-32434).
+        model_to_save.save_pretrained(str(save_dir), state_dict=state_dict, safe_serialization=True)
         self.save_config(save_dir)
 
     def formatted_preds(

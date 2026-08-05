@@ -75,6 +75,14 @@ class Qwen3EmbeddingModelTest(unittest.TestCase):
                 target_dim=16,
             )
 
+    def test_to_mps_defaults_to_float32(self):
+        model = Qwen3EmbeddingModel(model_name_or_instance=_FakeQwenModel())
+
+        with patch.object(nn.Module, "to", autospec=True, return_value=model) as mocked:
+            model.to("mps")
+
+        mocked.assert_called_once_with(model, "mps", dtype=torch.float32)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,6 +65,9 @@ class BaseTrainingJob:
     num_samples: int = 100
     batch_size: int = 4
     max_seq_len: int = 512
+    max_query_seq_len: int | None = None
+    query_prefix: str = "query:"
+    content_prefix: str = "passage:"
     freeze_encoder: bool = True
     gamma_joint: bool = False
     include_semantic_gamma: bool = True
@@ -110,6 +113,15 @@ class BaseTrainingJob:
     memory_bank_hard_warmup_steps: int = 0
     memory_bank_hard_ramp_steps: int = 1
     memory_bank_too_hard_margin: float | None = None
+    memory_bank_hard_similarity_cap: float | None = None
+    memory_bank_adaptive_hard: bool = False
+    memory_bank_adaptive_hard_mode: str = "hard"
+    memory_bank_hard_collision_threshold: float = 0.0
+    memory_bank_hard_collision_beta: float = 0.05
+    memory_bank_soft_mode: str = "hard"
+    memory_bank_soft_beta: float | None = None
+    memory_bank_margin_head: bool = False
+    memory_bank_margin_regularization_weight: float = 0.0
     min_negative_inverse_idf_recall: float | None = None
     negative_sampling_mode: str = "safe-random"
     hard_negative_top_k: int | None = None
@@ -185,6 +197,46 @@ class BaseTrainingJob:
         self.memory_bank_random_negatives = max(int(self.memory_bank_random_negatives), 0)
         self.memory_bank_hard_warmup_steps = max(int(self.memory_bank_hard_warmup_steps), 0)
         self.memory_bank_hard_ramp_steps = max(int(self.memory_bank_hard_ramp_steps), 1)
+        if self.memory_bank_too_hard_margin is not None:
+            self.memory_bank_too_hard_margin = float(self.memory_bank_too_hard_margin)
+        if self.memory_bank_hard_similarity_cap is not None:
+            self.memory_bank_hard_similarity_cap = float(self.memory_bank_hard_similarity_cap)
+        self.memory_bank_adaptive_hard = bool(self.memory_bank_adaptive_hard)
+        self.memory_bank_adaptive_hard_mode = str(self.memory_bank_adaptive_hard_mode).strip().lower()
+        if self.memory_bank_adaptive_hard_mode not in {"hard", "soft"}:
+            raise ValueError("memory_bank_adaptive_hard_mode must be one of: hard, soft")
+        self.memory_bank_hard_collision_threshold = float(self.memory_bank_hard_collision_threshold)
+        self.memory_bank_hard_collision_beta = float(self.memory_bank_hard_collision_beta)
+        if self.memory_bank_hard_collision_beta <= 0.0:
+            raise ValueError(
+                f"memory_bank_hard_collision_beta must be > 0, got {self.memory_bank_hard_collision_beta}"
+            )
+        self.memory_bank_soft_mode = str(self.memory_bank_soft_mode).strip().lower()
+        if self.memory_bank_soft_mode not in {"hard", "soft-const", "soft"}:
+            raise ValueError("memory_bank_soft_mode must be one of: hard, soft-const, soft")
+        self.memory_bank_margin_head = bool(self.memory_bank_margin_head)
+        if self.memory_bank_margin_head and self.memory_bank_soft_mode == "hard":
+            self.memory_bank_soft_mode = "soft"
+        if self.memory_bank_margin_head and self.memory_bank_soft_mode == "soft-const":
+            raise ValueError("memory_bank_margin_head=True requires memory_bank_soft_mode=soft")
+        if self.memory_bank_soft_mode != "hard" and self.memory_bank_too_hard_margin is None:
+            self.memory_bank_too_hard_margin = 0.05
+        if self.memory_bank_soft_beta is not None:
+            self.memory_bank_soft_beta = float(self.memory_bank_soft_beta)
+            if self.memory_bank_soft_beta <= 0.0:
+                raise ValueError(f"memory_bank_soft_beta must be > 0, got {self.memory_bank_soft_beta}")
+        elif self.memory_bank_soft_mode != "hard":
+            self.memory_bank_soft_beta = 0.05
+        if self.memory_bank_soft_mode == "soft":
+            self.memory_bank_margin_head = True
+        else:
+            self.memory_bank_margin_head = False
+        self.memory_bank_margin_regularization_weight = float(self.memory_bank_margin_regularization_weight)
+        if self.memory_bank_margin_regularization_weight < 0.0:
+            raise ValueError(
+                "memory_bank_margin_regularization_weight must be >= 0, "
+                f"got {self.memory_bank_margin_regularization_weight}"
+            )
         self.memory_bank_mining_mode = str(self.memory_bank_mining_mode).strip().lower()
         if self.memory_bank_mining_mode not in {"all", "random", "hard", "mixed"}:
             raise ValueError("memory_bank_mining_mode must be one of: all, random, hard, mixed")
@@ -271,6 +323,15 @@ class BaseTrainingJob:
             memory_bank_hard_warmup_steps=self.memory_bank_hard_warmup_steps,
             memory_bank_hard_ramp_steps=self.memory_bank_hard_ramp_steps,
             memory_bank_too_hard_margin=self.memory_bank_too_hard_margin,
+            memory_bank_hard_similarity_cap=self.memory_bank_hard_similarity_cap,
+            memory_bank_adaptive_hard=self.memory_bank_adaptive_hard,
+            memory_bank_adaptive_hard_mode=self.memory_bank_adaptive_hard_mode,
+            memory_bank_hard_collision_threshold=self.memory_bank_hard_collision_threshold,
+            memory_bank_hard_collision_beta=self.memory_bank_hard_collision_beta,
+            memory_bank_soft_mode=self.memory_bank_soft_mode,
+            memory_bank_soft_beta=self.memory_bank_soft_beta,
+            memory_bank_margin_head=self.memory_bank_margin_head,
+            memory_bank_margin_regularization_weight=self.memory_bank_margin_regularization_weight,
             focal_gamma=self.focal_gamma,
             min_negative_inverse_idf_recall=self.min_negative_inverse_idf_recall,
             negative_sampling_mode=self.negative_sampling_mode,
@@ -330,7 +391,10 @@ class BaseTrainingJob:
         processor = TrainWithContrastiveProcessor(
             tokenizer=tokenizer,
             max_seq_len=self.max_seq_len,
+            max_query_seq_len=self.max_query_seq_len,
             queries_field="queries",
+            queries_prefix=self.query_prefix,
+            pos_queries_prefix=self.content_prefix,
         )
         dataset, tensor_names = igniset(
             js_data,
@@ -363,6 +427,9 @@ class BaseTrainingJob:
             "num_samples": self.num_samples,
             "batch_size": self.batch_size,
             "max_seq_len": self.max_seq_len,
+            "max_query_seq_len": self.max_query_seq_len,
+            "query_prefix": self.query_prefix,
+            "content_prefix": self.content_prefix,
             "n_epochs": self.n_epochs,
             "freeze_encoder": self.freeze_encoder,
             "gamma_joint": self.gamma_joint,
@@ -406,6 +473,15 @@ class BaseTrainingJob:
             "memory_bank_hard_warmup_steps": self.memory_bank_hard_warmup_steps,
             "memory_bank_hard_ramp_steps": self.memory_bank_hard_ramp_steps,
             "memory_bank_too_hard_margin": self.memory_bank_too_hard_margin,
+            "memory_bank_hard_similarity_cap": self.memory_bank_hard_similarity_cap,
+            "memory_bank_adaptive_hard": self.memory_bank_adaptive_hard,
+            "memory_bank_adaptive_hard_mode": self.memory_bank_adaptive_hard_mode,
+            "memory_bank_hard_collision_threshold": self.memory_bank_hard_collision_threshold,
+            "memory_bank_hard_collision_beta": self.memory_bank_hard_collision_beta,
+            "memory_bank_soft_mode": self.memory_bank_soft_mode,
+            "memory_bank_soft_beta": self.memory_bank_soft_beta,
+            "memory_bank_margin_head": self.memory_bank_margin_head,
+            "memory_bank_margin_regularization_weight": self.memory_bank_margin_regularization_weight,
             "min_negative_inverse_idf_recall": self.min_negative_inverse_idf_recall,
             "negative_sampling_mode": self.negative_sampling_mode,
             "hard_negative_top_k": self.hard_negative_top_k,
@@ -505,6 +581,8 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
             alpha_head_dropout=self.alpha_head_dropout,
             alpha_head_activation=self.alpha_head_activation,
             alpha_include_doc=self.alpha_head_include_doc,
+            margin_query_conditional=self.memory_bank_margin_head,
+            margin_base=float(self.memory_bank_too_hard_margin if self.memory_bank_too_hard_margin is not None else 0.05),
         )
         enabled_count = int(self.include_semantic_gamma) + int(self.include_keywords_gamma)
         trainer_cls = BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
@@ -543,6 +621,15 @@ class GammaOnlyTrainingJob(BaseTrainingJob):
             memory_bank_hard_warmup_steps=self.memory_bank_hard_warmup_steps,
             memory_bank_hard_ramp_steps=self.memory_bank_hard_ramp_steps,
             memory_bank_too_hard_margin=self.memory_bank_too_hard_margin,
+            memory_bank_hard_similarity_cap=self.memory_bank_hard_similarity_cap,
+            memory_bank_adaptive_hard=self.memory_bank_adaptive_hard,
+            memory_bank_adaptive_hard_mode=self.memory_bank_adaptive_hard_mode,
+            memory_bank_hard_collision_threshold=self.memory_bank_hard_collision_threshold,
+            memory_bank_hard_collision_beta=self.memory_bank_hard_collision_beta,
+            memory_bank_soft_mode=self.memory_bank_soft_mode,
+            memory_bank_soft_beta=self.memory_bank_soft_beta,
+            memory_bank_margin_head=self.memory_bank_margin_head,
+            memory_bank_margin_regularization_weight=self.memory_bank_margin_regularization_weight,
             min_negative_inverse_idf_recall=self.min_negative_inverse_idf_recall,
             negative_sampling_mode=self.negative_sampling_mode,
             hard_negative_top_k=self.hard_negative_top_k,
@@ -594,6 +681,8 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             alpha_head_dropout=self.alpha_head_dropout,
             alpha_head_activation=self.alpha_head_activation,
             alpha_include_doc=self.alpha_head_include_doc,
+            margin_query_conditional=self.memory_bank_margin_head,
+            margin_base=float(self.memory_bank_too_hard_margin if self.memory_bank_too_hard_margin is not None else 0.05),
         )
         enabled_count = int(self.include_semantic_gamma) + int(self.include_keywords_gamma)
         trainer_cls = BiGammaLightningTrainer if enabled_count == 2 else UniGammaLightningTrainer
@@ -632,6 +721,15 @@ class EncoderGammaTrainingJob(BaseTrainingJob):
             memory_bank_hard_warmup_steps=self.memory_bank_hard_warmup_steps,
             memory_bank_hard_ramp_steps=self.memory_bank_hard_ramp_steps,
             memory_bank_too_hard_margin=self.memory_bank_too_hard_margin,
+            memory_bank_hard_similarity_cap=self.memory_bank_hard_similarity_cap,
+            memory_bank_adaptive_hard=self.memory_bank_adaptive_hard,
+            memory_bank_adaptive_hard_mode=self.memory_bank_adaptive_hard_mode,
+            memory_bank_hard_collision_threshold=self.memory_bank_hard_collision_threshold,
+            memory_bank_hard_collision_beta=self.memory_bank_hard_collision_beta,
+            memory_bank_soft_mode=self.memory_bank_soft_mode,
+            memory_bank_soft_beta=self.memory_bank_soft_beta,
+            memory_bank_margin_head=self.memory_bank_margin_head,
+            memory_bank_margin_regularization_weight=self.memory_bank_margin_regularization_weight,
             min_negative_inverse_idf_recall=self.min_negative_inverse_idf_recall,
             negative_sampling_mode=self.negative_sampling_mode,
             hard_negative_top_k=self.hard_negative_top_k,
@@ -718,6 +816,15 @@ class EncoderOnlyTrainingJob(BaseTrainingJob):
             memory_bank_hard_warmup_steps=self.memory_bank_hard_warmup_steps,
             memory_bank_hard_ramp_steps=self.memory_bank_hard_ramp_steps,
             memory_bank_too_hard_margin=self.memory_bank_too_hard_margin,
+            memory_bank_hard_similarity_cap=self.memory_bank_hard_similarity_cap,
+            memory_bank_adaptive_hard=self.memory_bank_adaptive_hard,
+            memory_bank_adaptive_hard_mode=self.memory_bank_adaptive_hard_mode,
+            memory_bank_hard_collision_threshold=self.memory_bank_hard_collision_threshold,
+            memory_bank_hard_collision_beta=self.memory_bank_hard_collision_beta,
+            memory_bank_soft_mode=self.memory_bank_soft_mode,
+            memory_bank_soft_beta=self.memory_bank_soft_beta,
+            memory_bank_margin_head=self.memory_bank_margin_head,
+            memory_bank_margin_regularization_weight=self.memory_bank_margin_regularization_weight,
             lexical_text_by_content=lexical_text_by_content,
             save_dir=save_dir,
             metrics_path=metrics_path,

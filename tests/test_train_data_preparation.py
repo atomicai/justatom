@@ -278,6 +278,10 @@ def test_create_training_job_preserves_optimizer_and_legacy_style_params():
         memory_bank_mining_mode="mixed",
         memory_bank_hard_negatives=32,
         memory_bank_random_negatives=16,
+        memory_bank_adaptive_hard=True,
+        memory_bank_adaptive_hard_mode="soft",
+        memory_bank_hard_collision_threshold=0.02,
+        memory_bank_hard_collision_beta=0.07,
     )
 
     assert isinstance(job, train_api.EncoderGammaTrainingJob)
@@ -289,6 +293,10 @@ def test_create_training_job_preserves_optimizer_and_legacy_style_params():
     assert job.memory_bank_mining_mode == "mixed"
     assert job.memory_bank_hard_negatives == 32
     assert job.memory_bank_random_negatives == 16
+    assert job.memory_bank_adaptive_hard is True
+    assert job.memory_bank_adaptive_hard_mode == "soft"
+    assert job.memory_bank_hard_collision_threshold == 0.02
+    assert job.memory_bank_hard_collision_beta == 0.07
 
 
 def test_resolve_train_kwargs_reads_optimizer_and_legacy_style_params():
@@ -305,6 +313,15 @@ def test_resolve_train_kwargs_reads_optimizer_and_legacy_style_params():
                 "memory_bank_hard_negatives": 32,
                 "memory_bank_random_negatives": 16,
                 "memory_bank_too_hard_margin": 0.01,
+                "memory_bank_hard_similarity_cap": 0.45,
+                "memory_bank_soft_mode": "soft",
+                "memory_bank_soft_beta": 0.05,
+                "memory_bank_margin_head": True,
+                "memory_bank_margin_regularization_weight": 7.0,
+                "memory_bank_adaptive_hard": True,
+                "memory_bank_adaptive_hard_mode": "soft",
+                "memory_bank_hard_collision_threshold": 0.02,
+                "memory_bank_hard_collision_beta": 0.07,
             },
         }
     )
@@ -318,6 +335,15 @@ def test_resolve_train_kwargs_reads_optimizer_and_legacy_style_params():
     assert kwargs["memory_bank_hard_negatives"] == 32
     assert kwargs["memory_bank_random_negatives"] == 16
     assert kwargs["memory_bank_too_hard_margin"] == 0.01
+    assert kwargs["memory_bank_hard_similarity_cap"] == 0.45
+    assert kwargs["memory_bank_soft_mode"] == "soft"
+    assert kwargs["memory_bank_soft_beta"] == 0.05
+    assert kwargs["memory_bank_margin_head"] is True
+    assert kwargs["memory_bank_margin_regularization_weight"] == 7.0
+    assert kwargs["memory_bank_adaptive_hard"] is True
+    assert kwargs["memory_bank_adaptive_hard_mode"] == "soft"
+    assert kwargs["memory_bank_hard_collision_threshold"] == 0.02
+    assert kwargs["memory_bank_hard_collision_beta"] == 0.07
 
 
 def test_resolve_train_kwargs_maps_atom_gate_production_recipe():
@@ -352,6 +378,15 @@ def test_resolve_train_kwargs_maps_atom_gate_production_recipe():
                 "mining": "mixed",
                 "hard_negatives": 4,
                 "random_negatives": 4,
+                "hard_similarity_cap": 0.45,
+                "soft_mode": "soft",
+                "soft_beta": 0.05,
+                "margin_head": True,
+                "margin_regularization_weight": 7.0,
+                "adaptive_hard": True,
+                "adaptive_hard_mode": "soft",
+                "hard_collision_threshold": 0.02,
+                "hard_collision_beta": 0.07,
             },
         }
     )
@@ -382,6 +417,15 @@ def test_resolve_train_kwargs_maps_atom_gate_production_recipe():
     assert kwargs["memory_bank_mining_mode"] == "mixed"
     assert kwargs["memory_bank_hard_negatives"] == 4
     assert kwargs["memory_bank_random_negatives"] == 4
+    assert kwargs["memory_bank_hard_similarity_cap"] == 0.45
+    assert kwargs["memory_bank_soft_mode"] == "soft"
+    assert kwargs["memory_bank_soft_beta"] == 0.05
+    assert kwargs["memory_bank_margin_head"] is True
+    assert kwargs["memory_bank_margin_regularization_weight"] == 7.0
+    assert kwargs["memory_bank_adaptive_hard"] is True
+    assert kwargs["memory_bank_adaptive_hard_mode"] == "soft"
+    assert kwargs["memory_bank_hard_collision_threshold"] == 0.02
+    assert kwargs["memory_bank_hard_collision_beta"] == 0.07
 
 
 def test_atom_gate_recipe_has_canonical_defaults_without_separate_config():
@@ -474,6 +518,14 @@ def test_atom_gate_recipe_preserves_legacy_training_bank_overrides():
                 "memory_bank_mining_mode": "mixed",
                 "memory_bank_hard_negatives": 4,
                 "memory_bank_random_negatives": 4,
+                "memory_bank_hard_similarity_cap": 0.45,
+                "memory_bank_soft_mode": "soft-const",
+                "memory_bank_soft_beta": 0.05,
+                "memory_bank_margin_head": False,
+                "memory_bank_adaptive_hard": True,
+                "memory_bank_adaptive_hard_mode": "soft",
+                "memory_bank_hard_collision_threshold": 0.02,
+                "memory_bank_hard_collision_beta": 0.07,
             },
         }
     )
@@ -485,6 +537,41 @@ def test_atom_gate_recipe_preserves_legacy_training_bank_overrides():
     assert kwargs["memory_bank_mining_mode"] == "mixed"
     assert kwargs["memory_bank_hard_negatives"] == 4
     assert kwargs["memory_bank_random_negatives"] == 4
+    assert kwargs["memory_bank_hard_similarity_cap"] == 0.45
+    assert kwargs["memory_bank_soft_mode"] == "soft-const"
+    assert kwargs["memory_bank_soft_beta"] == 0.05
+    assert kwargs["memory_bank_margin_head"] is False
+    assert kwargs["memory_bank_adaptive_hard"] is True
+    assert kwargs["memory_bank_adaptive_hard_mode"] == "soft"
+    assert kwargs["memory_bank_hard_collision_threshold"] == 0.02
+    assert kwargs["memory_bank_hard_collision_beta"] == 0.07
+
+
+def test_create_training_job_preserves_memory_bank_soft_admission_config():
+    job = train_api.create_training_job(
+        recipe="atom_gate",
+        dataset_name_or_path="dummy",
+        memory_bank_size=256,
+        memory_bank_too_hard_margin=0.05,
+        memory_bank_soft_mode="soft",
+        memory_bank_soft_beta=0.05,
+        memory_bank_margin_head=True,
+        memory_bank_margin_regularization_weight=7.0,
+        memory_bank_adaptive_hard=True,
+        memory_bank_adaptive_hard_mode="soft",
+        memory_bank_hard_collision_threshold=0.02,
+        memory_bank_hard_collision_beta=0.07,
+    )
+
+    assert isinstance(job, train_api.AtomGateTrainingJob)
+    assert job.memory_bank_soft_mode == "soft"
+    assert job.memory_bank_soft_beta == 0.05
+    assert job.memory_bank_margin_head is True
+    assert job.memory_bank_margin_regularization_weight == 7.0
+    assert job.memory_bank_adaptive_hard is True
+    assert job.memory_bank_adaptive_hard_mode == "soft"
+    assert job.memory_bank_hard_collision_threshold == 0.02
+    assert job.memory_bank_hard_collision_beta == 0.07
 
 
 def test_create_training_job_allows_temperature_contrastive_for_gamma_modes():

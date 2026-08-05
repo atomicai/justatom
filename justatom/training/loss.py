@@ -588,6 +588,10 @@ class ContrastiveLoss(nn.Module):
         tau_per_query: torch.Tensor | None = None,
         memory_negatives: torch.Tensor | None = None,
         memory_negative_mask: torch.Tensor | None = None,
+        memory_log_weights: torch.Tensor | None = None,
+        memory_margin: torch.Tensor | None = None,
+        memory_soft_beta: float | None = None,
+        memory_soft_eps: float = 1e-8,
     ) -> torch.Tensor:
         """InfoNCE / DCL on (queries, pos_queries) with in-batch negatives.
 
@@ -601,6 +605,13 @@ class ContrastiveLoss(nn.Module):
         ``memory_negatives`` can add a detached FIFO bank of document vectors to
         the denominator. ``memory_negative_mask`` has shape ``[B, M]`` and marks
         which bank entries are safe negatives for each current query.
+
+        ``memory_log_weights`` has shape ``[B, M]`` and adds per-entry
+        ``log(weight)`` to memory logits before masking.
+
+        ``memory_margin`` enables differentiable soft admission for memory-bank
+        negatives: bank logits receive ``log(sigmoid((pos - margin - bank) /
+        beta))`` before the hard key-collision mask is applied.
         """
         if queries.dim() != 2 or pos_queries.dim() != 2:
             raise ValueError("queries and pos_queries must be 2D")
@@ -612,6 +623,7 @@ class ContrastiveLoss(nn.Module):
         reduction = reduction or self.reduction
         q, p, n, m = self.normalize(queries, pos_queries, neg_queries, memory_negatives)
         memory_logits = None
+        memory_soft_log_weight = None
         memory_mask = None
         # NEW: NaN/Inf guard. If the bank contains corrupted embeddings
         # (e.g. a stale all-zeros row from a frozen encoder), drop the
@@ -633,8 +645,32 @@ class ContrastiveLoss(nn.Module):
                     raise ValueError(
                         "memory_negative_mask must have shape [batch, memory_size], "
                         f"got {tuple(memory_negative_mask.shape)} vs {tuple(memory_logits.shape)}"
-                    )
+                )
                 memory_mask = memory_negative_mask.to(device=q.device, dtype=torch.bool)
+            if memory_log_weights is not None and memory_logits is not None:
+                if memory_log_weights.shape != memory_logits.shape:
+                    raise ValueError(
+                        "memory_log_weights must have shape [batch, memory_size], "
+                        f"got {tuple(memory_log_weights.shape)} vs {tuple(memory_logits.shape)}"
+                    )
+                memory_soft_log_weight = memory_log_weights.to(device=q.device, dtype=q.dtype)
+            if memory_margin is not None and memory_logits is not None:
+                if memory_soft_beta is None or float(memory_soft_beta) <= 0.0:
+                    raise ValueError("memory_soft_beta must be > 0 when memory_margin is provided")
+                if memory_margin.shape[0] != q.shape[0]:
+                    raise ValueError(
+                        f"memory_margin batch dim must match queries, got {tuple(memory_margin.shape)} vs B={q.shape[0]}"
+                    )
+                margin = memory_margin.to(device=q.device, dtype=q.dtype).view(-1, 1)
+                positive_cos = torch.sum(q * p, dim=1, keepdim=True)
+                gate_arg = (positive_cos - margin - memory_logits) / float(memory_soft_beta)
+                gate = torch.sigmoid(gate_arg)
+                margin_log_weight = torch.log(gate.clamp_min(float(memory_soft_eps)))
+                memory_soft_log_weight = (
+                    margin_log_weight
+                    if memory_soft_log_weight is None
+                    else memory_soft_log_weight + margin_log_weight
+                )
 
         if tau_per_query is None:
             tau_scale = self.tau
@@ -656,6 +692,8 @@ class ContrastiveLoss(nn.Module):
             negative_logits = negative_logits / tau_scale
             if memory_logits is not None:
                 memory_logits = memory_logits / tau_scale
+                if memory_soft_log_weight is not None:
+                    memory_logits = memory_logits + memory_soft_log_weight
                 if memory_mask is not None:
                     memory_logits = memory_logits.masked_fill(
                         ~memory_mask,
@@ -671,6 +709,8 @@ class ContrastiveLoss(nn.Module):
         sim = q @ self.transpose(p) / tau_scale  # [B, B]
         if memory_logits is not None:
             memory_logits = memory_logits / tau_scale
+            if memory_soft_log_weight is not None:
+                memory_logits = memory_logits + memory_soft_log_weight
             if memory_mask is None:
                 memory_mask = torch.ones(memory_logits.shape, dtype=torch.bool, device=memory_logits.device)
             else:
