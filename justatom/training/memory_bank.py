@@ -1,8 +1,54 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 import torch.nn.functional as F
+from torch import nn
 from loguru import logger
+
+from justatom.training.config import MarginConfig, MarginMode, MemoryBankConfig
+
+
+@dataclass(frozen=True)
+class MemorySelection:
+    embeddings: torch.Tensor | None
+    active_mask: torch.Tensor | None
+    log_weights: torch.Tensor | None
+    collision_g: torch.Tensor | None
+    hard_weights: torch.Tensor | None
+    metrics: dict[str, float | torch.Tensor | str]
+
+
+class QueryMarginHead(nn.Module):
+    """Learn a bounded per-query admission margin m(q)."""
+
+    def __init__(self, embedding_dim: int, config: MarginConfig):
+        super().__init__()
+        if config.mode is not MarginMode.QUERY:
+            raise ValueError("QueryMarginHead requires memory_bank.margin.mode=query")
+        if embedding_dim <= 0:
+            raise ValueError("embedding_dim must be positive")
+
+        hidden_dim = max(32, min(256, embedding_dim // 2))
+        self.network = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, 1),
+        )
+        nn.init.zeros_(self.network[-1].weight)
+        nn.init.zeros_(self.network[-1].bias)
+        self.config = config
+        self.embedding_dim = embedding_dim
+
+    def forward(self, queries: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if queries.ndim != 2 or queries.shape[-1] != self.embedding_dim:
+            raise ValueError(
+                f"queries must have shape [batch, {self.embedding_dim}], got {tuple(queries.shape)}"
+            )
+        delta = self.config.scale * torch.tanh(self.network(queries)).squeeze(-1)
+        raw = self.config.base + delta
+        return raw, raw.clamp(self.config.minimum, self.config.maximum)
 
 
 def _empty_similarity_metrics(prefix: str) -> dict[str, float]:
@@ -90,42 +136,56 @@ class ContrastiveMemoryBank:
 
     def __init__(
         self,
-        size: int = 0,
-        *,
-        warmup_steps: int = 0,
-        mining_mode: str = "all",
-        hard_negatives: int = 0,
-        random_negatives: int = 0,
-        hard_warmup_steps: int = 0,
-        hard_ramp_steps: int = 1,
-        too_hard_margin: float | None = None,
-        hard_similarity_cap: float | None = None,
-        soft_mode: str = "hard",
-        adaptive_hard: bool = False,
-        adaptive_hard_mode: str = "hard",
-        hard_collision_threshold: float = 0.0,
-        hard_collision_beta: float = 0.05,
+        config: MemoryBankConfig | int | None = None,
+        **legacy_options,
     ):
-        self.size = max(int(size), 0)
-        self.warmup_steps = max(int(warmup_steps), 0)
-        self.mining_mode = str(mining_mode).strip().lower()
+        if isinstance(config, MemoryBankConfig):
+            if legacy_options:
+                raise TypeError("MemoryBankConfig cannot be combined with legacy keyword arguments")
+            self.config = config
+            self.size = config.size if config.enabled else 0
+            self.warmup_steps = config.warmup_steps
+            self.mining_mode = config.mining
+            self.hard_negatives = config.hard_negatives
+            self.random_negatives = config.random_negatives
+            self.hard_warmup_steps = config.hard_warmup_steps
+            self.hard_ramp_steps = config.hard_ramp_steps
+            self.too_hard_margin = None
+            self.hard_similarity_cap = None
+            self.soft_mode = "soft" if config.margin.mode is not MarginMode.OFF else "hard"
+            self.adaptive_hard = config.adaptive.enabled
+            self.adaptive_hard_mode = "soft" if config.adaptive.enabled else "hard"
+            self.hard_collision_threshold = config.adaptive.collision_threshold
+            self.hard_collision_beta = config.adaptive.collision_beta
+        else:
+            # Transitional adapter for the baseline trainer. It is removed together
+            # with that trainer once the new TrainingModule owns the bank.
+            size = legacy_options.pop("size", config if config is not None else 0)
+            self.config = None
+            self.size = max(int(size), 0)
+            self.warmup_steps = max(int(legacy_options.pop("warmup_steps", 0)), 0)
+            self.mining_mode = str(legacy_options.pop("mining_mode", "all")).strip().lower()
+            self.hard_negatives = max(int(legacy_options.pop("hard_negatives", 0)), 0)
+            self.random_negatives = max(int(legacy_options.pop("random_negatives", 0)), 0)
+            self.hard_warmup_steps = max(int(legacy_options.pop("hard_warmup_steps", 0)), 0)
+            self.hard_ramp_steps = max(int(legacy_options.pop("hard_ramp_steps", 1)), 1)
+            self.too_hard_margin = legacy_options.pop("too_hard_margin", None)
+            self.hard_similarity_cap = legacy_options.pop("hard_similarity_cap", None)
+            self.soft_mode = str(legacy_options.pop("soft_mode", "hard")).strip().lower()
+            self.adaptive_hard = bool(legacy_options.pop("adaptive_hard", False))
+            self.adaptive_hard_mode = str(legacy_options.pop("adaptive_hard_mode", "hard")).strip().lower()
+            self.hard_collision_threshold = float(legacy_options.pop("hard_collision_threshold", 0.0))
+            self.hard_collision_beta = float(legacy_options.pop("hard_collision_beta", 0.05))
+            if legacy_options:
+                names = ", ".join(sorted(legacy_options))
+                raise TypeError(f"unexpected memory bank options: {names}")
+
         if self.mining_mode not in {"all", "random", "hard", "mixed"}:
             raise ValueError("memory_bank_mining_mode must be one of: all, random, hard, mixed")
-        self.hard_negatives = max(int(hard_negatives), 0)
-        self.random_negatives = max(int(random_negatives), 0)
-        self.hard_warmup_steps = max(int(hard_warmup_steps), 0)
-        self.hard_ramp_steps = max(int(hard_ramp_steps), 1)
-        self.too_hard_margin = too_hard_margin
-        self.hard_similarity_cap = hard_similarity_cap
-        self.soft_mode = str(soft_mode).strip().lower()
         if self.soft_mode not in {"hard", "soft-const", "soft"}:
             raise ValueError("memory_bank soft_mode must be one of: hard, soft-const, soft")
-        self.adaptive_hard = bool(adaptive_hard)
-        self.adaptive_hard_mode = str(adaptive_hard_mode).strip().lower()
         if self.adaptive_hard_mode not in {"hard", "soft"}:
             raise ValueError("memory_bank adaptive_hard_mode must be one of: hard, soft")
-        self.hard_collision_threshold = float(hard_collision_threshold)
-        self.hard_collision_beta = float(hard_collision_beta)
         if self.hard_collision_beta <= 0.0:
             raise ValueError(f"memory_bank hard_collision_beta must be > 0, got {self.hard_collision_beta}")
         self.embeddings: torch.Tensor | None = None
@@ -140,6 +200,94 @@ class ContrastiveMemoryBank:
     @property
     def current_size(self) -> int:
         return 0 if self.embeddings is None else int(self.embeddings.shape[0])
+
+    def select(
+        self,
+        batch: dict[str, torch.Tensor],
+        *,
+        query_vectors: torch.Tensor,
+        positive_vectors: torch.Tensor,
+        step: int,
+    ) -> MemorySelection:
+        embeddings, active_mask, log_weights, metrics = self.get(
+            batch,
+            device=query_vectors.device,
+            dtype=query_vectors.dtype,
+            query_vectors=query_vectors,
+            positive_vectors=positive_vectors,
+            step=step,
+            return_log_weights=True,
+        )
+        if embeddings is None or active_mask is None:
+            return MemorySelection(
+                embeddings=None,
+                active_mask=None,
+                log_weights=None,
+                collision_g=None,
+                hard_weights=None,
+                metrics=metrics,
+            )
+
+        collision_g, hard_weights = self._collision_values(
+            batch,
+            embeddings=embeddings,
+            query_vectors=query_vectors,
+            positive_vectors=positive_vectors,
+        )
+        return MemorySelection(
+            embeddings=embeddings,
+            active_mask=active_mask,
+            log_weights=log_weights,
+            collision_g=collision_g,
+            hard_weights=hard_weights,
+            metrics=metrics,
+        )
+
+    @torch.no_grad()
+    def _collision_values(
+        self,
+        batch: dict[str, torch.Tensor],
+        *,
+        embeddings: torch.Tensor,
+        query_vectors: torch.Tensor,
+        positive_vectors: torch.Tensor,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        if not self.adaptive_hard:
+            return None, None
+
+        device = query_vectors.device
+        valid = torch.ones(
+            query_vectors.shape[0],
+            embeddings.shape[0],
+            dtype=torch.bool,
+            device=device,
+        )
+        for key, bank_values in (
+            ("doc_key_id", self.doc_key_ids),
+            ("content_key_id", self.content_key_ids),
+            ("query_key_id", self.query_key_ids),
+        ):
+            current_values = batch.get(key)
+            if bank_values is None:
+                continue
+            if current_values is None:
+                valid.zero_()
+                break
+            valid &= current_values.to(device=device).view(-1, 1) != bank_values.to(device=device).view(1, -1)
+
+        query_norm = F.normalize(query_vectors.detach(), p=2, dim=-1, eps=1e-8)
+        positive_norm = F.normalize(positive_vectors.detach(), p=2, dim=-1, eps=1e-8)
+        bank_norm = F.normalize(embeddings.detach(), p=2, dim=-1, eps=1e-8)
+        bank_sim = query_norm @ bank_norm.T
+        positive_sim = (query_norm * positive_norm).sum(dim=-1)
+        row_has_candidate = valid.any(dim=1)
+        bank_max = bank_sim.masked_fill(~valid, float("-inf")).max(dim=1).values
+        collision_g = torch.where(row_has_candidate, bank_max - positive_sim, torch.zeros_like(positive_sim))
+        raw_weight = torch.sigmoid(
+            (self.hard_collision_threshold - collision_g) / self.hard_collision_beta
+        )
+        hard_weights = torch.where(row_has_candidate, raw_weight, torch.ones_like(raw_weight))
+        return collision_g, hard_weights
 
     def get(
         self,
@@ -431,4 +579,9 @@ class ContrastiveMemoryBank:
 
 _ContrastiveMemoryBank = ContrastiveMemoryBank
 
-__all__ = ["ContrastiveMemoryBank", "_ContrastiveMemoryBank"]
+__all__ = [
+    "ContrastiveMemoryBank",
+    "MemorySelection",
+    "QueryMarginHead",
+    "_ContrastiveMemoryBank",
+]
