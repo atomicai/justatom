@@ -1,17 +1,13 @@
-import inspect
-import json
 from collections.abc import Generator, Iterable
-from itertools import islice
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import polars as pl
 from json_repair import loads as json_repair_loads
 from loguru import logger
 
 from justatom.etc.schema import Document
-from justatom.storing.dataset import API as DatasetApi
+from justatom.storing.datasets import DatasetLoader
 from justatom.tooling.profiler import MemoryProfiler
 
 
@@ -45,70 +41,41 @@ class DatasetRecordAdapter:
         cls,
         dataset_name_or_path: str | Path,
         lazy: bool = False,
-        **kwargs,
-    ) -> "DatasetRecordAdapter":
-        adapter_param_names = {name for name in inspect.signature(cls.__init__).parameters if name not in {"self", "records"}}
-        adapter_kwargs = {key: value for key, value in kwargs.items() if key in adapter_param_names}
-        dataset_kwargs = {key: value for key, value in kwargs.items() if key not in adapter_param_names}
-        limit = dataset_kwargs.pop("limit", None)
-
-        maybe_df_or_iter = DatasetApi.named(str(dataset_name_or_path)).iterator(lazy=lazy, **dataset_kwargs)
-        records = cls._to_records(maybe_df_or_iter, lazy=lazy, limit=limit)
-
-        return cls(records=records, **adapter_kwargs)
-
-    @staticmethod
-    def _to_records(
-        maybe_df_or_iter: Any,
-        lazy: bool,
+        split: str | None = None,
+        config: str | None = None,
         limit: int | None = None,
-    ) -> list[dict[str, Any]] | Generator[dict[str, Any], None, None]:
-        normalized_limit = None if limit is None else int(limit)
-        if normalized_limit is not None and normalized_limit < 0:
-            raise ValueError("dataset.limit must be >= 0")
-
-        if isinstance(maybe_df_or_iter, pl.DataFrame):
-            if normalized_limit is not None:
-                maybe_df_or_iter = maybe_df_or_iter.head(normalized_limit)
-            return maybe_df_or_iter.iter_rows(named=True) if lazy else maybe_df_or_iter.to_dicts()
-        if isinstance(maybe_df_or_iter, pl.LazyFrame):
-            if normalized_limit is not None:
-                maybe_df_or_iter = maybe_df_or_iter.limit(normalized_limit)
-            if not lazy:
-                pl_view = maybe_df_or_iter.collect(streaming=True)
-                return pl_view.to_dicts()
-
-            def _iter_lazyframe_rows() -> Generator[dict[str, Any], None, None]:
-                for batch in maybe_df_or_iter.collect_batches(maintain_order=True):
-                    for row in batch.iter_rows(named=True):
-                        yield row
-
-            return _iter_lazyframe_rows()
-        if not isinstance(maybe_df_or_iter, Iterable):
-            msg = (
-                "Dataset API returned unsupported value. Expected one of: "
-                "polars.DataFrame, polars.LazyFrame, or iterable of dict-like rows."
-            )
-            logger.error(msg)
-            raise TypeError(msg)
-
-        coerced_records = DatasetRecordAdapter._coerce_iter(maybe_df_or_iter)
-        if normalized_limit is not None:
-            coerced_records = islice(coerced_records, normalized_limit)
-        return coerced_records if lazy else list(coerced_records)
-
-    @staticmethod
-    def _coerce_iter(raw_iter: Iterable[Any]) -> Generator[dict[str, Any], None, None]:
-        for item in raw_iter:
-            if isinstance(item, (bytes, bytearray)):
-                try:
-                    yield json.loads(item.decode("utf-8"))
-                except Exception as ex:
-                    msg = "Iterator yielded bytes that could not be parsed as UTF-8 JSON objects."
-                    logger.error(msg)
-                    raise ValueError(msg) from ex
-            else:
-                yield item
+        drop_columns: list[str] | tuple[str, ...] | None = None,
+        content_col: str | None = "content",
+        queries_col: str | None = "queries",
+        dataframe_col: str | None = None,
+        chunk_id_col: str | None = None,
+        keywords_col: str | None = None,
+        keywords_nested_col: str | None = "keyword_or_phrase",
+        explanation_nested_col: str | None = "explanation",
+        filter_fields: list[str] | None = None,
+        preserve_all_fields: bool = True,
+    ) -> "DatasetRecordAdapter":
+        loaded = DatasetLoader.read(
+            str(dataset_name_or_path),
+            lazy=lazy,
+            split=split,
+            config=config,
+            limit=limit,
+            drop_columns=drop_columns,
+        )
+        records = loaded if lazy else loaded.iter_rows(named=True)
+        return cls(
+            records=records,
+            content_col=content_col,
+            queries_col=queries_col,
+            dataframe_col=dataframe_col,
+            chunk_id_col=chunk_id_col,
+            keywords_col=keywords_col,
+            keywords_nested_col=keywords_nested_col,
+            explanation_nested_col=explanation_nested_col,
+            filter_fields=filter_fields,
+            preserve_all_fields=preserve_all_fields,
+        )
 
     @staticmethod
     def _is_missing(value: Any) -> bool:

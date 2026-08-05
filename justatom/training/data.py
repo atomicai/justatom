@@ -8,7 +8,7 @@ from typing import Any
 
 import polars as pl
 
-from justatom.storing.dataset import API as DatasetApi
+from justatom.storing.datasets import DatasetLoader
 from justatom.tooling.dataset import DatasetRecordAdapter
 from justatom.training.config import TrainConfig
 
@@ -71,60 +71,16 @@ def _iterate_from_raw_samples(
             yield payload
 
 
-def _iterate_from_frame_batches(
-    frame_batches: Iterable[pl.DataFrame],
-    *,
-    content_field: str,
-    labels_field: str,
-    chunk_id_col: str | None,
-    keywords_or_phrases_field: str | None,
-    keywords_nested_col: str | None,
-    explanation_nested_col: str | None,
-    filters: dict | None,
-) -> Generator[dict[str, Any], None, None]:
-    for batch in frame_batches:
-        yield from _iterate_from_raw_samples(
-            batch.iter_rows(named=True),
-            content_field=content_field,
-            labels_field=labels_field,
-            chunk_id_col=chunk_id_col,
-            keywords_or_phrases_field=keywords_or_phrases_field,
-            keywords_nested_col=keywords_nested_col,
-            explanation_nested_col=explanation_nested_col,
-            filters=filters,
-        )
-
-
-def _frame_batches_from_source(
-    *,
-    dataset_name_or_path: str | Path,
-    split: str | None,
-) -> Iterable[pl.DataFrame] | None:
-    source: Any = DatasetApi.named(str(dataset_name_or_path)).iterator(lazy=True, split=split)
-    if isinstance(source, pl.DataFrame):
-        return [source]
-    if isinstance(source, pl.LazyFrame):
-        return source.collect_batches(maintain_order=True)
-    return None
-
-
-def _iterate_adapter_rows(docs_adapter: DatasetRecordAdapter) -> Generator[dict[str, Any], None, None]:
-    for document in docs_adapter.iterator():
-        yield {
-            "content": document.get("content"),
-            "queries": document.get("meta", {}).get("labels", []),
-            "chunk_id": document.get("id"),
-            "keywords_or_phrases": document.get("meta", {}).get("keywords_or_phrases", []),
-        }
-
-
 def iterate_training_rows(
     *,
     dataset_name_or_path: str | Path,
     content_field: str = "content",
     labels_field: str = "queries",
+    lazy: bool = True,
+    config: str | None = None,
     split: str | None = None,
     limit: int | None = None,
+    drop_columns: tuple[str, ...] | list[str] | None = None,
     chunk_id_col: str | None = None,
     keywords_or_phrases_field: str | None = None,
     keywords_nested_col: str | None = None,
@@ -133,41 +89,23 @@ def iterate_training_rows(
 ) -> Iterable[dict[str, Any]]:
     if dataset_name_or_path is None:
         raise ValueError("dataset_name_or_path must be provided for training")
-    frame_batches = _frame_batches_from_source(dataset_name_or_path=dataset_name_or_path, split=split)
-    if frame_batches is not None:
-        rows = _iterate_from_frame_batches(
-            frame_batches,
-            content_field=content_field,
-            labels_field=labels_field,
-            chunk_id_col=chunk_id_col,
-            keywords_or_phrases_field=keywords_or_phrases_field,
-            keywords_nested_col=keywords_nested_col,
-            explanation_nested_col=explanation_nested_col,
-            filters=filters,
-        )
-        return rows if limit is None else islice(rows, int(limit))
-
-    docs_adapter = DatasetRecordAdapter.from_source(
-        dataset_name_or_path=str(dataset_name_or_path),
-        lazy=True,
-        content_col=content_field,
-        queries_col=labels_field,
+    source = DatasetLoader.read(
+        dataset_name_or_path,
+        lazy=lazy,
         split=split,
+        config=config,
+        drop_columns=drop_columns,
+    )
+    samples = source if lazy else source.iter_rows(named=True)
+    rows = _iterate_from_raw_samples(
+        samples,
+        content_field=content_field,
+        labels_field=labels_field,
         chunk_id_col=chunk_id_col,
-        keywords_col=keywords_or_phrases_field,
+        keywords_or_phrases_field=keywords_or_phrases_field,
         keywords_nested_col=keywords_nested_col,
         explanation_nested_col=explanation_nested_col,
-        filter_fields=(filters or {}).get("fields", []),
-    )
-    rows = _iterate_from_raw_samples(
-        _iterate_adapter_rows(docs_adapter),
-        content_field="content",
-        labels_field="queries",
-        chunk_id_col="chunk_id" if chunk_id_col is not None else None,
-        keywords_or_phrases_field="keywords_or_phrases",
-        keywords_nested_col="keyword_or_phrase",
-        explanation_nested_col="explanation",
-        filters=None,
+        filters=filters,
     )
     return rows if limit is None else islice(rows, int(limit))
 
@@ -242,8 +180,11 @@ def sample_training_rows(
     seed: int = 0,
     content_field: str = "content",
     labels_field: str = "queries",
+    lazy: bool = True,
+    config: str | None = None,
     split: str | None = None,
     limit: int | None = None,
+    drop_columns: tuple[str, ...] | list[str] | None = None,
     chunk_id_col: str | None = None,
     keywords_or_phrases_field: str | None = None,
     keywords_nested_col: str | None = None,
@@ -254,8 +195,11 @@ def sample_training_rows(
         dataset_name_or_path=dataset_name_or_path,
         content_field=content_field,
         labels_field=labels_field,
+        lazy=lazy,
+        config=config,
         split=split,
         limit=limit,
+        drop_columns=drop_columns,
         chunk_id_col=chunk_id_col,
         keywords_or_phrases_field=keywords_or_phrases_field,
         keywords_nested_col=keywords_nested_col,
@@ -290,8 +234,11 @@ def prepare_training_data_from_config(
         seed=config.experiment.seed,
         content_field=config.dataset.content_field,
         labels_field=config.dataset.labels_field,
+        lazy=config.dataset.lazy,
+        config=config.dataset.config,
         split=config.dataset.split,
         limit=config.dataset.limit,
+        drop_columns=config.dataset.drop_columns,
         chunk_id_col=config.dataset.chunk_id_col,
         keywords_or_phrases_field=config.dataset.keywords_col,
         keywords_nested_col=config.dataset.keywords_nested_col,

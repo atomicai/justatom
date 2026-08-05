@@ -8,31 +8,46 @@ from unittest.mock import patch
 import polars as pl
 
 from justatom.etc.schema import Document
+from justatom.storing.datasets.errors import DatasetNotFoundError, DatasetReadError, DatasetStreamingUnsupportedError
 from justatom.tooling.dataset import DatasetRecordAdapter
 from justatom.tooling.profiler import MemoryProfiler
 
 
 class EvalDataNormalizationTest(unittest.TestCase):
-    def test_from_source_supports_named_justatom_dataset(self):
-        adapter = DatasetRecordAdapter.from_source(
-            dataset_name_or_path="justatom",
-            content_col="content",
-            queries_col="queries",
-            chunk_id_col="chunk_id",
-            keywords_col="keywords_or_phrases",
-            keywords_nested_col="keyword_or_phrase",
-            explanation_nested_col="explanation",
-            lazy=True,
+    def test_from_source_forwards_explicit_loader_options_once(self):
+        frame = pl.DataFrame([{"id": "a", "passage": "doc", "question": "query", "blob": "drop"}])
+
+        with patch("justatom.tooling.dataset.DatasetLoader.read", return_value=frame) as mocked:
+            adapter = DatasetRecordAdapter.from_source(
+                dataset_name_or_path="owner/data",
+                lazy=False,
+                split="train",
+                config="russian",
+                limit=1,
+                drop_columns=["blob"],
+                content_col="passage",
+                queries_col="question",
+                chunk_id_col="id",
+            )
+
+            first = next(adapter.iterator())
+
+        mocked.assert_called_once_with(
+            "owner/data",
+            lazy=False,
+            split="train",
+            config="russian",
+            limit=1,
+            drop_columns=["blob"],
         )
+        self.assertEqual(first["content"], "doc")
+        self.assertEqual(first["meta"]["labels"], ["query"])
 
-        first = next(adapter.iterator())
-        self.assertTrue(first["id"])
-        self.assertTrue(first["content"])
-        self.assertTrue(first["meta"]["labels"])
-        self.assertIn("title", first["meta"])
-        self.assertIn("keywords_or_phrases", first["meta"])
+    def test_from_source_rejects_magic_justatom_source(self):
+        with self.assertRaises(DatasetNotFoundError):
+            DatasetRecordAdapter.from_source(dataset_name_or_path="justatom", lazy=True)
 
-    def test_from_source_supports_hf_uri(self):
+    def test_from_source_supports_hf_config_and_split_fields(self):
         rows = [
             {
                 "text": "Органические остатки представлены известковыми выделениями.",
@@ -47,21 +62,22 @@ class EvalDataNormalizationTest(unittest.TestCase):
                 os.environ,
                 {"HF_TOKEN": "", "HUGGINGFACE_HUB_TOKEN": "", "HF_HUB_TOKEN": "", "HF_API_KEY": ""},
             ),
-            patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked,
+            patch("justatom.storing.datasets.readers.load_dataset", return_value=rows) as mocked,
         ):
             adapter = DatasetRecordAdapter.from_source(
-                dataset_name_or_path="hf://miracl/miracl?config=ru&split=train",
+                dataset_name_or_path="miracl/miracl",
                 content_col="text",
                 queries_col="q",
+                config="ru",
+                split="train",
                 lazy=True,
             )
-
-        first = next(adapter.iterator())
+            first = next(adapter.iterator())
         mocked.assert_called_once_with(
             "miracl/miracl",
             name="ru",
             split="train",
-            streaming=False,
+            streaming=True,
         )
         self.assertEqual(
             first["content"],
@@ -88,7 +104,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
                 os.environ,
                 {"HF_TOKEN": "", "HUGGINGFACE_HUB_TOKEN": "", "HF_HUB_TOKEN": "", "HF_API_KEY": ""},
             ),
-            patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked,
+            patch("justatom.storing.datasets.readers.load_dataset", return_value=rows) as mocked,
         ):
             adapter = DatasetRecordAdapter.from_source(
                 dataset_name_or_path="justatom/meme-russian-ir",
@@ -96,13 +112,12 @@ class EvalDataNormalizationTest(unittest.TestCase):
                 queries_col="q",
                 lazy=True,
             )
-
-        first = next(adapter.iterator())
+            first = next(adapter.iterator())
         mocked.assert_called_once_with(
             "justatom/meme-russian-ir",
             name=None,
             split="train",
-            streaming=False,
+            streaming=True,
         )
         self.assertEqual(first["content"], "sample text")
         self.assertEqual(first["text"], "sample text")
@@ -126,7 +141,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("justatom.storing.dataset.load_dataset") as mocked:
+            with patch("justatom.storing.datasets.readers.load_dataset") as mocked:
                 adapter = DatasetRecordAdapter.from_source(
                     dataset_name_or_path=data_path,
                     content_col="content",
@@ -152,16 +167,19 @@ class EvalDataNormalizationTest(unittest.TestCase):
                 return rows
             raise AssertionError(split)
 
-        with patch("justatom.storing.dataset.load_dataset", side_effect=_fake_load_dataset) as mocked:
+        with (
+            patch("justatom.storing.datasets.readers.load_dataset", side_effect=_fake_load_dataset) as mocked,
+            patch("justatom.storing.datasets.readers._load_parquet_fallback", return_value=None),
+        ):
             adapter = DatasetRecordAdapter.from_source(
-                dataset_name_or_path="hf://miracl/miracl?config=ru",
+                dataset_name_or_path="miracl/miracl",
                 content_col="text",
                 queries_col="q",
+                config="ru",
                 split="dev|test",
                 lazy=True,
             )
-
-        first = next(adapter.iterator())
+            first = next(adapter.iterator())
         self.assertEqual(first["content"], "text-a")
         self.assertEqual(first["meta"]["labels"], ["query-a"])
         self.assertEqual(mocked.call_count, 2)
@@ -169,22 +187,27 @@ class EvalDataNormalizationTest(unittest.TestCase):
         self.assertEqual(mocked.call_args_list[1].kwargs["split"], "test")
 
     def test_from_source_reports_helpful_error_for_single_missing_hf_split(self):
-        with patch(
-            "justatom.storing.dataset.load_dataset",
-            side_effect=ValueError('Unknown split "test". Should be one of ["train"].'),
+        with (
+            patch(
+                "justatom.storing.datasets.readers.load_dataset",
+                side_effect=ValueError('Unknown split "test". Should be one of ["train"].'),
+            ),
+            patch("justatom.storing.datasets.readers._load_parquet_fallback", return_value=None),
         ):
-            with self.assertRaisesRegex(ValueError, r"test\|train|train\|test"):
-                DatasetRecordAdapter.from_source(
-                    dataset_name_or_path="hf://miracl/miracl?config=ru",
+            with self.assertRaisesRegex(DatasetReadError, r"test"):
+                adapter = DatasetRecordAdapter.from_source(
+                    dataset_name_or_path="miracl/miracl",
                     content_col="text",
                     queries_col="q",
+                    config="ru",
                     split="test",
                     lazy=True,
                 )
+                next(adapter.iterator())
 
-    def test_from_source_supports_builtin_jsonl_uri(self):
+    def test_from_source_supports_packaged_demo_name(self):
         adapter = DatasetRecordAdapter.from_source(
-            dataset_name_or_path="builtin://datasets/demo_retrieval.jsonl",
+            dataset_name_or_path="demo",
             content_col="content",
             queries_col="labels",
             chunk_id_col="chunk_id",
@@ -197,9 +220,9 @@ class EvalDataNormalizationTest(unittest.TestCase):
         self.assertEqual(first["meta"]["labels"], ["how long do cats sleep", "cat sleeping hours"])
         self.assertEqual(first["meta"]["instruction"], "builtin-demo")
 
-    def test_from_source_respects_limit_for_builtin_jsonl(self):
+    def test_from_source_respects_limit_for_packaged_demo(self):
         adapter = DatasetRecordAdapter.from_source(
-            dataset_name_or_path="builtin://datasets/demo_retrieval.jsonl",
+            dataset_name_or_path="demo",
             content_col="content",
             queries_col="labels",
             chunk_id_col="chunk_id",
@@ -287,19 +310,17 @@ class EvalDataNormalizationTest(unittest.TestCase):
                 chunk_id_col="chunk_id",
                 lazy=False,
             )
-            self.assertIsInstance(eager_adapter.records, list)
-            self.assertEqual(eager_adapter.records[0]["chunk_id"], "a")
+            self.assertFalse(isinstance(eager_adapter.records, list))
+            self.assertEqual(next(iter(eager_adapter.records))["chunk_id"], "a")
 
-            lazy_adapter = DatasetRecordAdapter.from_source(
-                dataset_name_or_path=data_path,
-                content_col="content",
-                queries_col="queries",
-                chunk_id_col="chunk_id",
-                lazy=True,
-            )
-            self.assertFalse(isinstance(lazy_adapter.records, list))
-            first = next(iter(lazy_adapter.records))
-            self.assertEqual(first["chunk_id"], "a")
+            with self.assertRaises(DatasetStreamingUnsupportedError):
+                DatasetRecordAdapter.from_source(
+                    dataset_name_or_path=data_path,
+                    content_col="content",
+                    queries_col="queries",
+                    chunk_id_col="chunk_id",
+                    lazy=True,
+                )
         finally:
             data_path.unlink(missing_ok=True)
 
@@ -340,7 +361,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
         finally:
             data_path.unlink(missing_ok=True)
 
-    def test_from_source_lazy_json_warns_and_falls_back_to_eager_load(self):
+    def test_from_source_lazy_json_raises_instead_of_falling_back(self):
         fd, path = tempfile.mkstemp(suffix=".json", prefix="adapter_streaming_")
         os.close(fd)
         Path(path).unlink(missing_ok=True)
@@ -352,23 +373,18 @@ class EvalDataNormalizationTest(unittest.TestCase):
         data_path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
 
         try:
-            with patch("justatom.storing.dataset.logger.warning") as warning_mock:
-                adapter = DatasetRecordAdapter.from_source(
+            with self.assertRaises(DatasetStreamingUnsupportedError):
+                DatasetRecordAdapter.from_source(
                     dataset_name_or_path=data_path,
                     content_col="content",
                     queries_col="queries",
                     chunk_id_col="chunk_id",
                     lazy=True,
                 )
-
-                first = next(iter(adapter.records))
-                self.assertEqual(first["chunk_id"], "a")
-                warning_mock.assert_called_once()
-                self.assertIn("lazy=True for .json is unsupported", warning_mock.call_args[0][0])
         finally:
             data_path.unlink(missing_ok=True)
 
-    def test_from_source_lazy_json_wrapped_payload_warns_and_still_loads(self):
+    def test_from_source_wrapped_json_loads_only_in_explicit_eager_mode(self):
         fd, path = tempfile.mkstemp(suffix=".json", prefix="adapter_wrapped_")
         os.close(fd)
         Path(path).unlink(missing_ok=True)
@@ -387,18 +403,15 @@ class EvalDataNormalizationTest(unittest.TestCase):
         )
 
         try:
-            with patch("justatom.storing.dataset.logger.warning") as warning_mock:
-                adapter = DatasetRecordAdapter.from_source(
-                    dataset_name_or_path=data_path,
-                    content_col="content",
-                    queries_col="queries",
-                    chunk_id_col="chunk_id",
-                    lazy=True,
-                )
-
-                first = next(iter(adapter.records))
-                self.assertEqual(first["chunk_id"], "a")
-                warning_mock.assert_called_once()
+            adapter = DatasetRecordAdapter.from_source(
+                dataset_name_or_path=data_path,
+                content_col="content",
+                queries_col="queries",
+                chunk_id_col="chunk_id",
+                lazy=False,
+            )
+            first = next(iter(adapter.records))
+            self.assertEqual(first["chunk_id"], "a")
         finally:
             data_path.unlink(missing_ok=True)
 
