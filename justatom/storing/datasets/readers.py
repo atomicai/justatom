@@ -2,17 +2,30 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from functools import lru_cache
 from importlib.resources import as_file
+from itertools import islice
+import os
 from pathlib import Path
 from typing import Any
 
 import polars as pl
 
+try:
+    from datasets import load_dataset
+except Exception:
+    load_dataset = None  # type: ignore[assignment]
+
+try:
+    from huggingface_hub import hf_hub_download, list_repo_files
+except Exception:
+    hf_hub_download = None  # type: ignore[assignment]
+    list_repo_files = None  # type: ignore[assignment]
+
 from justatom.storing.datasets.errors import (
     DatasetReadError,
     DatasetStreamingUnsupportedError,
     UnsupportedDatasetFormatError,
-    UnsupportedDatasetSourceError,
 )
 from justatom.storing.datasets.source import (
     DatasetReadOptions,
@@ -25,6 +38,7 @@ from justatom.storing.datasets.source import (
 _STREAMING_EXTENSIONS = {".csv", ".jsonl", ".ndjson", ".parquet"}
 _EAGER_ONLY_EXTENSIONS = {".json", ".xlsx"}
 _SUPPORTED_EXTENSIONS = _STREAMING_EXTENSIONS | _EAGER_ONLY_EXTENSIONS
+_HF_TOKEN_ENV_NAMES = ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_HUB_TOKEN", "HF_API_KEY")
 
 
 def _unsupported_format(path: Path) -> UnsupportedDatasetFormatError:
@@ -124,6 +138,151 @@ def _iter_packaged_rows(source: PackagedDatasetSource, options: DatasetReadOptio
         yield from _iter_local_rows(Path(path), options)
 
 
+def _hf_token() -> str | None:
+    for name in _HF_TOKEN_ENV_NAMES:
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
+def _split_candidates(split: str | None) -> tuple[str, ...]:
+    raw = "train" if split is None else split
+    candidates = tuple(candidate.strip() for candidate in raw.split("|") if candidate.strip())
+    return candidates or ("train",)
+
+
+@lru_cache(maxsize=64)
+def _repo_files(repo_id: str, token: str | None) -> tuple[str, ...]:
+    if list_repo_files is None:
+        return ()
+    try:
+        return tuple(list_repo_files(repo_id=repo_id, repo_type="dataset", token=token))
+    except Exception:
+        return ()
+
+
+def _parquet_files_for_split(repo_files: tuple[str, ...], split: str) -> list[str]:
+    normalized_split = split.strip().lower()
+    matches: list[str] = []
+    for repo_file in repo_files:
+        normalized_file = repo_file.lower()
+        basename = Path(normalized_file).name
+        if not normalized_file.endswith(".parquet"):
+            continue
+        if basename == f"{normalized_split}.parquet" or basename.startswith(f"{normalized_split}-"):
+            matches.append(repo_file)
+            continue
+        if f"/{normalized_split}/" in normalized_file or f"/{normalized_split}-" in normalized_file:
+            matches.append(repo_file)
+    return sorted(matches)
+
+
+def _load_parquet_fallback(
+    source: HuggingFaceDatasetSource,
+    split: str,
+    *,
+    lazy: bool,
+    token: str | None,
+) -> pl.LazyFrame | pl.DataFrame | None:
+    if hf_hub_download is None:
+        return None
+    parquet_files = _parquet_files_for_split(_repo_files(source.repo_id, token), split)
+    if not parquet_files:
+        return None
+    local_paths: list[str] = []
+    for repo_file in parquet_files:
+        try:
+            local_paths.append(
+                hf_hub_download(
+                    repo_id=source.repo_id,
+                    filename=repo_file,
+                    repo_type="dataset",
+                    token=token,
+                )
+            )
+        except Exception:
+            return None
+    return pl.scan_parquet(local_paths) if lazy else pl.read_parquet(local_paths)
+
+
+def _load_hf_source(
+    source: HuggingFaceDatasetSource,
+    options: DatasetReadOptions,
+    *,
+    streaming: bool,
+):
+    if load_dataset is None:
+        raise DatasetReadError(
+            "Hugging Face dataset support requires the datasets package; run `pip install datasets`."
+        )
+    token = _hf_token()
+    candidates = _split_candidates(options.split)
+    last_error: Exception | None = None
+    for candidate in candidates:
+        kwargs: dict[str, Any] = {
+            "name": options.config,
+            "split": candidate,
+            "streaming": streaming,
+        }
+        if token is not None:
+            kwargs["token"] = token
+        try:
+            return load_dataset(source.repo_id, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            fallback = _load_parquet_fallback(
+                source,
+                candidate,
+                lazy=streaming,
+                token=token,
+            )
+            if fallback is not None:
+                return fallback
+    assert last_error is not None
+    rendered_candidates = "|".join(candidates)
+    raise DatasetReadError(
+        f"Failed to load Hugging Face dataset {source.repo_id!r} for split candidates {rendered_candidates!r}: "
+        f"{last_error}"
+    ) from last_error
+
+
+def _iter_hf_rows(source: HuggingFaceDatasetSource, options: DatasetReadOptions) -> Iterator[dict[str, Any]]:
+    dataset = _load_hf_source(source, options, streaming=True)
+    if isinstance(dataset, pl.LazyFrame):
+        yield from _iter_lazy_frame(_apply_lazy_options(dataset, options))
+        return
+    dropped = set(options.drop_columns)
+    rows = (
+        {key: value for key, value in dict(row).items() if key not in dropped}
+        for row in dataset
+    )
+    yield from rows if options.limit is None else islice(rows, options.limit)
+
+
+def _hf_to_frame(source: HuggingFaceDatasetSource, options: DatasetReadOptions) -> pl.DataFrame:
+    dataset = _load_hf_source(source, options, streaming=False)
+    if isinstance(dataset, pl.DataFrame):
+        return _apply_eager_options(dataset, options)
+    if options.drop_columns and hasattr(dataset, "remove_columns"):
+        existing = set(getattr(dataset, "column_names", ()))
+        removable = [column for column in options.drop_columns if column in existing]
+        if removable:
+            dataset = dataset.remove_columns(removable)
+    if options.limit is not None and hasattr(dataset, "select") and hasattr(dataset, "__len__"):
+        dataset = dataset.select(range(min(options.limit, len(dataset))))
+    arrow_table = getattr(getattr(dataset, "data", None), "table", None)
+    if arrow_table is not None:
+        frame = pl.from_arrow(arrow_table)
+        if not isinstance(frame, pl.DataFrame):
+            raise DatasetReadError(f"Hugging Face dataset {source.repo_id!r} did not produce a tabular Arrow result.")
+        return _apply_eager_options(frame, options)
+    try:
+        return _apply_eager_options(pl.from_dicts([dict(row) for row in dataset]), options)
+    except Exception as exc:
+        raise DatasetReadError(f"Failed to convert Hugging Face dataset {source.repo_id!r} to Polars: {exc}") from exc
+
+
 def iter_source_rows(source: DatasetSource, options: DatasetReadOptions) -> Iterator[dict[str, Any]]:
     if isinstance(source, LocalDatasetSource):
         _validate_streaming_path(source.path)
@@ -132,7 +291,7 @@ def iter_source_rows(source: DatasetSource, options: DatasetReadOptions) -> Iter
         _validate_streaming_path(Path(source.resource.name))
         return _iter_packaged_rows(source, options)
     if isinstance(source, HuggingFaceDatasetSource):
-        raise UnsupportedDatasetSourceError("Hugging Face reading must go through DatasetLoader.")
+        return _iter_hf_rows(source, options)
     raise TypeError(f"Unsupported dataset source type: {type(source)!r}")
 
 
@@ -143,7 +302,7 @@ def source_to_frame(source: DatasetSource, options: DatasetReadOptions) -> pl.Da
         with as_file(source.resource) as path:
             return _local_to_frame(Path(path), options)
     if isinstance(source, HuggingFaceDatasetSource):
-        raise UnsupportedDatasetSourceError("Hugging Face reading must go through DatasetLoader.")
+        return _hf_to_frame(source, options)
     raise TypeError(f"Unsupported dataset source type: {type(source)!r}")
 
 

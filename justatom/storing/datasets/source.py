@@ -73,6 +73,10 @@ def resolve_dataset_source(value: str | Path) -> DatasetSource:
         raise UnsupportedDatasetSourceError(
             "Dataset custom URI syntax is not supported; use owner/dataset for Hugging Face or a local path."
         )
+    if "?" in raw and "/" in raw:
+        raise UnsupportedDatasetSourceError(
+            "Hugging Face query parameters are not supported; use separate config/split fields."
+        )
     if _HF_REPO_ID.fullmatch(raw):
         return HuggingFaceDatasetSource(repo_id=raw)
     raise DatasetNotFoundError(

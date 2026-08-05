@@ -5,6 +5,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from justatom.storing.datasets import DatasetLoader
 from justatom.storing.datasets.errors import (
     DatasetNotFoundError,
     DatasetStreamingUnsupportedError,
@@ -188,3 +189,21 @@ def test_unsupported_local_extension_lists_supported_formats(tmp_path):
 
     with pytest.raises(UnsupportedDatasetFormatError, match="csv"):
         source_to_frame(LocalDatasetSource(path.resolve()), DatasetReadOptions())
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["justatom/meme-russian-ir?split=train", "unicamp-dl/mmarco?config=russian"],
+)
+def test_hugging_face_query_parameters_are_rejected(source):
+    with pytest.raises(UnsupportedDatasetSourceError, match="separate config/split"):
+        DatasetLoader.read(source, lazy=True)
+
+
+@pytest.mark.parametrize("option", ["split", "config"])
+def test_local_source_rejects_hugging_face_only_options(tmp_path, option):
+    path = _write_tabular_dataset(tmp_path / "dataset.jsonl")
+    kwargs = {option: "train"}
+
+    with pytest.raises(UnsupportedDatasetSourceError, match=option):
+        DatasetLoader.read(path, lazy=True, **kwargs)

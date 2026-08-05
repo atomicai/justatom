@@ -1,3 +1,4 @@
+from justatom.storing.datasets.api import DatasetLoader
 from justatom.storing.datasets.errors import (
     DatasetError,
     DatasetNotFoundError,
@@ -19,6 +20,7 @@ __all__ = [
     "DatasetNotFoundError",
     "DatasetReadError",
     "DatasetReadOptions",
+    "DatasetLoader",
     "DatasetStreamingUnsupportedError",
     "HuggingFaceDatasetSource",
     "LocalDatasetSource",
