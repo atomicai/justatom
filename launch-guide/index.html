@@ -349,9 +349,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#repo-local-named-dataset" class="md-nav__link">
+  <a href="#repo-local-dataset-preset" class="md-nav__link">
     <span class="md-ellipsis">
-      Repo-local named dataset
+      Repo-local dataset preset
     </span>
   </a>
   
@@ -427,9 +427,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#mlnavigator-russian-retrieval" class="md-nav__link">
+  <a href="#boolq-ru" class="md-nav__link">
     <span class="md-ellipsis">
-      mlnavigator-russian-retrieval
+      boolq-ru
     </span>
   </a>
   
@@ -794,9 +794,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#repo-local-named-dataset" class="md-nav__link">
+  <a href="#repo-local-dataset-preset" class="md-nav__link">
     <span class="md-ellipsis">
-      Repo-local named dataset
+      Repo-local dataset preset
     </span>
   </a>
   
@@ -872,9 +872,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#mlnavigator-russian-retrieval" class="md-nav__link">
+  <a href="#boolq-ru" class="md-nav__link">
     <span class="md-ellipsis">
-      mlnavigator-russian-retrieval
+      boolq-ru
     </span>
   </a>
   
@@ -995,17 +995,20 @@ dataset:
 </ol>
 <p>This keeps scenario files short while still allowing richer dataset definitions.</p>
 <h2 id="supported-dataset-sources">Supported Dataset Sources<a class="headerlink" href="#supported-dataset-sources" title="Permanent link">&para;</a></h2>
-<h3 id="repo-local-named-dataset">Repo-local named dataset<a class="headerlink" href="#repo-local-named-dataset" title="Permanent link">&para;</a></h3>
+<h3 id="repo-local-dataset-preset">Repo-local dataset preset<a class="headerlink" href="#repo-local-dataset-preset" title="Permanent link">&para;</a></h3>
 <p><code>yaml
-name_or_path: justatom</code></p>
-<p>Resolves to the repository's local working dataset.</p>
+id: justatom</code></p>
+<p>Resolves to <code>.data/polaroids.ai.data.json</code> with <code>lazy: false</code>.</p>
 <h3 id="packaged-built-in-dataset">Packaged built-in dataset<a class="headerlink" href="#packaged-built-in-dataset" title="Permanent link">&para;</a></h3>
 <p><code>yaml
-name_or_path: builtin://datasets/demo_retrieval.jsonl</code></p>
+name_or_path: demo
+lazy: true</code></p>
 <p>Useful for smoke tests and tiny examples.</p>
 <h3 id="hugging-face-dataset">Hugging Face dataset<a class="headerlink" href="#hugging-face-dataset" title="Permanent link">&para;</a></h3>
 <p><code>yaml
-name_or_path: hf://MLNavigator/russian-retrieval
+name_or_path: MLNavigator/russian-retrieval
+config: null
+lazy: true
 split: train</code></p>
 <p>For HF datasets you can also provide fallback split candidates:</p>
 <p><code>yaml
@@ -1014,7 +1017,10 @@ split: dev|test</code></p>
 <p><code>yaml
 name_or_path: data/eval.jsonl
 name_or_path: /absolute/path/to/train.parquet</code></p>
-<p>Supported formats include <code>.json</code>, <code>.jsonl</code>, <code>.parquet</code>, <code>.csv</code>, and <code>.xlsx</code>.</p>
+<p>Supported formats include <code>.json</code>, <code>.jsonl</code>, <code>.parquet</code>, <code>.csv</code>, and <code>.xlsx</code>.
+Lazy mode is a real row iterator for <code>.jsonl</code>, <code>.parquet</code>, and <code>.csv</code>. Use
+<code>lazy: false</code> for <code>.json</code> and <code>.xlsx</code>; these formats raise a clear error when
+lazy mode is requested.</p>
 <h2 id="current-preset-ids">Current Preset IDs<a class="headerlink" href="#current-preset-ids" title="Permanent link">&para;</a></h2>
 <h3 id="justatom"><code>justatom</code><a class="headerlink" href="#justatom" title="Permanent link">&para;</a></h3>
 <ul>
@@ -1031,10 +1037,10 @@ name_or_path: /absolute/path/to/train.parquet</code></p>
 <li>Source: <code>justatom/builtins/configs/dataset/demo-train.yaml</code></li>
 <li>Best for: training smoke tests</li>
 </ul>
-<h3 id="mlnavigator-russian-retrieval"><code>mlnavigator-russian-retrieval</code><a class="headerlink" href="#mlnavigator-russian-retrieval" title="Permanent link">&para;</a></h3>
+<h3 id="boolq-ru"><code>boolq-ru</code><a class="headerlink" href="#boolq-ru" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Source: <code>justatom/builtins/configs/dataset/mlnavigator-russian-retrieval.yaml</code></li>
-<li>Best for: realistic HF-backed Russian retrieval experiments</li>
+<li>Source: <code>configs/dataset/boolq-ru.yaml</code></li>
+<li>Best for: compact Russian QA retrieval experiments backed by Hugging Face</li>
 </ul>
 <h2 id="quick-start-evaluation">Quick Start: Evaluation<a class="headerlink" href="#quick-start-evaluation" title="Permanent link">&para;</a></h2>
 <h3 id="evaluate-with-the-repo-local-preset">Evaluate with the repo-local preset<a class="headerlink" href="#evaluate-with-the-repo-local-preset" title="Permanent link">&para;</a></h3>
@@ -1045,12 +1051,12 @@ python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id justatom
 python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id demo-eval</code></p>
 <h3 id="evaluate-with-mlnavigator-on-hugging-face">Evaluate with MLNavigator on Hugging Face<a class="headerlink" href="#evaluate-with-mlnavigator-on-hugging-face" title="Permanent link">&para;</a></h3>
 <p><code>bash
-python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id mlnavigator-russian-retrieval</code></p>
+python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id boolq-ru</code></p>
 <h3 id="evaluate-with-direct-overrides">Evaluate with direct overrides<a class="headerlink" href="#evaluate-with-direct-overrides" title="Permanent link">&para;</a></h3>
 <p><code>bash
 python -m justatom.api.eval \
   --config configs/evaluate.yaml \
-  --dataset.name_or_path hf://MLNavigator/russian-retrieval \
+  --dataset.name_or_path MLNavigator/russian-retrieval \
   --dataset.split train \
   --dataset.content_field text \
   --dataset.labels_field q</code></p>
