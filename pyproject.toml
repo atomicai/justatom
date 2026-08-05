@@ -60,6 +60,7 @@ testpaths = [
 ]
 markers = [
   "integration: tests that require external services (e.g. Weaviate/Docker)",
+  "network: tests that download external models or datasets",
 ]
 
 [tool.black]

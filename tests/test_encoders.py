@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 
+import pytest
 import torch
 from loguru import logger
 from tqdm.auto import tqdm
@@ -12,6 +13,8 @@ from justatom.processing.prime import RuntimeProcessor
 from justatom.processing.tokenizer import ITokenizer
 from justatom.running.encoders import EncoderRunner
 from justatom.running.mask import IModelRunner
+
+pytestmark = pytest.mark.network
 
 
 class M1LMRunnerTest(unittest.TestCase):

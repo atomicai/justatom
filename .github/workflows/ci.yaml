@@ -69,9 +69,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install ".[torch,test]"
     - name: Run tests
-      env:
-        RUN_SLOW_TESTS: '1'
-      run: python -m pytest tests -m "not integration"
+      run: python -m pytest tests -m "not integration and not network"
   pytest-windows:
     name: Tests (Windows)
     runs-on: windows-latest
@@ -85,7 +83,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install ".[torch,test]"
     - name: Run tests
-      run: python -m pytest tests -m "not integration"
+      run: python -m pytest tests -m "not integration and not network"
   pytest-macos:
     name: Tests (MacOS)
     runs-on: macos-latest
@@ -103,9 +101,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install ".[torch,test]"
     - name: Run tests
-      env:
-        RUN_SLOW_TESTS: '1'
-      run: python -m pytest tests -m "not integration"
+      run: python -m pytest tests -m "not integration and not network"
 
   pytest-integration-weaviate:
     name: Integration tests (Weaviate, Ubuntu)
