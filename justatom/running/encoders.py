@@ -32,6 +32,28 @@ class EncoderRunner(IModelRunner, torch.nn.Module):
         self.processor = processor
         self.to(device)
 
+    @property
+    def output_dims(self) -> int:
+        return int(self.model.output_dims)
+
+    def encode_pair(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+        model_batch = {
+            key: value
+            for key, value in batch.items()
+            if key in {"input_ids", "attention_mask", "pos_input_ids", "pos_attention_mask", "group_ids"}
+        }
+        outputs = self(model_batch, norm=True)
+        if len(outputs) != 2:
+            raise RuntimeError(f"Expected query/document embeddings, got {len(outputs)} outputs")
+        return outputs[0], outputs[1]
+
+    def encode_queries(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        query_batch = {key: batch[key] for key in ("input_ids", "attention_mask") if key in batch}
+        outputs = self(query_batch, norm=True)
+        if len(outputs) != 1:
+            raise RuntimeError(f"Expected one query embedding tensor, got {len(outputs)} outputs")
+        return outputs[0]
+
     def to(self, device):
         logger.info(f"Moving to device {str(device)}")
         if self.model is None:
