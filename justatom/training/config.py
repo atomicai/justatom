@@ -177,6 +177,7 @@ _DATASET_METADATA_FIELDS = {
     "train",
     "eval",
     "corpus",
+    "drop_columns",
 }
 
 

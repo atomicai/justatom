@@ -40,7 +40,7 @@ class BenchmarkVariantTests(unittest.TestCase):
             self.assertIn("## atomic", commands)
             self.assertNotIn("## bank_only", commands)
 
-    def test_atomic_variant_enables_dynamic_adaptive_bank_by_default(self):
+    def test_atomic_variant_delegates_canonical_defaults_to_method_profile(self):
         with TemporaryDirectory() as tmpdir:
             bench_root = Path(tmpdir) / "bench"
             result = subprocess.run(
@@ -66,16 +66,9 @@ class BenchmarkVariantTests(unittest.TestCase):
 
             commands = (bench_root / "COMMANDS.md").read_text()
             self.assertIn("## atomic", commands)
-            self.assertIn("--recipe atom_gate", commands)
-            self.assertIn("--memory-bank-size 512", commands)
-            self.assertIn("--memory-bank-soft-mode soft", commands)
-            self.assertIn("--memory-bank-soft-beta 0.05", commands)
-            self.assertIn("--memory-bank-adaptive-hard", commands)
-            self.assertIn("--memory-bank-adaptive-hard-mode soft", commands)
-            self.assertIn("--memory-bank-margin-head", commands)
-            self.assertIn("--memory-bank-margin-reg-weight 50", commands)
-            self.assertIn("--memory-bank-hard-negatives 4", commands)
-            self.assertIn("--memory-bank-random-negatives 12", commands)
+            self.assertIn("--method atomic", commands)
+            self.assertNotIn("--recipe", commands)
+            self.assertNotIn("--memory-bank-size", commands)
 
     def test_retired_bank_variant_points_to_atomic(self):
         result = subprocess.run(
@@ -96,15 +89,15 @@ class BenchmarkVariantTests(unittest.TestCase):
         )
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("retired", result.stderr)
-        self.assertIn("atomic", result.stderr)
+        self.assertIn("invalid variant", result.stderr)
+        self.assertIn("vanilla,atom_gate,atomic", result.stderr)
 
     def test_pipeline_uses_dev_dataset_preset_for_eval_when_available(self):
         script = (REPO_ROOT / "scripts" / "run_pipeline.sh").read_text()
 
         self.assertIn("resolve_eval_dataset_id()", script)
-        self.assertIn('eval_config_id="$(resolve_eval_dataset_id "$config_id")"', script)
-        self.assertIn('"$eval_config_id"; then', script)
+        self.assertIn('eval_config_id="$(resolve_eval_dataset_id "$dataset_id")"', script)
+        self.assertIn('"$dataset_dir/tuned_eval" "$eval_config_id"', script)
 
     def test_benchmark_uses_current_shell_for_pipeline(self):
         script = (REPO_ROOT / "scripts" / "run_benchmark.sh").read_text()

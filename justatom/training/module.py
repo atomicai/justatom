@@ -35,7 +35,7 @@ class ContrastiveTrainingModule(L.LightningModule):
         alpha_gate: QueryAlphaGate | None,
         memory_bank: ContrastiveMemoryBank | None,
         margin_head: QueryMarginHead | None,
-        lexical_lookup: dict[str, str] | None = None,
+        lexical_lookup: dict[str, str | list[str]] | None = None,
     ):
         super().__init__()
         self.encoder = encoder
@@ -57,7 +57,7 @@ class ContrastiveTrainingModule(L.LightningModule):
         encoder: nn.Module,
         config: TrainConfig,
         *,
-        lexical_lookup: dict[str, str] | None = None,
+        lexical_lookup: dict[str, str | list[str]] | None = None,
     ) -> "ContrastiveTrainingModule":
         config = resolve_method(config)
         embedding_dim = int(getattr(encoder, "output_dims"))
@@ -144,7 +144,19 @@ class ContrastiveTrainingModule(L.LightningModule):
         queries = batch.get("query_text")
         documents = batch.get("content_text")
         if queries is None or documents is None:
-            return None
+            tokenizer = getattr(getattr(self.encoder, "processor", None), "tokenizer", None)
+            if tokenizer is None or "input_ids" not in batch or "pos_input_ids" not in batch:
+                return None
+            queries = tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=True)
+            documents = tokenizer.batch_decode(batch["pos_input_ids"], skip_special_tokens=True)
+            queries = [
+                self._remove_text_prefix(text, self.config.model.query_prefix)
+                for text in queries
+            ]
+            documents = [
+                self._remove_text_prefix(text, self.config.model.content_prefix)
+                for text in documents
+            ]
         documents = [self.lexical_lookup.get(str(document), str(document)) for document in documents]
         negative_indices = self._last_negative_indices.detach().cpu().tolist()
         positive_scores = [inverse_idf_recall(str(query), str(document)) for query, document in zip(queries, documents)]
@@ -157,6 +169,14 @@ class ContrastiveTrainingModule(L.LightningModule):
             device=self.device,
             dtype=torch.float32,
         )
+
+    @staticmethod
+    def _remove_text_prefix(text: str, prefix: str) -> str:
+        value = str(text).strip()
+        normalized_prefix = str(prefix).strip()
+        if normalized_prefix and value.startswith(normalized_prefix):
+            return value[len(normalized_prefix) :].strip()
+        return value
 
     def _margin_values(self, queries: torch.Tensor) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         margin_config = self.config.memory_bank.margin
@@ -330,7 +350,7 @@ class ContrastiveTrainingModule(L.LightningModule):
         path: Path,
         *,
         encoder: nn.Module,
-        lexical_lookup: dict[str, str] | None = None,
+        lexical_lookup: dict[str, str | list[str]] | None = None,
         map_location: str | torch.device = "cpu",
     ) -> tuple["ContrastiveTrainingModule", list[dict[str, object]]]:
         payload = torch.load(path, map_location=map_location)

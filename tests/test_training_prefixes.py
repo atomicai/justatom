@@ -1,13 +1,13 @@
-from justatom.api.train import resolve_train_kwargs
+from justatom.api.train import resolve_train_config
 from justatom.processing.prime import TrainWithContrastiveProcessor
 
 
 def test_training_prefixes_are_forwarded_to_the_training_job():
     query_prefix = "Instruct: retrieve relevant passages\nQuery:"
-    kwargs = resolve_train_kwargs(
+    config = resolve_train_config(
         config={
             "dataset": {"name_or_path": "justatom"},
-            "training": {
+            "model": {
                 "query_prefix": query_prefix,
                 "content_prefix": "",
                 "max_query_seq_len": 128,
@@ -15,9 +15,9 @@ def test_training_prefixes_are_forwarded_to_the_training_job():
         }
     )
 
-    assert kwargs["query_prefix"] == query_prefix
-    assert kwargs["content_prefix"] == ""
-    assert kwargs["max_query_seq_len"] == 128
+    assert config.model.query_prefix == query_prefix
+    assert config.model.content_prefix == ""
+    assert config.model.max_query_seq_len == 128
 
 
 class _RecordingTokenizer:

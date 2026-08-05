@@ -6,7 +6,7 @@ from pathlib import Path
 
 from justatom.configuring.builtins import resolve_builtin_path
 from justatom.api.eval import resolve_eval_kwargs
-from justatom.api.train import resolve_train_kwargs
+from justatom.api.train import resolve_train_config
 from justatom.configuring.scenarios import load_scenario_config
 from justatom.etc.errors import DocumentStoreError
 from justatom.storing.weaviate import WeaviateDocStore
@@ -199,39 +199,39 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertIsNone(kwargs["limit"])
 
     def test_repo_meme_russian_ir_dataset_preset_resolves_for_train(self):
-        kwargs = resolve_train_kwargs(config={"dataset": {"id": "meme-russian-ir"}})
+        config = resolve_train_config(config={"dataset": {"id": "meme-russian-ir"}})
 
-        self.assertEqual(kwargs["dataset_name_or_path"], "justatom/meme-russian-ir")
-        self.assertEqual(kwargs["labels_field"], "generated")
-        self.assertEqual(kwargs["content_field"], "description")
-        self.assertEqual(kwargs["split"], "train")
-        self.assertIsNone(kwargs["limit"])
+        self.assertEqual(config.dataset.name_or_path, "justatom/meme-russian-ir")
+        self.assertEqual(config.dataset.labels_field, "generated")
+        self.assertEqual(config.dataset.content_field, "description")
+        self.assertEqual(config.dataset.split, "train")
+        self.assertIsNone(config.dataset.limit)
 
     def test_repo_mmarco_ru_selected_dataset_preset_resolves_for_train(self):
-        kwargs = resolve_train_kwargs(config={"dataset": {"id": "mmarco-ru-selected"}})
+        config = resolve_train_config(config={"dataset": {"id": "mmarco-ru-selected"}})
 
         self.assertEqual(
-            kwargs["dataset_name_or_path"],
+            config.dataset.name_or_path,
             "justatom/mmarco-ru-selected",
         )
-        self.assertEqual(kwargs["labels_field"], "query")
-        self.assertEqual(kwargs["content_field"], "positive")
-        self.assertEqual(kwargs["chunk_id_col"], "pair_id")
-        self.assertEqual(kwargs["split"], "train")
-        self.assertIsNone(kwargs["limit"])
+        self.assertEqual(config.dataset.labels_field, "query")
+        self.assertEqual(config.dataset.content_field, "positive")
+        self.assertEqual(config.dataset.chunk_id_col, "pair_id")
+        self.assertEqual(config.dataset.split, "train")
+        self.assertIsNone(config.dataset.limit)
 
     def test_repo_mmarco_ru_selected_train_and_dev_presets_resolve(self):
-        train_kwargs = resolve_train_kwargs(config={"dataset": {"id": "mmarco-ru-selected-train"}})
+        train_config = resolve_train_config(config={"dataset": {"id": "mmarco-ru-selected-train"}})
         eval_kwargs = resolve_eval_kwargs(config={"dataset": {"id": "mmarco-ru-selected-dev"}})
 
         self.assertEqual(
-            train_kwargs["dataset_name_or_path"],
+            train_config.dataset.name_or_path,
             "justatom/mmarco-ru-selected",
         )
-        self.assertEqual(train_kwargs["labels_field"], "query")
-        self.assertEqual(train_kwargs["content_field"], "positive")
-        self.assertEqual(train_kwargs["chunk_id_col"], "pair_id")
-        self.assertEqual(train_kwargs["split"], "train")
+        self.assertEqual(train_config.dataset.labels_field, "query")
+        self.assertEqual(train_config.dataset.content_field, "positive")
+        self.assertEqual(train_config.dataset.chunk_id_col, "pair_id")
+        self.assertEqual(train_config.dataset.split, "train")
 
         self.assertEqual(
             eval_kwargs["dataset_name_or_path"],
@@ -263,84 +263,73 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(dataset["manifest_path"], "hf://datasets/justatom/mmarco-ru-selected/manifest.json")
 
     def test_train_supports_direct_dict_config(self):
-        kwargs = resolve_train_kwargs(
+        config = resolve_train_config(
             config={
+                "method": "atomic",
                 "dataset": {
                     "name_or_path": "train.jsonl",
                     "labels_field": "queries",
                 },
-                "model": {"name": "intfloat/multilingual-e5-base"},
-                "training": {
+                "model": {"name_or_path": "intfloat/multilingual-e5-base"},
+                "optimization": {
                     "batch_size": 16,
                     "grad_acc_steps": 3,
-                    "n_epochs": 3,
-                    "temperature": 0.07,
-                    "gamma_joint": True,
-                    "alpha_train_only": True,
-                    "alpha_mix_weight": 0.4,
-                    "margin": 0.7,
-                    "include_keywords_gamma": False,
+                    "epochs": 3,
                 },
-                "logging": {"backend": "wandb"},
+                "objective": {"temperature": 0.07},
+                "alpha_gate": {"mix_weight": 0.4},
+                "telemetry": {"backend": "wandb"},
             }
         )
 
-        self.assertEqual(kwargs["dataset_name_or_path"], "train.jsonl")
-        self.assertEqual(kwargs["model_name_or_path"], "intfloat/multilingual-e5-base")
-        self.assertRegex(kwargs["collection_name"], r"^ModelE5BaseSEPCollectionTrainSEPTagCfg[A-F0-9]{10}$")
-        self.assertRegex(kwargs["collection_tag"], r"^Cfg[A-F0-9]{10}$")
-        self.assertEqual(kwargs["batch_size"], 16)
-        self.assertEqual(kwargs["grad_acc_steps"], 3)
-        self.assertEqual(kwargs["n_epochs"], 3)
-        self.assertEqual(kwargs["temperature"], 0.07)
-        self.assertTrue(kwargs["gamma_joint"])
-        self.assertTrue(kwargs["alpha_train_only"])
-        self.assertEqual(kwargs["alpha_mix_weight"], 0.4)
-        self.assertEqual(kwargs["margin"], 0.7)
-        self.assertFalse(kwargs["include_keywords_gamma"])
-        self.assertIsNone(kwargs["split"])
-        self.assertIsNone(kwargs["limit"])
-        self.assertEqual(kwargs["log_backend"], "wandb")
+        self.assertEqual(config.dataset.name_or_path, "train.jsonl")
+        self.assertEqual(config.model.name_or_path, "intfloat/multilingual-e5-base")
+        self.assertEqual(config.optimization.batch_size, 16)
+        self.assertEqual(config.optimization.grad_acc_steps, 3)
+        self.assertEqual(config.optimization.epochs, 3)
+        self.assertEqual(config.objective.temperature, 0.07)
+        self.assertEqual(config.alpha_gate.mix_weight, 0.4)
+        self.assertIsNone(config.dataset.split)
+        self.assertIsNone(config.dataset.limit)
+        self.assertEqual(config.telemetry.backend, "wandb")
 
     def test_builtin_train_dataset_preset_resolves_from_packaged_defaults(self):
-        kwargs = resolve_train_kwargs(config={"dataset": {"id": "demo-train"}})
+        config = resolve_train_config(config={"dataset": {"id": "demo-train"}})
 
-        self.assertEqual(kwargs["dataset_name_or_path"], "builtin://datasets/demo_retrieval.jsonl")
-        self.assertEqual(kwargs["labels_field"], "queries")
-        self.assertEqual(kwargs["content_field"], "content")
+        self.assertEqual(config.dataset.name_or_path, "builtin://datasets/demo_retrieval.jsonl")
+        self.assertEqual(config.dataset.labels_field, "queries")
+        self.assertEqual(config.dataset.content_field, "content")
 
     def test_repo_justatom_dataset_preset_resolves_for_train(self):
-        kwargs = resolve_train_kwargs(config={"dataset": {"id": "justatom"}})
+        config = resolve_train_config(config={"dataset": {"id": "justatom"}})
 
-        self.assertEqual(kwargs["dataset_name_or_path"], "justatom")
-        self.assertRegex(kwargs["collection_name"], r"^ModelE5SmallSEPCollectionJustAtomSEPTagCfg[A-F0-9]{10}$")
-        self.assertRegex(kwargs["collection_tag"], r"^Cfg[A-F0-9]{10}$")
-        self.assertEqual(kwargs["labels_field"], "queries")
-        self.assertEqual(kwargs["content_field"], "content")
-        self.assertIsNone(kwargs["split"])
-        self.assertIsNone(kwargs["limit"])
-        self.assertEqual(kwargs["chunk_id_col"], "chunk_id")
-        self.assertEqual(kwargs["keywords_or_phrases_field"], "keywords_or_phrases")
+        self.assertEqual(config.dataset.name_or_path, "justatom")
+        self.assertEqual(config.dataset.labels_field, "queries")
+        self.assertEqual(config.dataset.content_field, "content")
+        self.assertIsNone(config.dataset.split)
+        self.assertIsNone(config.dataset.limit)
+        self.assertEqual(config.dataset.chunk_id_col, "chunk_id")
+        self.assertEqual(config.dataset.keywords_col, "keywords_or_phrases")
 
     def test_train_collection_tag_is_appended_to_auto_name(self):
-        kwargs = resolve_train_kwargs(
+        config = resolve_train_config(
             config={
                 "dataset": {"id": "justatom"},
-                "collection": {"tag": "adamw-lr2e5"},
+                "artifacts": {
+                    "collection_name": "JustAtomCorpus",
+                    "collection_tag": "adamw-lr2e5",
+                },
             }
         )
 
-        self.assertEqual(
-            kwargs["collection_name"],
-            "ModelE5SmallSEPCollectionJustAtomSEPTagAdamwLr2e5",
-        )
-        self.assertEqual(kwargs["collection_tag"], "AdamwLr2e5")
+        self.assertEqual(config.artifacts.collection_name, "JustAtomCorpus")
+        self.assertEqual(config.artifacts.collection_tag, "adamw-lr2e5")
 
     def test_train_defaults_include_temperature_and_grad_acc_steps(self):
-        kwargs = resolve_train_kwargs(config={"dataset": {"id": "justatom"}})
+        config = resolve_train_config(config={"dataset": {"id": "justatom"}})
 
-        self.assertEqual(kwargs["temperature"], 0.03)
-        self.assertEqual(kwargs["grad_acc_steps"], 6)
+        self.assertEqual(config.objective.temperature, 0.05)
+        self.assertEqual(config.optimization.grad_acc_steps, 1)
 
     def test_explicit_missing_config_path_raises(self):
         with self.assertRaises(FileNotFoundError):

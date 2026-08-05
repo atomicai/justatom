@@ -30,6 +30,24 @@ class TinyEncoder(nn.Module):
         return torch.nn.functional.normalize(self.projection(batch["queries"]), dim=-1)
 
 
+class RecordingTokenizer:
+    def batch_decode(self, input_ids, *, skip_special_tokens):
+        assert skip_special_tokens is True
+        values = {
+            1: "query: alpha",
+            2: "query: beta",
+            3: "passage: alpha document",
+            4: "passage: beta document",
+        }
+        return [values[int(row[0])] for row in input_ids]
+
+
+class TokenizedTinyEncoder(TinyEncoder):
+    def __init__(self):
+        super().__init__()
+        self.processor = type("Processor", (), {"tokenizer": RecordingTokenizer()})()
+
+
 def tiny_batch():
     return {
         "queries": torch.eye(2, 4),
@@ -130,3 +148,25 @@ def test_compute_training_step_rejects_nonfinite_loss(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Non-finite loss"):
         module.compute_training_step(tiny_batch(), step=7)
+
+
+def test_alpha_lexical_scores_are_recovered_from_tokenized_batch():
+    module = ContrastiveTrainingModule.build(
+        TokenizedTinyEncoder(),
+        canonical_method_config(TrainingMethod.ATOM_GATE),
+        lexical_lookup={
+            "alpha document": "alpha",
+            "beta document": "beta",
+        },
+    )
+    batch = {
+        "input_ids": torch.tensor([[1], [2]]),
+        "pos_input_ids": torch.tensor([[3], [4]]),
+    }
+    module._last_negative_indices = torch.tensor([1, 0])
+
+    scores = module._lexical_pair_scores(batch)
+
+    assert scores is not None
+    assert scores[:, 0].tolist() == pytest.approx([1.0, 1.0])
+    assert scores[:, 1].tolist() == pytest.approx([0.0, 0.0])
