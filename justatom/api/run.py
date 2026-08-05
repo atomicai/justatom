@@ -12,7 +12,7 @@ from justatom.etc.filters import check_filters_and_cast
 from justatom.running.indexer import API as IndexerAPI
 from justatom.running.retriever import API as RetrieverApi
 from justatom.running.service import RunningService
-from justatom.storing.dataset import API as DatasetApi
+from justatom.storing.datasets import DatasetLoader
 from justatom.storing.weaviate import Finder as WeaviateApi
 
 app = Quart(
@@ -120,12 +120,12 @@ async def index():
     # List[str]
     collection_name, dataset_name_or_docs, index_by, batch_size = (
         data.get("collection_name", "justatom").strip(),
-        data.get("dataset_name_or_docs", "justatom"),
+        data.get("dataset_name_or_docs", "demo"),
         data.get("index_by", "keywords"),
         data.get("batch_size", 16),
     )
     docs = (
-        list(DatasetApi.named(dataset_name_or_docs).iterator())
+        list(DatasetLoader.read(dataset_name_or_docs, lazy=True))
         if isinstance(dataset_name_or_docs, str)
         else [
             dict(

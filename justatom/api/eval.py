@@ -172,6 +172,8 @@ def _cfg_to_main_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "collection_name": collection_name,
         "flush_collection": bool(index.get("flush_collection", False)),
         "dataset_name_or_path": dataset.get("name_or_path"),
+        "dataset_lazy": bool(dataset.get("lazy", True)),
+        "dataset_config": dataset.get("config"),
         "save_results_to_dir": output.get("save_results_to_dir"),
         "top_k": int(search.get("top_k", 20)),
         "index_batch_size": int(index.get("batch_size", 4)),
@@ -280,6 +282,8 @@ async def main(
     collection_name: str = None,
     flush_collection: bool = False,
     dataset_name_or_path: str = None,
+    dataset_lazy: bool = True,
+    dataset_config: str | None = None,
     save_results_to_dir: str = None,
     top_k: int = 20,
     index_batch_size: int = 4,
@@ -316,20 +320,16 @@ async def main(
             content_prefix = E5_PASSAGE_PREFIX
             logger.info("Auto-injected e5 content prefix: {!r}", content_prefix)
 
-    if dataset_name_or_path is None:
-        resolved_dataset_name_or_path = None
-    else:
-        raw_dataset_name_or_path = str(dataset_name_or_path)
-        if "://" in raw_dataset_name_or_path or raw_dataset_name_or_path == "justatom":
-            resolved_dataset_name_or_path = raw_dataset_name_or_path
-        else:
-            resolved_dataset_name_or_path = Path(raw_dataset_name_or_path)
+    resolved_dataset_name_or_path = None if dataset_name_or_path is None else str(dataset_name_or_path)
     save_results_to_dir = Path(os.getcwd()) / "evals" if save_results_to_dir is None else Path(save_results_to_dir)
 
+    queries: list[str] = []
     docs_iter: Iterable[dict] = []
     if resolved_dataset_name_or_path is not None:
         docs_adapter = DatasetRecordAdapter.from_source(
-            dataset_name_or_path=str(resolved_dataset_name_or_path),
+            dataset_name_or_path=resolved_dataset_name_or_path,
+            lazy=dataset_lazy,
+            config=dataset_config,
             content_col=content_field,
             queries_col=labels_field,
             split=split,
@@ -342,8 +342,17 @@ async def main(
             filter_fields=(filters or {}).get("fields", []),
             preserve_all_fields=False,
         )
-        docs_iter = tqdm(docs_adapter.iterator())
-        logger.info("Dataset is prepared in lazy/iterative mode for indexing.")
+
+        def capture_labels(documents: Iterable[dict]) -> Iterable[dict]:
+            for document in documents:
+                meta = document.get("meta") or {}
+                if labels_field is not None and isinstance(meta, dict):
+                    queries.extend(DatasetRecordAdapter.normalize_labels(meta.get("labels")))
+                yield document
+
+        docs_iter = tqdm(capture_labels(docs_adapter.iterator()))
+        mode = "lazy/iterative" if dataset_lazy else "eager"
+        logger.info("Dataset is prepared in {} mode for indexing.", mode)
     else:
         logger.info("No dataset provided. Using existing index only.")
 
@@ -375,21 +384,6 @@ async def main(
             logger.warning("labels-col is provided but dataset-name-or-path is missing. Evaluation is skipped.")
             return
 
-        labels_adapter = DatasetRecordAdapter.from_source(
-            dataset_name_or_path=str(resolved_dataset_name_or_path),
-            content_col=content_field,
-            queries_col=labels_field,
-            split=split,
-            limit=limit,
-            chunk_id_col=chunk_id_col,
-            keywords_col=keywords_or_phrases_field,
-            keywords_nested_col=keywords_nested_col,
-            explanation_nested_col=explanation_nested_col,
-            drop_columns=drop_columns,
-            filter_fields=(filters or {}).get("fields", []),
-            preserve_all_fields=False,
-        )
-        queries = DatasetRecordAdapter.extract_labels(labels_adapter.iterator())
         if len(queries) == 0:
             logger.warning("labels-col is provided, but no labels were found in dataset. Evaluation is skipped.")
             return
