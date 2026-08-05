@@ -10,6 +10,8 @@ from typing import Any
 import yaml
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
+
+
 def _workspace_root() -> Path:
     return Path(__file__).resolve().parents[2]
 

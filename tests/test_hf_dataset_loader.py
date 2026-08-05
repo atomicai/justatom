@@ -5,8 +5,7 @@ from dataclasses import dataclass
 import polars as pl
 import pytest
 
-from justatom.storing.datasets import DatasetLoader
-from justatom.storing.datasets import readers
+from justatom.storing.datasets import DatasetLoader, readers
 from justatom.storing.datasets.errors import DatasetReadError
 
 
@@ -184,6 +183,43 @@ def test_hf_parquet_fallback_preserves_requested_contract(tmp_path, monkeypatch,
     assert rows == [{"id": 1, "content": "one"}]
     assert list_calls[0][1]["token"] == "hf_private"
     assert download_calls[0][1]["token"] == "hf_private"
+
+
+def test_hf_parquet_fallback_filters_files_by_config(tmp_path, monkeypatch):
+    russian_path = tmp_path / "russian.parquet"
+    english_path = tmp_path / "english.parquet"
+    pl.DataFrame([{"id": "ru"}]).write_parquet(russian_path)
+    pl.DataFrame([{"id": "en"}]).write_parquet(english_path)
+    download_calls = []
+
+    def fake_load_dataset(*args, **kwargs):
+        raise TypeError("builder metadata failed")
+
+    def fake_list_repo_files(*args, **kwargs):
+        return [
+            "russian/train-00000-of-00001.parquet",
+            "english/train-00000-of-00001.parquet",
+        ]
+
+    def fake_hf_hub_download(*args, **kwargs):
+        filename = kwargs["filename"]
+        download_calls.append(filename)
+        return str(russian_path if filename.startswith("russian/") else english_path)
+
+    monkeypatch.setattr(readers, "load_dataset", fake_load_dataset)
+    monkeypatch.setattr(readers, "list_repo_files", fake_list_repo_files)
+    monkeypatch.setattr(readers, "hf_hub_download", fake_hf_hub_download)
+    readers._repo_files.cache_clear()
+
+    result = DatasetLoader.read(
+        "owner/multilingual",
+        lazy=False,
+        split="train",
+        config="russian",
+    )
+
+    assert result.to_dicts() == [{"id": "ru"}]
+    assert download_calls == ["russian/train-00000-of-00001.parquet"]
 
 
 def test_hf_requires_datasets_dependency(monkeypatch):

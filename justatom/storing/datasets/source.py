@@ -61,9 +61,7 @@ def resolve_dataset_source(value: str | Path) -> DatasetSource:
             "HTTP dataset sources are not supported yet; download the file and pass its local path."
         )
     if raw.startswith("builtin://"):
-        raise UnsupportedDatasetSourceError(
-            "The builtin:// dataset syntax was removed; use 'demo' or a normal local path."
-        )
+        raise UnsupportedDatasetSourceError("The builtin:// dataset syntax was removed; use 'demo' or a normal local path.")
     if raw.startswith("hf://"):
         replacement = raw.removeprefix("hf://").split("?", maxsplit=1)[0]
         raise UnsupportedDatasetSourceError(
@@ -74,14 +72,10 @@ def resolve_dataset_source(value: str | Path) -> DatasetSource:
             "Dataset custom URI syntax is not supported; use owner/dataset for Hugging Face or a local path."
         )
     if "?" in raw and "/" in raw:
-        raise UnsupportedDatasetSourceError(
-            "Hugging Face query parameters are not supported; use separate config/split fields."
-        )
+        raise UnsupportedDatasetSourceError("Hugging Face query parameters are not supported; use separate config/split fields.")
     if _HF_REPO_ID.fullmatch(raw):
         return HuggingFaceDatasetSource(repo_id=raw)
-    raise DatasetNotFoundError(
-        f"Dataset source {raw!r} is neither an existing file, 'demo', nor a Hugging Face owner/dataset ID."
-    )
+    raise DatasetNotFoundError(f"Dataset source {raw!r} is neither an existing file, 'demo', nor a Hugging Face owner/dataset ID.")
 
 
 __all__ = [

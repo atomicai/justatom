@@ -26,6 +26,8 @@ test = [
   "python-dateutil==2.9.0.post0",
   "polars==1.38.1",
   "weaviate-client==4.11.3",
+  "xlsx2csv==0.8.3",
+  "xlsxwriter>=3,<4",
   "loguru==0.7.2",
   "tqdm",
   "PyYAML>=6,<7",

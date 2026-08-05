@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
 from functools import lru_cache
 from importlib.resources import as_file
 from itertools import islice
-import os
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +22,7 @@ except Exception:
     hf_hub_download = None  # type: ignore[assignment]
     list_repo_files = None  # type: ignore[assignment]
 
-from justatom.storing.datasets.errors import (
-    DatasetReadError,
-    DatasetStreamingUnsupportedError,
-    UnsupportedDatasetFormatError,
-)
+from justatom.storing.datasets.errors import DatasetReadError, DatasetStreamingUnsupportedError, UnsupportedDatasetFormatError
 from justatom.storing.datasets.source import (
     DatasetReadOptions,
     DatasetSource,
@@ -63,8 +59,7 @@ def _validate_streaming_path(path: Path) -> None:
     suffix = path.suffix.lower()
     if suffix in _EAGER_ONLY_EXTENSIONS:
         raise DatasetStreamingUnsupportedError(
-            f"Streaming is not supported for {suffix} files. Use lazy=False for a small file "
-            "or convert it to JSONL or Parquet."
+            f"Streaming is not supported for {suffix} files. Use lazy=False for a small file " "or convert it to JSONL or Parquet."
         )
     if suffix not in _STREAMING_EXTENSIONS:
         raise _unsupported_format(path)
@@ -162,13 +157,28 @@ def _repo_files(repo_id: str, token: str | None) -> tuple[str, ...]:
         return ()
 
 
-def _parquet_files_for_split(repo_files: tuple[str, ...], split: str) -> list[str]:
+def _matches_config(repo_file: str, config: str) -> bool:
+    normalized_file = repo_file.strip("/").lower()
+    normalized_config = config.strip("/").lower()
+    if normalized_config in Path(normalized_file).parts:
+        return True
+    basename = Path(normalized_file).name
+    return basename.startswith(f"{normalized_config}-") or f"/{normalized_config}-" in normalized_file
+
+
+def _parquet_files_for_split(
+    repo_files: tuple[str, ...],
+    split: str,
+    config: str | None = None,
+) -> list[str]:
     normalized_split = split.strip().lower()
     matches: list[str] = []
     for repo_file in repo_files:
         normalized_file = repo_file.lower()
         basename = Path(normalized_file).name
         if not normalized_file.endswith(".parquet"):
+            continue
+        if config is not None and not _matches_config(repo_file, config):
             continue
         if basename == f"{normalized_split}.parquet" or basename.startswith(f"{normalized_split}-"):
             matches.append(repo_file)
@@ -182,12 +192,13 @@ def _load_parquet_fallback(
     source: HuggingFaceDatasetSource,
     split: str,
     *,
+    config: str | None,
     lazy: bool,
     token: str | None,
 ) -> pl.LazyFrame | pl.DataFrame | None:
     if hf_hub_download is None:
         return None
-    parquet_files = _parquet_files_for_split(_repo_files(source.repo_id, token), split)
+    parquet_files = _parquet_files_for_split(_repo_files(source.repo_id, token), split, config)
     if not parquet_files:
         return None
     local_paths: list[str] = []
@@ -213,9 +224,7 @@ def _load_hf_source(
     streaming: bool,
 ):
     if load_dataset is None:
-        raise DatasetReadError(
-            "Hugging Face dataset support requires the datasets package; run `pip install datasets`."
-        )
+        raise DatasetReadError("Hugging Face dataset support requires the datasets package; run `pip install datasets`.")
     token = _hf_token()
     candidates = _split_candidates(options.split)
     last_error: Exception | None = None
@@ -234,6 +243,7 @@ def _load_hf_source(
             fallback = _load_parquet_fallback(
                 source,
                 candidate,
+                config=options.config,
                 lazy=streaming,
                 token=token,
             )
@@ -242,8 +252,7 @@ def _load_hf_source(
     assert last_error is not None
     rendered_candidates = "|".join(candidates)
     raise DatasetReadError(
-        f"Failed to load Hugging Face dataset {source.repo_id!r} for split candidates {rendered_candidates!r}: "
-        f"{last_error}"
+        f"Failed to load Hugging Face dataset {source.repo_id!r} for split candidates {rendered_candidates!r}: " f"{last_error}"
     ) from last_error
 
 
@@ -253,10 +262,7 @@ def _iter_hf_rows(source: HuggingFaceDatasetSource, options: DatasetReadOptions)
         yield from _iter_lazy_frame(_apply_lazy_options(dataset, options))
         return
     dropped = set(options.drop_columns)
-    rows = (
-        {key: value for key, value in dict(row).items() if key not in dropped}
-        for row in dataset
-    )
+    rows = ({key: value for key, value in dict(row).items() if key not in dropped} for row in dataset)
     yield from rows if options.limit is None else islice(rows, options.limit)
 
 

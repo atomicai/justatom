@@ -7,12 +7,12 @@ from loguru import logger
 from quart import Quart, request, send_from_directory, session
 from quart_session import Session
 
+from justatom.api.dataset_input import documents_from_input
 from justatom.configuring.prime import Config
 from justatom.etc.filters import check_filters_and_cast
 from justatom.running.indexer import API as IndexerAPI
 from justatom.running.retriever import API as RetrieverApi
 from justatom.running.service import RunningService
-from justatom.storing.datasets import DatasetLoader
 from justatom.storing.weaviate import Finder as WeaviateApi
 
 app = Quart(
@@ -124,18 +124,7 @@ async def index():
         data.get("index_by", "keywords"),
         data.get("batch_size", 16),
     )
-    docs = (
-        list(DatasetLoader.read(dataset_name_or_docs, lazy=True))
-        if isinstance(dataset_name_or_docs, str)
-        else [
-            dict(
-                content=di["content"],
-                meta=di.get("meta", {}),
-                keywords_or_phrases=di.get("keywords_or_phrases", []),
-            )
-            for di in dataset_name_or_docs
-        ]
-    )
+    docs = documents_from_input(dataset_name_or_docs)
     store = await WeaviateApi.find(
         collection_name,
         WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),

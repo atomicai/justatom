@@ -8,11 +8,7 @@ import polars as pl
 
 from justatom.storing.datasets.errors import UnsupportedDatasetSourceError
 from justatom.storing.datasets.readers import iter_source_rows, source_to_frame
-from justatom.storing.datasets.source import (
-    DatasetReadOptions,
-    HuggingFaceDatasetSource,
-    resolve_dataset_source,
-)
+from justatom.storing.datasets.source import DatasetReadOptions, HuggingFaceDatasetSource, resolve_dataset_source
 
 
 class DatasetLoader:

@@ -325,7 +325,9 @@ async def main(
 
     queries: list[str] = []
     docs_iter: Iterable[dict] = []
+    dataset_exhausted = True
     if resolved_dataset_name_or_path is not None:
+        dataset_exhausted = False
         docs_adapter = DatasetRecordAdapter.from_source(
             dataset_name_or_path=resolved_dataset_name_or_path,
             lazy=dataset_lazy,
@@ -344,11 +346,13 @@ async def main(
         )
 
         def capture_labels(documents: Iterable[dict]) -> Iterable[dict]:
+            nonlocal dataset_exhausted
             for document in documents:
                 meta = document.get("meta") or {}
                 if labels_field is not None and isinstance(meta, dict):
                     queries.extend(DatasetRecordAdapter.normalize_labels(meta.get("labels")))
                 yield document
+            dataset_exhausted = True
 
         docs_iter = tqdm(capture_labels(docs_adapter.iterator()))
         mode = "lazy/iterative" if dataset_lazy else "eager"
@@ -383,6 +387,11 @@ async def main(
         if resolved_dataset_name_or_path is None:
             logger.warning("labels-col is provided but dataset-name-or-path is missing. Evaluation is skipped.")
             return
+
+        if not dataset_exhausted:
+            logger.info("Index was reused before the dataset was exhausted; reading remaining labels.")
+            for _ in docs_iter:
+                pass
 
         if len(queries) == 0:
             logger.warning("labels-col is provided, but no labels were found in dataset. Evaluation is skipped.")
