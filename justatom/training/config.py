@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeVar
 
 
 class TrainingMethod(str, Enum):
@@ -185,7 +185,10 @@ def _path(parent: str, child: str) -> str:
     return f"{parent}.{child}" if parent else child
 
 
-def _enum_value(enum_type: type[Enum], value: Any, path: str) -> Enum:
+EnumType = TypeVar("EnumType", bound=Enum)
+
+
+def _enum_value(enum_type: type[EnumType], value: Any, path: str) -> EnumType:
     if isinstance(value, enum_type):
         return value
     try:

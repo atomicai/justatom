@@ -42,10 +42,13 @@ class EvalDataNormalizationTest(unittest.TestCase):
             }
         ]
 
-        with patch.dict(
-            os.environ,
-            {"HF_TOKEN": "", "HUGGINGFACE_HUB_TOKEN": "", "HF_HUB_TOKEN": "", "HF_API_KEY": ""},
-        ), patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked:
+        with (
+            patch.dict(
+                os.environ,
+                {"HF_TOKEN": "", "HUGGINGFACE_HUB_TOKEN": "", "HF_HUB_TOKEN": "", "HF_API_KEY": ""},
+            ),
+            patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked,
+        ):
             adapter = DatasetRecordAdapter.from_source(
                 dataset_name_or_path="hf://miracl/miracl?config=ru&split=train",
                 content_col="text",
@@ -80,10 +83,13 @@ class EvalDataNormalizationTest(unittest.TestCase):
             }
         ]
 
-        with patch.dict(
-            os.environ,
-            {"HF_TOKEN": "", "HUGGINGFACE_HUB_TOKEN": "", "HF_HUB_TOKEN": "", "HF_API_KEY": ""},
-        ), patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked:
+        with (
+            patch.dict(
+                os.environ,
+                {"HF_TOKEN": "", "HUGGINGFACE_HUB_TOKEN": "", "HF_HUB_TOKEN": "", "HF_API_KEY": ""},
+            ),
+            patch("justatom.storing.dataset.load_dataset", return_value=rows) as mocked,
+        ):
             adapter = DatasetRecordAdapter.from_source(
                 dataset_name_or_path="justatom/meme-russian-ir",
                 content_col="text",

@@ -7,7 +7,6 @@ from torch import nn
 
 from justatom.training.config import AlphaGateConfig
 
-
 _ACTIVATIONS: dict[str, type[nn.Module]] = {
     "gelu": nn.GELU,
     "relu": nn.ReLU,

@@ -1,5 +1,5 @@
-import json
 import inspect
+import json
 from collections.abc import Generator, Iterable
 from itertools import islice
 from pathlib import Path
@@ -11,8 +11,8 @@ from json_repair import loads as json_repair_loads
 from loguru import logger
 
 from justatom.etc.schema import Document
-from justatom.tooling.profiler import MemoryProfiler
 from justatom.storing.dataset import API as DatasetApi
+from justatom.tooling.profiler import MemoryProfiler
 
 
 class DatasetRecordAdapter:

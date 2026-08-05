@@ -1,8 +1,6 @@
 from justatom.running.embeddings.base import IEmbeddingClient
 from justatom.running.embeddings.local import LocalEmbeddingClient
-from justatom.running.embeddings.openai_compatible import (
-    OpenAICompatibleEmbeddingClient,
-)
+from justatom.running.embeddings.openai_compatible import OpenAICompatibleEmbeddingClient
 
 
 class EmbeddingClientFactory:

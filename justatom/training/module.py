@@ -10,12 +10,7 @@ from torch import nn
 
 from justatom.logging.io import CSVLogger
 from justatom.training.alpha_gate import QueryAlphaGate
-from justatom.training.config import (
-    MarginMode,
-    TrainConfig,
-    parse_train_config,
-    train_config_to_dict,
-)
+from justatom.training.config import MarginMode, TrainConfig, parse_train_config, train_config_to_dict
 from justatom.training.memory_bank import ContrastiveMemoryBank, QueryMarginHead
 from justatom.training.methods import resolve_method
 from justatom.training.objective import ContrastiveObjective, ObjectiveInputs, ObjectiveOutput

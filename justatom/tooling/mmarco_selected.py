@@ -11,7 +11,6 @@ from typing import Any
 
 import polars as pl
 
-
 SOURCE_DATASET = "ir_datasets:mmarco/v2/ru"
 DEFAULT_REPO_ID = "justatom/mmarco-ru-selected"
 HF_TOKEN_ENV_NAMES = ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_HUB_TOKEN", "HF_API_KEY")

@@ -9,7 +9,6 @@ from typing import Any
 
 import yaml
 
-
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
 _BUILTIN_URI_PREFIX = "builtin://"
 

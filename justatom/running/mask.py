@@ -6,10 +6,22 @@ from typing import Any
 
 import numpy as np
 import simplejson as json
-from bertopic.backend import BaseEmbedder
 from loguru import logger
-from justatom.modeling.mask import ILanguageModel
+
+try:
+    from bertopic.backend import BaseEmbedder
+except ModuleNotFoundError:
+
+    class BaseEmbedder:
+        """Compatibility base used when the optional clustering extra is absent."""
+
+        def __init__(self, embedding_model=None, word_embedding_model=None):
+            self.embedding_model = embedding_model
+            self.word_embedding_model = word_embedding_model
+
+
 from justatom.etc.schema import Document
+from justatom.modeling.mask import ILanguageModel
 
 
 class IModelRunner:
