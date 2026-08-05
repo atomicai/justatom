@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 from justatom.api import train as train_api
+from justatom.training import data as training_data
 
 
 def _write_jsonl(rows: list[dict]) -> Path:
@@ -28,10 +29,10 @@ def test_prepare_training_data_prefers_polars_batches_for_frame_backed_sources(
     def fail(*args, **kwargs):
         raise AssertionError("frame-backed datasets should avoid from_source fallback")
 
-    monkeypatch.setattr(train_api.DatasetRecordAdapter, "from_source", fail)
+    monkeypatch.setattr(training_data.DatasetRecordAdapter, "from_source", fail)
 
     try:
-        pl_data, js_data, lexical_by_content = train_api.prepare_training_data(
+        pl_data, js_data, lexical_by_content = training_data.prepare_training_data(
             dataset_name_or_path=path,
             num_samples=2,
             content_field="content",
@@ -60,7 +61,7 @@ def test_prepare_training_data_falls_back_to_lazy_adapter_for_iterable_sources(
         def iterator(self, **kwargs):
             return iter(rows)
 
-    original_from_source = train_api.DatasetRecordAdapter.from_source
+    original_from_source = training_data.DatasetRecordAdapter.from_source
 
     def fake_named(*args, **kwargs):
         return _FakeDataset()
@@ -69,10 +70,10 @@ def test_prepare_training_data_falls_back_to_lazy_adapter_for_iterable_sources(
         captured["lazy"] = kwargs.get("lazy")
         return original_from_source(*args, **kwargs)
 
-    monkeypatch.setattr(train_api.DatasetApi, "named", fake_named)
-    monkeypatch.setattr(train_api.DatasetRecordAdapter, "from_source", wrapped)
+    monkeypatch.setattr(training_data.DatasetApi, "named", fake_named)
+    monkeypatch.setattr(training_data.DatasetRecordAdapter, "from_source", wrapped)
 
-    pl_data, js_data, lexical_by_content = train_api.prepare_training_data(
+    pl_data, js_data, lexical_by_content = training_data.prepare_training_data(
         dataset_name_or_path="hf://dummy/dataset",
         num_samples=2,
         content_field="content",
@@ -95,7 +96,7 @@ def test_prepare_training_data_streams_and_bounds_sample_size():
     path = _write_jsonl(rows)
 
     try:
-        pl_data, js_data, lexical_by_content = train_api.prepare_training_data(
+        pl_data, js_data, lexical_by_content = training_data.prepare_training_data(
             dataset_name_or_path=path,
             num_samples=3,
             content_field="content",
@@ -119,7 +120,7 @@ def test_prepare_training_data_preserves_chunk_identity_for_duplicate_content():
     path = _write_jsonl(rows)
 
     try:
-        _, js_data, lexical_by_content = train_api.prepare_training_data(
+        _, js_data, lexical_by_content = training_data.prepare_training_data(
             dataset_name_or_path=path,
             num_samples=2,
             content_field="content",
@@ -141,9 +142,9 @@ def test_rebalance_rows_by_content_reduces_within_batch_duplicates_when_possible
         {"chunk_id": "c1", "content": "doc-c", "queries": "q4", "lexical_text": "doc-c"},
     ]
 
-    before = train_api.count_batches_with_duplicate_content(rows, batch_size=3)
-    rebalanced = train_api.rebalance_rows_by_content(rows, batch_size=3)
-    after = train_api.count_batches_with_duplicate_content(rebalanced, batch_size=3)
+    before = training_data.count_batches_with_duplicate_content(rows, batch_size=3)
+    rebalanced = training_data.rebalance_rows_by_content(rows, batch_size=3)
+    after = training_data.count_batches_with_duplicate_content(rebalanced, batch_size=3)
 
     assert before == 1
     assert after == 0
@@ -158,10 +159,10 @@ def test_rebalance_rows_by_content_keeps_all_rows_when_duplicates_are_unavoidabl
         {"chunk_id": "b1", "content": "doc-b", "queries": "q4", "lexical_text": "doc-b"},
     ]
 
-    rebalanced = train_api.rebalance_rows_by_content(rows, batch_size=3)
+    rebalanced = training_data.rebalance_rows_by_content(rows, batch_size=3)
 
     assert sorted(row["chunk_id"] for row in rebalanced) == ["a1", "a2", "a3", "b1"]
-    assert train_api.count_batches_with_duplicate_content(rebalanced, batch_size=3) == 1
+    assert training_data.count_batches_with_duplicate_content(rebalanced, batch_size=3) == 1
 
 
 def test_iterate_training_rows_applies_limit_after_query_expansion():
@@ -173,7 +174,7 @@ def test_iterate_training_rows_applies_limit_after_query_expansion():
 
     try:
         sample_rows = list(
-            train_api.iterate_training_rows(
+            training_data.iterate_training_rows(
                 dataset_name_or_path=path,
                 content_field="content",
                 labels_field="queries",
@@ -203,10 +204,10 @@ def test_iterate_training_rows_handles_extra_source_fields_for_iterable_sources(
     def fake_named(*args, **kwargs):
         return _FakeDataset()
 
-    monkeypatch.setattr(train_api.DatasetApi, "named", fake_named)
+    monkeypatch.setattr(training_data.DatasetApi, "named", fake_named)
 
     sample_rows = list(
-        train_api.iterate_training_rows(
+        training_data.iterate_training_rows(
             dataset_name_or_path="hf://dummy/boolq-like",
             content_field="passage",
             labels_field="question",

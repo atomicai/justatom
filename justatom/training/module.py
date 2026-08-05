@@ -8,6 +8,7 @@ import pytorch_lightning as L
 import torch
 from torch import nn
 
+from justatom.logging.io import CSVLogger
 from justatom.training.alpha_gate import QueryAlphaGate
 from justatom.training.config import (
     MarginMode,
@@ -45,6 +46,10 @@ class ContrastiveTrainingModule(L.LightningModule):
         self.margin_head = margin_head
         self.lexical_lookup = lexical_lookup
         self._last_negative_indices: torch.Tensor | None = None
+        self.metrics_path = (
+            None if config.telemetry.metrics_path is None else Path(config.telemetry.metrics_path)
+        )
+        self.metrics_logger = CSVLogger(self.metrics_path) if self.metrics_path is not None else None
 
     @classmethod
     def build(
@@ -228,8 +233,21 @@ class ContrastiveTrainingModule(L.LightningModule):
             for key, value in metrics.items()
             if isinstance(value, (int, float))
         }
+        if self.metrics_logger is not None:
+            self.metrics_logger.log_metrics(
+                {
+                    "step": int(self.global_step),
+                    "epoch": int(self.current_epoch),
+                    "method": self.config.method.value,
+                    **numeric_metrics,
+                }
+            )
         self.log_dict(numeric_metrics, on_step=True, on_epoch=False, prog_bar=False)
         return output.loss
+
+    def on_train_end(self) -> None:
+        if self.metrics_logger is not None:
+            self.metrics_logger.close_log()
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         seen: set[int] = set()
