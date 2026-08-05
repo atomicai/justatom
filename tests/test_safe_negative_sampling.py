@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 
 from justatom.processing.prime import TrainWithContrastiveProcessor
-from justatom.running.trainer import _sample_safe_negative_indices
+from justatom.training.sampling import sample_safe_negative_indices
 
 
 def test_stable_key_id_is_deterministic():
@@ -19,7 +19,7 @@ def test_safe_negative_sampling_avoids_same_doc_content_and_query_when_possible(
     doc_key_ids = torch.tensor([1, 2, 3, 4], dtype=torch.long)
     content_key_ids = torch.tensor([10, 10, 30, 40], dtype=torch.long)
     query_key_ids = torch.tensor([100, 200, 100, 400], dtype=torch.long)
-    negative_indices, fallback_count = _sample_safe_negative_indices(
+    negative_indices, fallback_count = sample_safe_negative_indices(
         doc_key_ids=doc_key_ids,
         content_key_ids=content_key_ids,
         query_key_ids=query_key_ids,
@@ -35,7 +35,7 @@ def test_safe_negative_sampling_avoids_same_doc_content_and_query_when_possible(
 
 
 def test_safe_negative_sampling_reports_fallback_when_batch_is_all_duplicates():
-    negative_indices, fallback_count = _sample_safe_negative_indices(
+    negative_indices, fallback_count = sample_safe_negative_indices(
         doc_key_ids=torch.tensor([1, 1, 1], dtype=torch.long),
         content_key_ids=torch.tensor([9, 9, 9], dtype=torch.long),
         query_key_ids=torch.tensor([7, 7, 7], dtype=torch.long),
@@ -61,7 +61,7 @@ def test_safe_negative_sampling_filters_too_close_candidates_by_inverse_idf_reca
         ("q3", "medium"): 0.9,
     }
 
-    negative_indices, fallback_count = _sample_safe_negative_indices(
+    negative_indices, fallback_count = sample_safe_negative_indices(
         doc_key_ids=torch.tensor([1, 2, 3, 4], dtype=torch.long),
         content_key_ids=torch.tensor([10, 20, 30, 40], dtype=torch.long),
         query_key_ids=torch.tensor([100, 200, 300, 400], dtype=torch.long),
