@@ -860,13 +860,6 @@ class _BaseGammaLightningTrainer(L.LightningModule):
         weighted sum of the SimCSE and soft-FN components.
         """
         loss_fn: ContrastiveLoss = self.loss_fn
-        tau_per_query = None
-        if getattr(self.runner, "tau_query_conditional", False) and self.runner.tau_head is not None:
-            tau_per_query = self.runner.tau_weights(q_vecs, loss_fn.tau)
-            metrics["TauQueryMean"] = tau_per_query.detach().mean()
-            metrics["TauQueryStd"] = tau_per_query.detach().std(unbiased=False)
-            metrics["TauQueryMin"] = tau_per_query.detach().min()
-            metrics["TauQueryMax"] = tau_per_query.detach().max()
         memory_negatives, memory_negative_mask, memory_log_weights, memory_metrics = self.memory_bank.get(
             batch,
             device=q_vecs.device,
@@ -897,7 +890,6 @@ class _BaseGammaLightningTrainer(L.LightningModule):
             q_vecs,
             d_vecs,
             reduction="none",
-            tau_per_query=tau_per_query,
             memory_negatives=memory_negatives,
             memory_negative_mask=memory_negative_mask,
             memory_log_weights=memory_log_weights,

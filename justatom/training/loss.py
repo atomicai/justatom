@@ -585,7 +585,6 @@ class ContrastiveLoss(nn.Module):
         pos_queries: torch.Tensor,
         neg_queries: torch.Tensor | None = None,
         reduction: str | None = None,
-        tau_per_query: torch.Tensor | None = None,
         memory_negatives: torch.Tensor | None = None,
         memory_negative_mask: torch.Tensor | None = None,
         memory_log_weights: torch.Tensor | None = None,
@@ -597,10 +596,6 @@ class ContrastiveLoss(nn.Module):
 
         If ``neg_queries`` is supplied (paired or unpaired), the legacy
         explicit-negative path is used and ``decoupled`` is ignored.
-
-        ``tau_per_query`` (shape ``[B]`` or ``[B, 1]``) overrides the scalar
-        ``self.tau`` with a per-query temperature (N3: query-conditional τ).
-        When supplied, the scaling is row-wise: ``logits / tau_q[:, None]``.
 
         ``memory_negatives`` can add a detached FIFO bank of document vectors to
         the denominator. ``memory_negative_mask`` has shape ``[B, M]`` and marks
@@ -672,14 +667,7 @@ class ContrastiveLoss(nn.Module):
                     else memory_soft_log_weight + margin_log_weight
                 )
 
-        if tau_per_query is None:
-            tau_scale = self.tau
-        else:
-            if tau_per_query.shape[0] != q.shape[0]:
-                raise ValueError(
-                    f"tau_per_query batch dim must match queries, got {tuple(tau_per_query.shape)} vs B={q.shape[0]}"
-                )
-            tau_scale = tau_per_query.view(-1, 1).clamp(min=self._TAU_MIN, max=self._TAU_MAX)
+        tau_scale = self.tau
 
         if n is not None:
             positive_logit = torch.sum(q * p, dim=1, keepdim=True) / tau_scale
