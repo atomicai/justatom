@@ -15,11 +15,7 @@ from justatom.processing import ITokenizer, igniset
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.prime import TrainWithContrastiveProcessor
 from justatom.running.encoders import EncoderRunner
-from justatom.tooling.collections import (
-    build_collection_metadata,
-    resolve_artifact_dirname,
-    write_collection_metadata,
-)
+from justatom.tooling.collections import build_collection_metadata, resolve_artifact_dirname, write_collection_metadata
 from justatom.training.config import RuntimeConfig, TrainConfig, train_config_to_dict
 from justatom.training.data import prepare_training_data_from_config
 from justatom.training.methods import resolve_method

@@ -5,11 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from justatom.configuring.scenarios import (
-    deep_merge,
-    load_scenario_config,
-    parse_unknown_overrides,
-)
+from justatom.configuring.scenarios import deep_merge, load_scenario_config, parse_unknown_overrides
 from justatom.training.config import TrainConfig, TrainingMethod, parse_train_config
 from justatom.training.job import TrainingJob, TrainingResult
 

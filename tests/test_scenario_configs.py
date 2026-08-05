@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from justatom.configuring.builtins import resolve_builtin_path
 from justatom.api.eval import resolve_eval_kwargs
 from justatom.api.train import resolve_train_config
+from justatom.configuring.builtins import resolve_builtin_path
 from justatom.configuring.scenarios import load_scenario_config
 from justatom.etc.errors import DocumentStoreError
 from justatom.storing.weaviate import WeaviateDocStore

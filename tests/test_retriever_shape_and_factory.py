@@ -17,14 +17,12 @@ if "bertopic" not in sys.modules:
     sys.modules["bertopic.backend"] = backend_mod
 
 from justatom.etc.schema import Document
+from justatom.running.indexer import API as IndexerAPI
 from justatom.running.retriever import API as RetrieverAPI
 from justatom.running.retriever import KeywordsRetriever
-from justatom.running.indexer import API as IndexerAPI
 
 
-def _mk_doc(
-    content: str, labels: list[str] | None = None, score: float = 1.0
-) -> Document:
+def _mk_doc(content: str, labels: list[str] | None = None, score: float = 1.0) -> Document:
     payload = {
         "content": content,
         "meta": {"labels": labels or []},

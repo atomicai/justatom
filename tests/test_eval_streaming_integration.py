@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import random
 import string
 import subprocess
@@ -61,6 +62,7 @@ class EvalStreamingIntegrationTest(unittest.TestCase):
     @staticmethod
     def _dummy_iterative_dataset(n_docs: int = 100) -> str:
         fd, path = tempfile.mkstemp(suffix=".jsonl", prefix="eval_streaming_")
+        os.close(fd)
         Path(path).unlink(missing_ok=True)
         data_path = Path(path)
         with data_path.open("w", encoding="utf-8") as f:

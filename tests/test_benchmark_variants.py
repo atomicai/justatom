@@ -1,13 +1,14 @@
+import os
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class BenchmarkVariantTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "benchmark shell tests require a Unix environment")
     def test_all_variants_are_vanilla_atom_gate_and_atomic(self):
         with TemporaryDirectory() as tmpdir:
             bench_root = Path(tmpdir) / "bench"
@@ -40,6 +41,7 @@ class BenchmarkVariantTests(unittest.TestCase):
             self.assertIn("## atomic", commands)
             self.assertNotIn("## bank_only", commands)
 
+    @unittest.skipIf(os.name == "nt", "benchmark shell tests require a Unix environment")
     def test_atomic_variant_delegates_canonical_defaults_to_method_profile(self):
         with TemporaryDirectory() as tmpdir:
             bench_root = Path(tmpdir) / "bench"
@@ -70,6 +72,7 @@ class BenchmarkVariantTests(unittest.TestCase):
             self.assertNotIn("--recipe", commands)
             self.assertNotIn("--memory-bank-size", commands)
 
+    @unittest.skipIf(os.name == "nt", "benchmark shell tests require a Unix environment")
     def test_retired_bank_variant_points_to_atomic(self):
         result = subprocess.run(
             [

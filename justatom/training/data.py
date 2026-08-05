@@ -73,10 +73,26 @@ def _iterate_from_raw_samples(
 
 def _iterate_from_frame_batches(
     frame_batches: Iterable[pl.DataFrame],
-    **kwargs: Any,
+    *,
+    content_field: str,
+    labels_field: str,
+    chunk_id_col: str | None,
+    keywords_or_phrases_field: str | None,
+    keywords_nested_col: str | None,
+    explanation_nested_col: str | None,
+    filters: dict | None,
 ) -> Generator[dict[str, Any], None, None]:
     for batch in frame_batches:
-        yield from _iterate_from_raw_samples(batch.iter_rows(named=True), **kwargs)
+        yield from _iterate_from_raw_samples(
+            batch.iter_rows(named=True),
+            content_field=content_field,
+            labels_field=labels_field,
+            chunk_id_col=chunk_id_col,
+            keywords_or_phrases_field=keywords_or_phrases_field,
+            keywords_nested_col=keywords_nested_col,
+            explanation_nested_col=explanation_nested_col,
+            filters=filters,
+        )
 
 
 def _frame_batches_from_source(
@@ -117,18 +133,18 @@ def iterate_training_rows(
 ) -> Iterable[dict[str, Any]]:
     if dataset_name_or_path is None:
         raise ValueError("dataset_name_or_path must be provided for training")
-    source_kwargs = {
-        "content_field": content_field,
-        "labels_field": labels_field,
-        "chunk_id_col": chunk_id_col,
-        "keywords_or_phrases_field": keywords_or_phrases_field,
-        "keywords_nested_col": keywords_nested_col,
-        "explanation_nested_col": explanation_nested_col,
-        "filters": filters,
-    }
     frame_batches = _frame_batches_from_source(dataset_name_or_path=dataset_name_or_path, split=split)
     if frame_batches is not None:
-        rows = _iterate_from_frame_batches(frame_batches, **source_kwargs)
+        rows = _iterate_from_frame_batches(
+            frame_batches,
+            content_field=content_field,
+            labels_field=labels_field,
+            chunk_id_col=chunk_id_col,
+            keywords_or_phrases_field=keywords_or_phrases_field,
+            keywords_nested_col=keywords_nested_col,
+            explanation_nested_col=explanation_nested_col,
+            filters=filters,
+        )
         return rows if limit is None else islice(rows, int(limit))
 
     docs_adapter = DatasetRecordAdapter.from_source(

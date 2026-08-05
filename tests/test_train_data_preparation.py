@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -6,7 +7,8 @@ from justatom.training import data as training_data
 
 
 def _write_jsonl(rows: list[dict]) -> Path:
-    _, raw_path = tempfile.mkstemp(suffix=".jsonl", prefix="train_prepare_")
+    fd, raw_path = tempfile.mkstemp(suffix=".jsonl", prefix="train_prepare_")
+    os.close(fd)
     path = Path(raw_path)
     with path.open("w", encoding="utf-8") as stream:
         for row in rows:

@@ -5,9 +5,7 @@ import asyncio as asio
 import torch
 
 from justatom.modeling.mask import ILanguageModel
-from justatom.processing import RuntimeProcessor
-from justatom.processing import ITokenizer
-from justatom.processing import igniset
+from justatom.processing import ITokenizer, RuntimeProcessor, igniset
 from justatom.processing.loader import NamedDataLoader
 from justatom.running.embeddings.base import IEmbeddingClient
 from justatom.running.encoders import EncoderRunner

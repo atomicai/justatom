@@ -12,15 +12,13 @@ import polars as pl
 from loguru import logger
 from tqdm.auto import tqdm
 
-from justatom.configuring.scenarios import deep_merge
-from justatom.configuring.scenarios import load_scenario_config
-from justatom.configuring.scenarios import parse_unknown_overrides
+from justatom.configuring.scenarios import deep_merge, load_scenario_config, parse_unknown_overrides
 from justatom.running.evaluator import EvaluatorRunner
 from justatom.running.mask import IEvaluatorRunner
 from justatom.running.service import RunningService
+from justatom.tooling import stl
 from justatom.tooling.collections import resolve_collection_name, resolve_collection_tag
 from justatom.tooling.dataset import DatasetRecordAdapter
-from justatom.tooling import stl
 
 dotenv.load_dotenv()
 

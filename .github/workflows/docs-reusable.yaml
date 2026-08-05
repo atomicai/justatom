@@ -13,20 +13,6 @@ on:
         required: false
         type: boolean
         default: false
-      external-repository:
-        description: Target repository for GitHub Pages publish
-        required: false
-        type: string
-        default: ''
-      publish-branch:
-        description: Target branch for GitHub Pages publish
-        required: false
-        type: string
-        default: 'gh-pages'
-    secrets:
-      docs-deploy-key:
-        description: Deploy key for pushing docs to external repository
-        required: false
 
 jobs:
   docs:
@@ -41,16 +27,12 @@ jobs:
     - name: Install docs dependencies
       run: |
         python -m pip install --upgrade pip
-        sudo apt-get update
-        sudo apt-get install -y pandoc
-        python -m pip install -r docs/requirements.txt
+        python -m pip install -r requirements-docs.txt
     - name: Build docs
-      run: bash docs/build_docs.sh
+      run: python -m mkdocs build --strict
     - name: Push documentation to GitHub Pages
-      if: ${{ inputs.deploy && inputs.external-repository != '' }}
-      uses: peaceiris/actions-gh-pages@v3
+      if: ${{ inputs.deploy }}
+      uses: peaceiris/actions-gh-pages@v4
       with:
-        publish_dir: ./docs/_build/html
-        external_repository: ${{ inputs.external-repository }}
-        publish_branch: ${{ inputs.publish-branch }}
-        deploy_key: ${{ secrets.docs-deploy-key }}
+        github_token: ${{ github.token }}
+        publish_dir: ./site

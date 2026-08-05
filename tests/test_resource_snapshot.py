@@ -20,8 +20,7 @@ class ResourceSnapshotTest(unittest.TestCase):
 
         self.assertEqual(
             line,
-            "RSS justatom tune: self_pid=123 self_rss_mb=1.5 "
-            "top=[456:python:2.0MB, 789:weaviate:1.0MB]",
+            "RSS justatom tune: self_pid=123 self_rss_mb=1.5 " "top=[456:python:2.0MB, 789:weaviate:1.0MB]",
         )
 
     def test_cli_emits_snapshot_for_requested_pid(self):
@@ -51,8 +50,8 @@ class ResourceSnapshotTest(unittest.TestCase):
         benchmark = Path("scripts/run_benchmark.sh").read_text()
 
         self.assertIn("justatom.tooling.resources", pipeline)
-        self.assertIn("log_rss \"before $label\"", pipeline)
-        self.assertIn("log_rss \"after $label\"", pipeline)
+        self.assertIn('log_rss "before $label"', pipeline)
+        self.assertIn('log_rss "after $label"', pipeline)
         self.assertIn("justatom.tooling.resources", benchmark)
 
 

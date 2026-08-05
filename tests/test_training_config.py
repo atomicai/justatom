@@ -2,13 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from justatom.training.config import (
-    ExperimentRole,
-    MarginMode,
-    TrainingMethod,
-    parse_train_config,
-    train_config_to_dict,
-)
+from justatom.training.config import ExperimentRole, MarginMode, TrainingMethod, parse_train_config, train_config_to_dict
 
 
 def test_parse_train_config_builds_typed_atomic_config():

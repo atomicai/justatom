@@ -6,12 +6,7 @@ from pathlib import Path
 import yaml
 
 from justatom.training.config import TrainingMethod
-from justatom.training.job import (
-    RunManifest,
-    TrainingJob,
-    artifact_paths,
-    write_run_manifest,
-)
+from justatom.training.job import RunManifest, TrainingJob, artifact_paths, write_run_manifest
 from justatom.training.methods import canonical_method_config
 
 

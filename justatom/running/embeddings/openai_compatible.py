@@ -35,9 +35,7 @@ class OpenAICompatibleEmbeddingClient(IEmbeddingClient):
         self.default_pooling = default_pooling
         self.default_encoding_format = default_encoding_format
         self.default_max_seq_len = (
-            int(default_max_seq_len)
-            if default_max_seq_len is not None and int(default_max_seq_len) > 0
-            else None
+            int(default_max_seq_len) if default_max_seq_len is not None and int(default_max_seq_len) > 0 else None
         )
 
     @staticmethod
@@ -90,11 +88,7 @@ class OpenAICompatibleEmbeddingClient(IEmbeddingClient):
 
         input_type = str(props.pop("input_type", self.default_input_type))
         apply_prefix = bool(props.pop("apply_prefix", self.prefix_enabled))
-        normalized = (
-            [self._apply_prefix(t, input_type) for t in texts]
-            if apply_prefix
-            else list(texts)
-        )
+        normalized = [self._apply_prefix(t, input_type) for t in texts] if apply_prefix else list(texts)
 
         payload = {
             "model": model or self.model,
@@ -110,9 +104,7 @@ class OpenAICompatibleEmbeddingClient(IEmbeddingClient):
         elif self.default_encoding_format:
             payload["encoding_format"] = self.default_encoding_format
 
-        payload_max_seq_len = self._normalize_optional_int(
-            props.pop("max_seq_len", self.default_max_seq_len)
-        )
+        payload_max_seq_len = self._normalize_optional_int(props.pop("max_seq_len", self.default_max_seq_len))
         if payload_max_seq_len is not None:
             payload["max_seq_len"] = payload_max_seq_len
 

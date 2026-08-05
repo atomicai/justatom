@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch

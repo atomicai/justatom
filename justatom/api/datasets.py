@@ -18,7 +18,6 @@ from justatom.configuring.scenarios import deep_merge, load_scenario_config, par
 from justatom.running.llm import OpenAIAsyncWrapper, OpenAiTask
 from justatom.storing.dataset import API as DatasetApi
 
-
 _TEMPLATE_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}")
 
 

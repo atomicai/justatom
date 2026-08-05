@@ -1,6 +1,9 @@
 site_name: justatom
 site_description: Neural retrieval, indexing, training, and evaluation toolkit.
 
+exclude_docs: |
+  superpowers/
+
 theme:
   name: material
   logo: Logo.png

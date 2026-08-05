@@ -2,12 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from justatom.training.telemetry import (
-    batch_retrieval_metrics,
-    grad_norm,
-    resolve_metric_tensors,
-    scalar_distribution,
-)
+from justatom.training.telemetry import batch_retrieval_metrics, grad_norm, resolve_metric_tensors, scalar_distribution
 
 
 def test_scalar_distribution_has_stable_quantiles():

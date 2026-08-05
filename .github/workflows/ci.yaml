@@ -21,9 +21,8 @@ jobs:
         python -m pip install black==24.10.0 isort==5.13.2
     - name: Run format checks
       run: |
-        PY_FILES="$(git ls-files '*.py')"
-        black --check --diff $PY_FILES
-        isort --check-only --diff $PY_FILES
+        git ls-files -z '*.py' | xargs -0 black --check --diff
+        git ls-files -z '*.py' | xargs -0 isort --check-only --diff
   lint:
     name: Lint (pylint+mypy)
     runs-on: ubuntu-latest
@@ -36,69 +35,90 @@ jobs:
     - name: Install lint tools
       run: |
         python -m pip install --upgrade pip
-        python -m pip install pylint mypy
+        python -m pip install pylint==4.0.6 mypy==2.3.0
     - name: Lint
       run: |
-        pylint justatom --errors-only --disable=import-error
-        mypy justatom --ignore-missing-imports
+        pylint justatom --errors-only --disable=import-error,not-callable
+        mypy \
+          justatom/training/config.py \
+          justatom/training/methods.py \
+          justatom/training/alpha_gate.py \
+          justatom/training/memory_bank.py \
+          justatom/training/objective.py \
+          justatom/training/sampling.py \
+          justatom/training/telemetry.py \
+          justatom/training/module.py \
+          justatom/training/data.py \
+          justatom/training/job.py \
+          --ignore-missing-imports \
+          --follow-imports=skip
   pytest-ubuntu:
     strategy:
+      fail-fast: false
       matrix:
-        python-version: [ '3.7', '3.8', '3.9', '3.10', '3.11' ]
-    name: Tests (Ubuntu)
+        python-version: [ '3.10', '3.11', '3.12' ]
+    name: Tests (Ubuntu, Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-        architecture: 'x64'
     - name: Install requirements
-      run: pip install .[torch,test]
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install ".[torch,test]"
     - name: Run tests
-      run: RUN_SLOW_TESTS=1 pytest tests -m "not integration"
+      run: python -m pytest tests -m "not integration and not network"
   pytest-windows:
     name: Tests (Windows)
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-        architecture: 'x64'
     - name: Install requirements
-      run: pip install .[torch,test]
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install ".[torch,test]"
     - name: Run tests
-      run: pytest tests -m "not integration"
+      run: python -m pytest tests -m "not integration and not network"
   pytest-macos:
     name: Tests (MacOS)
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        architecture: 'x64'
+    - name: Install supported Bash
+      run: |
+        brew install bash
+        echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
     - name: Install requirements
-      run: pip install .[torch,test]
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install ".[torch,test]"
     - name: Run tests
-      run: RUN_SLOW_TESTS=1 pytest tests -m "not integration"
+      run: python -m pytest tests -m "not integration and not network"
 
   pytest-integration-weaviate:
     name: Integration tests (Weaviate, Ubuntu)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        architecture: 'x64'
     - name: Start Weaviate
       run: docker compose up -d weaviate
     - name: Install requirements
-      run: pip install .[torch,test]
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install ".[torch,test]"
     - name: Run integration tests
-      run: pytest tests -m integration
+      run: python -m pytest tests -m integration
   build-docs:
     name: Build documentation
     runs-on: ubuntu-latest

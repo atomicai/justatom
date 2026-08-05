@@ -23,7 +23,6 @@ from justatom.configuring.builtins import resolve_builtin_path
 from justatom.etc.pattern import singleton
 from justatom.storing.mask import IDataset
 
-
 _HF_REPO_DATASET_RE = re.compile(r"^[^/\s]+/[^/\s]+(?:\?.*)?$")
 _HF_TOKEN_ENV_NAMES = ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_HUB_TOKEN", "HF_API_KEY")
 

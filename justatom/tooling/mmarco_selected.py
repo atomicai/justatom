@@ -5,12 +5,11 @@ import json
 import os
 import random
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import polars as pl
-
 
 SOURCE_DATASET = "ir_datasets:mmarco/v2/ru"
 DEFAULT_REPO_ID = "justatom/mmarco-ru-selected"
@@ -99,7 +98,7 @@ def write_manifest(
     manifest = {
         "repo_id": repo_id,
         "source": SOURCE_DATASET,
-        "created_at_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "created_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "selection": asdict(cfg),
         "counts": counts,
         "splits": {

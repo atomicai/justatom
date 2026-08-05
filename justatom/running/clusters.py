@@ -53,17 +53,13 @@ class DocEmbedder(IDocEmbedder):
             streaming=streaming_preprocessing,
         )
 
-        loader = NamedDataLoader(
-            dataset=dataset, batch_size=batch_size, tensor_names=tensor_names
-        )
+        loader = NamedDataLoader(dataset=dataset, batch_size=batch_size, tensor_names=tensor_names)
 
         batch_gen = range(0, len(texts), batch_size)
         if verbose:
             batch_gen = tqdm(batch_gen)
 
-        for batch_begin, batch_features in zip(
-            batch_gen, loader, strict=False
-        ):  # noqa: B007
+        for batch_begin, batch_features in zip(batch_gen, loader, strict=False):  # noqa: B007
             batch = {k: v.to(self.device) for k, v in batch_features.items()}
 
             embeddings = model(**batch)[0].cpu()
@@ -89,9 +85,7 @@ class IHFWrapperBackend(BaseEmbedder):
             Document/words embeddings with shape (n, m) with `n` documents/words
             that each have an embeddings size of `m`
         """
-        embeddings = list(
-            self.model.encode(documents, batch_size=self.batch_size, verbose=verbose)
-        )
+        embeddings = list(self.model.encode(documents, batch_size=self.batch_size, verbose=verbose))
         embeddings = np.vstack(embeddings)
         return embeddings
 
@@ -128,9 +122,7 @@ class IEmbeddingClientBackend(BaseEmbedder):
 
     def embed(self, documents: list[str], verbose: bool = False) -> np.ndarray:
         del verbose
-        vectors = self._run_async(
-            self.client.embed(texts=documents, **self.embed_props)
-        )
+        vectors = self._run_async(self.client.embed(texts=documents, **self.embed_props))
         if len(vectors) == 0:
             return np.empty((0, 0))
         return np.asarray(vectors, dtype=np.float32)
@@ -145,9 +137,7 @@ class IBTRunner(IClusteringRunner):
             kwargs["n_gram_range"] = tuple(kwargs["n_gram_range"])
         self.topic_model = BERTopic(embedding_model=model, **kwargs)
 
-    def fit_transform(
-        self, docs: list[str | Document], **kwargs
-    ) -> tuple[list[int], np.ndarray | None]:
+    def fit_transform(self, docs: list[str | Document], **kwargs) -> tuple[list[int], np.ndarray | None]:
         _docs = [str(d) if isinstance(d, str) else d.content for d in docs]
 
         topics, probs = self.topic_model.fit_transform(documents=_docs, **kwargs)

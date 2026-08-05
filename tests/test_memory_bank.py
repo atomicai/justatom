@@ -4,12 +4,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from justatom.training.config import (
-    AdaptiveBankConfig,
-    MarginConfig,
-    MarginMode,
-    MemoryBankConfig,
-)
+from justatom.training.config import AdaptiveBankConfig, MarginConfig, MarginMode, MemoryBankConfig
 from justatom.training.memory_bank import ContrastiveMemoryBank, MemorySelection, QueryMarginHead
 
 

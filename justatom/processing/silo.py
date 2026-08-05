@@ -13,9 +13,7 @@ def get_dict_checksum(payload_dict):
     """
     Get MD5 checksum for a dict.
     """
-    checksum = hashlib.md5(
-        json.dumps(payload_dict, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    checksum = hashlib.md5(json.dumps(payload_dict, sort_keys=True).encode("utf-8")).hexdigest()
     return checksum
 
 
@@ -42,18 +40,14 @@ class _StreamingDataSet(IterableDataset):
 
     def __len__(self):
         if self._num_samples is None:
-            raise TypeError(
-                "Streaming dataset length is unknown for this iterable source"
-            )
+            raise TypeError("Streaming dataset length is unknown for this iterable source")
         return self._num_samples
 
     def _iter_source(self):
         if self.shuffle:
             if isinstance(self.dicts, list):
                 return iter(random.sample(self.dicts, len(self.dicts)))
-            logger.warning(
-                "shuffle=True is ignored for streaming datasets without random access."
-            )
+            logger.warning("shuffle=True is ignored for streaming datasets without random access.")
         return iter(self.dicts)
 
     def _iter_worker_shard(self):
@@ -70,11 +64,9 @@ class _StreamingDataSet(IterableDataset):
                 yield row
 
     def _emit_processed_batch(self, processing_batch: list[dict]):
-        dataset, tensor_names, problematic_sample_ids = (
-            self.processor.dataset_from_dicts(
-                dicts=processing_batch,
-                indices=list(range(len(processing_batch))),
-            )
+        dataset, tensor_names, problematic_sample_ids = self.processor.dataset_from_dicts(
+            dicts=processing_batch,
+            indices=list(range(len(processing_batch))),
         )
         if tensor_names is not None:
             self.tensor_names = tensor_names
@@ -120,9 +112,7 @@ def igniset(
     num_dicts = len(dicts)
     problems = set()
     dicts = random.sample(dicts, len(dicts)) if shuffle else dicts
-    for i in tqdm(
-        range(0, num_dicts, batch_size), desc="Preprocessing dataset", unit=" Dicts"
-    ):
+    for i in tqdm(range(0, num_dicts, batch_size), desc="Preprocessing dataset", unit=" Dicts"):
         processing_batch = dicts[i : i + batch_size]
         dataset, tensor_names, problematic_sample_ids = processor.dataset_from_dicts(
             dicts=processing_batch,
