@@ -63,6 +63,13 @@ slugify() {
   printf '%s' "$1" | tr '/:@ ' '____' | tr -cd '[:alnum:]_.-'
 }
 
+log_rss() {
+  "${PYTHON_BIN:-python}" -m justatom.tooling.resources \
+    --label "$1" \
+    --pid "$$" \
+    --top 8 | tee -a "$RESOURCE_LOG"
+}
+
 normalize_variant() {
   case "$1" in
     vanilla|atom_gate|atomic) printf '%s' "$1" ;;
@@ -114,12 +121,16 @@ mkdir -p "$BENCH_ROOT/tables" "$BENCH_ROOT/pipeline_runs"
 COMMANDS_PATH="$BENCH_ROOT/COMMANDS.md"
 RESULTS_PATH="$BENCH_ROOT/BENCHMARK_RESULTS.md"
 GEOMETRY_PATH="$BENCH_ROOT/GEOMETRY_RESULTS.md"
+RESOURCE_LOG="$BENCH_ROOT/RESOURCES.log"
 
 printf '# Benchmark Commands\n\n' > "$COMMANDS_PATH"
 printf 'Benchmark root: %s\n' "$BENCH_ROOT"
 printf 'Results summary: %s\n' "$RESULTS_PATH"
 printf 'Geometry summary: %s\n' "$GEOMETRY_PATH"
 printf 'Variants: %s\n' "${VARIANTS[*]}"
+if [[ "$DRY_RUN" == "0" ]]; then
+  log_rss "benchmark start"
+fi
 
 build_variant_command() {
   local variant="$1" output_root="$2" table_path="$3"
@@ -215,3 +226,6 @@ printf '\nBenchmark finished.\n'
 printf 'Results summary: %s\n' "$RESULTS_PATH"
 printf 'Geometry summary: %s\n' "$GEOMETRY_PATH"
 printf 'Commands: %s\n' "$COMMANDS_PATH"
+if [[ "$DRY_RUN" == "0" ]]; then
+  log_rss "benchmark end"
+fi

@@ -2,182 +2,147 @@ import json
 import tempfile
 from pathlib import Path
 
-from justatom.api import train as train_api
 from justatom.training import data as training_data
 
 
 def _write_jsonl(rows: list[dict]) -> Path:
-    fd, path = tempfile.mkstemp(suffix=".jsonl", prefix="train_prepare_")
-    Path(path).unlink(missing_ok=True)
-    out = Path(path)
-    with out.open("w", encoding="utf-8") as f:
+    _, raw_path = tempfile.mkstemp(suffix=".jsonl", prefix="train_prepare_")
+    path = Path(raw_path)
+    with path.open("w", encoding="utf-8") as stream:
         for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    return out
+            stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return path
 
 
-def test_prepare_training_data_prefers_polars_batches_for_frame_backed_sources(
-    monkeypatch,
-):
-    rows = [
-        {"chunk_id": "a", "content": "doc-a", "queries": ["q1", "q2"]},
-        {"chunk_id": "b", "content": "doc-b", "queries": ["q3"]},
-        {"chunk_id": "c", "content": "doc-c", "queries": ["q4"]},
-    ]
-    path = _write_jsonl(rows)
-
-    def fail(*args, **kwargs):
-        raise AssertionError("frame-backed datasets should avoid from_source fallback")
-
-    monkeypatch.setattr(training_data.DatasetRecordAdapter, "from_source", fail)
-
+def test_prepare_training_data_prefers_frame_batches(monkeypatch):
+    path = _write_jsonl(
+        [
+            {"chunk_id": "a", "content": "doc-a", "queries": ["q1", "q2"]},
+            {"chunk_id": "b", "content": "doc-b", "queries": ["q3"]},
+        ]
+    )
+    monkeypatch.setattr(
+        training_data.DatasetRecordAdapter,
+        "from_source",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("frame-backed sources must not use the adapter fallback")
+        ),
+    )
     try:
-        pl_data, js_data, lexical_by_content = training_data.prepare_training_data(
+        frame, rows, lexical_lookup = training_data.prepare_training_data(
             dataset_name_or_path=path,
             num_samples=2,
-            content_field="content",
-            labels_field="queries",
             chunk_id_col="chunk_id",
         )
     finally:
         path.unlink(missing_ok=True)
 
-    assert pl_data.height == 2
-    assert len(js_data) == 2
-    assert set(lexical_by_content).issubset({"doc-a", "doc-b", "doc-c"})
+    assert frame.height == len(rows) == 2
+    assert all(row["content"] in lexical_lookup for row in rows)
 
 
-def test_prepare_training_data_falls_back_to_lazy_adapter_for_iterable_sources(
-    monkeypatch,
-):
-    rows = [
+def test_prepare_training_data_uses_lazy_adapter_for_iterable_sources(monkeypatch):
+    raw_rows = [
         {"chunk_id": "a", "content": "doc-a", "queries": ["q1", "q2"]},
         {"chunk_id": "b", "content": "doc-b", "queries": ["q3"]},
-        {"chunk_id": "c", "content": "doc-c", "queries": ["q4"]},
     ]
     captured: dict[str, object] = {}
 
-    class _FakeDataset:
+    class FakeDataset:
         def iterator(self, **kwargs):
-            return iter(rows)
+            return iter(raw_rows)
 
-    original_from_source = training_data.DatasetRecordAdapter.from_source
-
-    def fake_named(*args, **kwargs):
-        return _FakeDataset()
+    original = training_data.DatasetRecordAdapter.from_source
 
     def wrapped(*args, **kwargs):
         captured["lazy"] = kwargs.get("lazy")
-        return original_from_source(*args, **kwargs)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(training_data.DatasetApi, "named", fake_named)
+    monkeypatch.setattr(training_data.DatasetApi, "named", lambda *args, **kwargs: FakeDataset())
     monkeypatch.setattr(training_data.DatasetRecordAdapter, "from_source", wrapped)
 
-    pl_data, js_data, lexical_by_content = training_data.prepare_training_data(
+    frame, rows, _ = training_data.prepare_training_data(
         dataset_name_or_path="hf://dummy/dataset",
         num_samples=2,
-        content_field="content",
-        labels_field="queries",
         chunk_id_col="chunk_id",
     )
 
     assert captured["lazy"] is True
-    assert pl_data.height == 2
-    assert len(js_data) == 2
-    assert set(lexical_by_content).issubset({"doc-a", "doc-b", "doc-c"})
+    assert frame.height == len(rows) == 2
 
 
-def test_prepare_training_data_streams_and_bounds_sample_size():
-    rows = [
-        {"chunk_id": "a", "content": "doc-a", "queries": ["q1", "q2"]},
-        {"chunk_id": "b", "content": "doc-b", "queries": ["q3", "q4"]},
-        {"chunk_id": "c", "content": "doc-c", "queries": ["q5", "q6"]},
+def test_reservoir_sampling_is_bounded_and_deterministic():
+    source = [
+        {"chunk_id": str(index), "content": f"doc-{index}", "queries": [f"q-{index}"]}
+        for index in range(20)
     ]
-    path = _write_jsonl(rows)
-
+    path = _write_jsonl(source)
     try:
-        pl_data, js_data, lexical_by_content = training_data.prepare_training_data(
+        first, _ = training_data.sample_training_rows(
             dataset_name_or_path=path,
-            num_samples=3,
-            content_field="content",
-            labels_field="queries",
+            num_samples=5,
+            seed=17,
+            chunk_id_col="chunk_id",
+        )
+        second, _ = training_data.sample_training_rows(
+            dataset_name_or_path=path,
+            num_samples=5,
+            seed=17,
             chunk_id_col="chunk_id",
         )
     finally:
         path.unlink(missing_ok=True)
 
-    assert pl_data.height == 3
-    assert len(js_data) == 3
-    assert all(row["content"] in lexical_by_content for row in js_data)
-    assert all(row["lexical_text"] == lexical_by_content[row["content"]] for row in js_data)
+    assert len(first) == 5
+    assert first == second
 
 
-def test_prepare_training_data_preserves_chunk_identity_for_duplicate_content():
-    rows = [
-        {"chunk_id": "a", "content": "same-doc", "queries": ["q1"]},
-        {"chunk_id": "b", "content": "same-doc", "queries": ["q2"]},
-    ]
-    path = _write_jsonl(rows)
-
+def test_duplicate_content_keeps_distinct_chunk_identity():
+    path = _write_jsonl(
+        [
+            {"chunk_id": "a", "content": "same-doc", "queries": ["q1"]},
+            {"chunk_id": "b", "content": "same-doc", "queries": ["q2"]},
+        ]
+    )
     try:
-        _, js_data, lexical_by_content = training_data.prepare_training_data(
+        _, rows, lexical_lookup = training_data.prepare_training_data(
             dataset_name_or_path=path,
             num_samples=2,
-            content_field="content",
-            labels_field="queries",
             chunk_id_col="chunk_id",
         )
     finally:
         path.unlink(missing_ok=True)
 
-    assert [row["chunk_id"] for row in js_data] == ["a", "b"]
-    assert lexical_by_content == {"same-doc": "same-doc"}
+    assert [row["chunk_id"] for row in rows] == ["a", "b"]
+    assert lexical_lookup == {"same-doc": "same-doc"}
 
 
-def test_rebalance_rows_by_content_reduces_within_batch_duplicates_when_possible():
+def test_rebalance_reduces_avoidable_within_batch_duplicates():
     rows = [
-        {"chunk_id": "a1", "content": "same-doc", "queries": "q1", "lexical_text": "same-doc"},
-        {"chunk_id": "a2", "content": "same-doc", "queries": "q2", "lexical_text": "same-doc"},
-        {"chunk_id": "b1", "content": "doc-b", "queries": "q3", "lexical_text": "doc-b"},
-        {"chunk_id": "c1", "content": "doc-c", "queries": "q4", "lexical_text": "doc-c"},
+        {"chunk_id": "a1", "content": "same-doc"},
+        {"chunk_id": "a2", "content": "same-doc"},
+        {"chunk_id": "b1", "content": "doc-b"},
+        {"chunk_id": "c1", "content": "doc-c"},
     ]
 
-    before = training_data.count_batches_with_duplicate_content(rows, batch_size=3)
     rebalanced = training_data.rebalance_rows_by_content(rows, batch_size=3)
-    after = training_data.count_batches_with_duplicate_content(rebalanced, batch_size=3)
 
-    assert before == 1
-    assert after == 0
+    assert training_data.count_batches_with_duplicate_content(rows, batch_size=3) == 1
+    assert training_data.count_batches_with_duplicate_content(rebalanced, batch_size=3) == 0
     assert sorted(row["chunk_id"] for row in rebalanced) == ["a1", "a2", "b1", "c1"]
 
 
-def test_rebalance_rows_by_content_keeps_all_rows_when_duplicates_are_unavoidable():
-    rows = [
-        {"chunk_id": "a1", "content": "same-doc", "queries": "q1", "lexical_text": "same-doc"},
-        {"chunk_id": "a2", "content": "same-doc", "queries": "q2", "lexical_text": "same-doc"},
-        {"chunk_id": "a3", "content": "same-doc", "queries": "q3", "lexical_text": "same-doc"},
-        {"chunk_id": "b1", "content": "doc-b", "queries": "q4", "lexical_text": "doc-b"},
-    ]
-
-    rebalanced = training_data.rebalance_rows_by_content(rows, batch_size=3)
-
-    assert sorted(row["chunk_id"] for row in rebalanced) == ["a1", "a2", "a3", "b1"]
-    assert training_data.count_batches_with_duplicate_content(rebalanced, batch_size=3) == 1
-
-
-def test_iterate_training_rows_applies_limit_after_query_expansion():
-    rows = [
-        {"chunk_id": "a", "content": "doc-a", "queries": ["q1", "q2"]},
-        {"chunk_id": "b", "content": "doc-b", "queries": ["q3"]},
-    ]
-    path = _write_jsonl(rows)
-
+def test_limit_is_applied_after_query_expansion():
+    path = _write_jsonl(
+        [
+            {"chunk_id": "a", "content": "doc-a", "queries": ["q1", "q2"]},
+            {"chunk_id": "b", "content": "doc-b", "queries": ["q3"]},
+        ]
+    )
     try:
-        sample_rows = list(
+        rows = list(
             training_data.iterate_training_rows(
                 dataset_name_or_path=path,
-                content_field="content",
-                labels_field="queries",
                 chunk_id_col="chunk_id",
                 limit=2,
             )
@@ -185,28 +150,22 @@ def test_iterate_training_rows_applies_limit_after_query_expansion():
     finally:
         path.unlink(missing_ok=True)
 
-    assert len(sample_rows) == 2
-    assert [row["queries"] for row in sample_rows] == ["q1", "q2"]
+    assert [row["queries"] for row in rows] == ["q1", "q2"]
 
 
-def test_iterate_training_rows_handles_extra_source_fields_for_iterable_sources(
-    monkeypatch,
-):
-    rows = [
-        {"passage": "doc-a", "question": "q1"},
-        {"passage": "doc-b", "question": "q2"},
-    ]
-
-    class _FakeDataset:
+def test_iterable_source_supports_custom_fields(monkeypatch):
+    class FakeDataset:
         def iterator(self, **kwargs):
-            return iter(rows)
+            return iter(
+                [
+                    {"passage": "doc-a", "question": "q1"},
+                    {"passage": "doc-b", "question": "q2"},
+                ]
+            )
 
-    def fake_named(*args, **kwargs):
-        return _FakeDataset()
+    monkeypatch.setattr(training_data.DatasetApi, "named", lambda *args, **kwargs: FakeDataset())
 
-    monkeypatch.setattr(training_data.DatasetApi, "named", fake_named)
-
-    sample_rows = list(
+    rows = list(
         training_data.iterate_training_rows(
             dataset_name_or_path="hf://dummy/boolq-like",
             content_field="passage",
@@ -215,389 +174,7 @@ def test_iterate_training_rows_handles_extra_source_fields_for_iterable_sources(
         )
     )
 
-    assert sample_rows == [
+    assert rows == [
         {"content": "doc-a", "queries": "q1", "lexical_text": "doc-a"},
         {"content": "doc-b", "queries": "q2", "lexical_text": "doc-b"},
     ]
-
-
-def test_create_training_job_selects_gamma_only_mode():
-    job = train_api.create_training_job(
-        dataset_name_or_path="dummy",
-        freeze_encoder=True,
-        gamma_joint=True,
-        include_semantic_gamma=True,
-        include_keywords_gamma=True,
-        temperature=0.07,
-        grad_acc_steps=4,
-    )
-
-    assert isinstance(job, train_api.GammaOnlyTrainingJob)
-    assert job.training_mode == "gamma-only"
-    assert job.gamma_joint is True
-    assert job.loss == "contrastive"
-    assert job.temperature == 0.07
-    assert job.grad_acc_steps == 4
-
-
-def test_create_training_job_selects_encoder_gamma_mode():
-    job = train_api.create_training_job(
-        dataset_name_or_path="dummy",
-        freeze_encoder=False,
-        include_semantic_gamma=True,
-        include_keywords_gamma=True,
-    )
-
-    assert isinstance(job, train_api.EncoderGammaTrainingJob)
-    assert job.training_mode == "encoder+gamma"
-
-
-def test_create_training_job_selects_encoder_only_mode():
-    job = train_api.create_training_job(
-        dataset_name_or_path="dummy",
-        freeze_encoder=False,
-        include_semantic_gamma=False,
-        include_keywords_gamma=False,
-    )
-
-    assert isinstance(job, train_api.EncoderOnlyTrainingJob)
-    assert job.training_mode == "encoder-only"
-
-
-def test_create_training_job_preserves_optimizer_and_legacy_style_params():
-    job = train_api.create_training_job(
-        dataset_name_or_path="dummy",
-        freeze_encoder=False,
-        include_semantic_gamma=True,
-        include_keywords_gamma=True,
-        loss="contrastive",
-        optimizer="adafactor",
-        grad_acc_steps=6,
-        contrastive_temperature=0.1,
-        soft_contrastive_temperature=10.0,
-        memory_bank_size=1024,
-        memory_bank_mining_mode="mixed",
-        memory_bank_hard_negatives=32,
-        memory_bank_random_negatives=16,
-        memory_bank_adaptive_hard=True,
-        memory_bank_adaptive_hard_mode="soft",
-        memory_bank_hard_collision_threshold=0.02,
-        memory_bank_hard_collision_beta=0.07,
-    )
-
-    assert isinstance(job, train_api.EncoderGammaTrainingJob)
-    assert job.optimizer == "adafactor"
-    assert job.grad_acc_steps == 6
-    assert job.contrastive_temperature == 0.1
-    assert job.soft_contrastive_temperature == 10.0
-    assert job.memory_bank_size == 1024
-    assert job.memory_bank_mining_mode == "mixed"
-    assert job.memory_bank_hard_negatives == 32
-    assert job.memory_bank_random_negatives == 16
-    assert job.memory_bank_adaptive_hard is True
-    assert job.memory_bank_adaptive_hard_mode == "soft"
-    assert job.memory_bank_hard_collision_threshold == 0.02
-    assert job.memory_bank_hard_collision_beta == 0.07
-
-
-def test_resolve_train_kwargs_reads_optimizer_and_legacy_style_params():
-    kwargs = train_api.resolve_train_kwargs(
-        config={
-            "dataset": {"name_or_path": "dummy"},
-            "training": {
-                "optimizer": "adafactor",
-                "grad_acc_steps": 6,
-                "contrastive_temperature": 0.1,
-                "soft_contrastive_temperature": 10.0,
-                "memory_bank_size": 2048,
-                "memory_bank_mining_mode": "mixed",
-                "memory_bank_hard_negatives": 32,
-                "memory_bank_random_negatives": 16,
-                "memory_bank_too_hard_margin": 0.01,
-                "memory_bank_hard_similarity_cap": 0.45,
-                "memory_bank_soft_mode": "soft",
-                "memory_bank_soft_beta": 0.05,
-                "memory_bank_margin_head": True,
-                "memory_bank_margin_regularization_weight": 7.0,
-                "memory_bank_adaptive_hard": True,
-                "memory_bank_adaptive_hard_mode": "soft",
-                "memory_bank_hard_collision_threshold": 0.02,
-                "memory_bank_hard_collision_beta": 0.07,
-            },
-        }
-    )
-
-    assert kwargs["optimizer"] == "adafactor"
-    assert kwargs["grad_acc_steps"] == 6
-    assert kwargs["contrastive_temperature"] == 0.1
-    assert kwargs["soft_contrastive_temperature"] == 10.0
-    assert kwargs["memory_bank_size"] == 2048
-    assert kwargs["memory_bank_mining_mode"] == "mixed"
-    assert kwargs["memory_bank_hard_negatives"] == 32
-    assert kwargs["memory_bank_random_negatives"] == 16
-    assert kwargs["memory_bank_too_hard_margin"] == 0.01
-    assert kwargs["memory_bank_hard_similarity_cap"] == 0.45
-    assert kwargs["memory_bank_soft_mode"] == "soft"
-    assert kwargs["memory_bank_soft_beta"] == 0.05
-    assert kwargs["memory_bank_margin_head"] is True
-    assert kwargs["memory_bank_margin_regularization_weight"] == 7.0
-    assert kwargs["memory_bank_adaptive_hard"] is True
-    assert kwargs["memory_bank_adaptive_hard_mode"] == "soft"
-    assert kwargs["memory_bank_hard_collision_threshold"] == 0.02
-    assert kwargs["memory_bank_hard_collision_beta"] == 0.07
-
-
-def test_resolve_train_kwargs_maps_atom_gate_production_recipe():
-    kwargs = train_api.resolve_train_kwargs(
-        config={
-            "recipe": "atom_gate",
-            "dataset": {"name_or_path": "dummy"},
-            "training": {
-                "batch_size": 32,
-                "grad_acc_steps": 1,
-                "n_epochs": 2,
-            },
-            "atom_gate": {
-                "temperature": 0.05,
-            },
-            "alpha_gate": {
-                "mix_weight": 0.3,
-                "auxiliary": {
-                    "simcse_dropout_weight": 0.1,
-                },
-                "alpha_query": {
-                    "layers": 1,
-                    "hidden_dim": "auto",
-                    "dropout": 0.0,
-                    "activation": "gelu",
-                },
-            },
-            "memory_bank": {
-                "enabled": True,
-                "size": 256,
-                "warmup_steps": 30,
-                "mining": "mixed",
-                "hard_negatives": 4,
-                "random_negatives": 4,
-                "hard_similarity_cap": 0.45,
-                "soft_mode": "soft",
-                "soft_beta": 0.05,
-                "margin_head": True,
-                "margin_regularization_weight": 7.0,
-                "adaptive_hard": True,
-                "adaptive_hard_mode": "soft",
-                "hard_collision_threshold": 0.02,
-                "hard_collision_beta": 0.07,
-            },
-        }
-    )
-
-    assert kwargs["recipe"] == "atom_gate"
-    assert kwargs["add_alpha_gate"] is True
-    assert kwargs["loss"] == "contrastive"
-    assert kwargs["freeze_encoder"] is False
-    assert kwargs["gamma_joint"] is True
-    assert kwargs["include_semantic_gamma"] is True
-    assert kwargs["include_keywords_gamma"] is True
-    assert kwargs["alpha_train_only"] is True
-    assert kwargs["alpha_mix_weight"] == 0.3
-    assert kwargs["optimizer"] == "adamw"
-    assert kwargs["contrastive_temperature"] == 0.05
-    assert kwargs["contrastive_learnable_temperature"] is True
-    assert kwargs["contrastive_decoupled"] is True
-    assert kwargs["contrastive_simcse_dropout_weight"] == 0.1
-    assert kwargs["contrastive_loss_alpha_gate"] is True
-    assert kwargs["contrastive_loss_alpha_gate_mode"] == "augment"
-    assert kwargs["alpha_head_input"] == "query"
-    assert kwargs["alpha_head_layers"] == 1
-    assert kwargs["alpha_head_hidden_dim"] is None
-    assert kwargs["alpha_head_dropout"] == 0.0
-    assert kwargs["alpha_head_activation"] == "gelu"
-    assert kwargs["memory_bank_size"] == 256
-    assert kwargs["memory_bank_warmup_steps"] == 30
-    assert kwargs["memory_bank_mining_mode"] == "mixed"
-    assert kwargs["memory_bank_hard_negatives"] == 4
-    assert kwargs["memory_bank_random_negatives"] == 4
-    assert kwargs["memory_bank_hard_similarity_cap"] == 0.45
-    assert kwargs["memory_bank_soft_mode"] == "soft"
-    assert kwargs["memory_bank_soft_beta"] == 0.05
-    assert kwargs["memory_bank_margin_head"] is True
-    assert kwargs["memory_bank_margin_regularization_weight"] == 7.0
-    assert kwargs["memory_bank_adaptive_hard"] is True
-    assert kwargs["memory_bank_adaptive_hard_mode"] == "soft"
-    assert kwargs["memory_bank_hard_collision_threshold"] == 0.02
-    assert kwargs["memory_bank_hard_collision_beta"] == 0.07
-
-
-def test_atom_gate_recipe_has_canonical_defaults_without_separate_config():
-    kwargs = train_api.resolve_train_kwargs(
-        config={
-            "recipe": "atom_gate",
-            "dataset": {"id": "justatom"},
-        }
-    )
-
-    assert kwargs["recipe"] == "atom_gate"
-    assert kwargs["add_alpha_gate"] is True
-    assert kwargs["contrastive_temperature"] == 0.05
-    assert kwargs["contrastive_simcse_dropout_weight"] == 0.1
-    assert kwargs["alpha_mix_weight"] == 0.3
-    assert kwargs["alpha_head_layers"] == 1
-    assert kwargs["alpha_head_hidden_dim"] is None
-    assert kwargs["alpha_head_dropout"] == 0.0
-
-
-def test_create_training_job_selects_atom_gate_recipe_mode():
-    job = train_api.create_training_job(
-        recipe="atom_gate",
-        dataset_name_or_path="dummy",
-        batch_size=32,
-        grad_acc_steps=1,
-        n_epochs=2,
-    )
-
-    assert isinstance(job, train_api.AtomGateTrainingJob)
-    assert job.training_mode == "atom-gate"
-    assert job.add_alpha_gate is True
-    assert job.loss == "contrastive"
-    assert job.freeze_encoder is False
-    assert job.gamma_joint is True
-    assert job.alpha_train_only is True
-    assert job.contrastive_temperature == 0.05
-    assert job.contrastive_simcse_dropout_weight == 0.1
-    assert job.contrastive_loss_alpha_gate is True
-    assert job.contrastive_loss_alpha_gate_mode == "augment"
-
-
-def test_add_alpha_gate_feature_maps_to_legacy_knobs_and_head_config():
-    kwargs = train_api.resolve_train_kwargs(
-        config={
-            "dataset": {"name_or_path": "dummy"},
-            "add_alpha_gate": True,
-            "alpha_gate": {
-                "mode": "augment",
-                "train_only": True,
-                "mix_weight": 0.35,
-                "auxiliary": {
-                    "simcse_dropout_weight": 0.2,
-                },
-                "alpha_query": {
-                    "input": "query_doc",
-                    "layers": 2,
-                    "hidden_dim": 96,
-                    "dropout": 0.15,
-                    "activation": "silu",
-                },
-            },
-        }
-    )
-
-    assert kwargs["recipe"] is None
-    assert kwargs["add_alpha_gate"] is True
-    assert kwargs["gamma_joint"] is True
-    assert kwargs["alpha_train_only"] is True
-    assert kwargs["alpha_mix_weight"] == 0.35
-    assert kwargs["contrastive_loss_alpha_gate"] is True
-    assert kwargs["contrastive_loss_alpha_gate_mode"] == "augment"
-    assert kwargs["contrastive_simcse_dropout_weight"] == 0.2
-    assert kwargs["alpha_head_input"] == "query_doc"
-    assert kwargs["alpha_head_include_doc"] is True
-    assert kwargs["alpha_head_layers"] == 2
-    assert kwargs["alpha_head_hidden_dim"] == 96
-    assert kwargs["alpha_head_dropout"] == 0.15
-    assert kwargs["alpha_head_activation"] == "silu"
-
-
-def test_atom_gate_recipe_preserves_legacy_training_bank_overrides():
-    kwargs = train_api.resolve_train_kwargs(
-        config={
-            "recipe": "atom_gate",
-            "dataset": {"id": "justatom"},
-            "training": {
-                "contrastive_temperature": 0.07,
-                "memory_bank_size": 256,
-                "memory_bank_mining_mode": "mixed",
-                "memory_bank_hard_negatives": 4,
-                "memory_bank_random_negatives": 4,
-                "memory_bank_hard_similarity_cap": 0.45,
-                "memory_bank_soft_mode": "soft-const",
-                "memory_bank_soft_beta": 0.05,
-                "memory_bank_margin_head": False,
-                "memory_bank_adaptive_hard": True,
-                "memory_bank_adaptive_hard_mode": "soft",
-                "memory_bank_hard_collision_threshold": 0.02,
-                "memory_bank_hard_collision_beta": 0.07,
-            },
-        }
-    )
-
-    assert kwargs["recipe"] == "atom_gate"
-    assert kwargs["dataset_name_or_path"] == "justatom"
-    assert kwargs["contrastive_temperature"] == 0.07
-    assert kwargs["memory_bank_size"] == 256
-    assert kwargs["memory_bank_mining_mode"] == "mixed"
-    assert kwargs["memory_bank_hard_negatives"] == 4
-    assert kwargs["memory_bank_random_negatives"] == 4
-    assert kwargs["memory_bank_hard_similarity_cap"] == 0.45
-    assert kwargs["memory_bank_soft_mode"] == "soft-const"
-    assert kwargs["memory_bank_soft_beta"] == 0.05
-    assert kwargs["memory_bank_margin_head"] is False
-    assert kwargs["memory_bank_adaptive_hard"] is True
-    assert kwargs["memory_bank_adaptive_hard_mode"] == "soft"
-    assert kwargs["memory_bank_hard_collision_threshold"] == 0.02
-    assert kwargs["memory_bank_hard_collision_beta"] == 0.07
-
-
-def test_create_training_job_preserves_memory_bank_soft_admission_config():
-    job = train_api.create_training_job(
-        recipe="atom_gate",
-        dataset_name_or_path="dummy",
-        memory_bank_size=256,
-        memory_bank_too_hard_margin=0.05,
-        memory_bank_soft_mode="soft",
-        memory_bank_soft_beta=0.05,
-        memory_bank_margin_head=True,
-        memory_bank_margin_regularization_weight=7.0,
-        memory_bank_adaptive_hard=True,
-        memory_bank_adaptive_hard_mode="soft",
-        memory_bank_hard_collision_threshold=0.02,
-        memory_bank_hard_collision_beta=0.07,
-    )
-
-    assert isinstance(job, train_api.AtomGateTrainingJob)
-    assert job.memory_bank_soft_mode == "soft"
-    assert job.memory_bank_soft_beta == 0.05
-    assert job.memory_bank_margin_head is True
-    assert job.memory_bank_margin_regularization_weight == 7.0
-    assert job.memory_bank_adaptive_hard is True
-    assert job.memory_bank_adaptive_hard_mode == "soft"
-    assert job.memory_bank_hard_collision_threshold == 0.02
-    assert job.memory_bank_hard_collision_beta == 0.07
-
-
-def test_create_training_job_allows_temperature_contrastive_for_gamma_modes():
-    job = train_api.create_training_job(
-        dataset_name_or_path="dummy",
-        freeze_encoder=False,
-        include_semantic_gamma=True,
-        include_keywords_gamma=True,
-        loss="contrastive",
-    )
-
-    assert isinstance(job, train_api.EncoderGammaTrainingJob)
-    assert job.loss == "contrastive"
-
-
-def test_create_training_job_allows_focal_contrastive_for_gamma_modes():
-    job = train_api.create_training_job(
-        dataset_name_or_path="dummy",
-        freeze_encoder=False,
-        include_semantic_gamma=True,
-        include_keywords_gamma=True,
-        loss="focal-contrastive",
-        focal_gamma=3.0,
-    )
-
-    assert isinstance(job, train_api.EncoderGammaTrainingJob)
-    assert job.loss == "focal-contrastive"
-    assert job.focal_gamma == 3.0

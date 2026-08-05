@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 import torch.nn.functional as F
 
@@ -10,6 +11,11 @@ from justatom.training.config import (
     MemoryBankConfig,
 )
 from justatom.training.memory_bank import ContrastiveMemoryBank, MemorySelection, QueryMarginHead
+
+
+def test_memory_bank_requires_typed_configuration():
+    with pytest.raises(TypeError, match="MemoryBankConfig"):
+        ContrastiveMemoryBank(8)
 
 
 def test_query_margin_starts_at_base_and_has_live_gradient():

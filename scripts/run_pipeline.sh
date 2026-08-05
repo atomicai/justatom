@@ -151,15 +151,24 @@ log() {
   printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" | tee -a "$SUMMARY_LOG"
 }
 
+log_rss() {
+  "$PYTHON_BIN" -m justatom.tooling.resources \
+    --label "$1" \
+    --pid "$$" \
+    --top 8 | tee -a "$SUMMARY_LOG"
+}
+
 run_cmd() {
   local label="$1"
   local logfile="$2"
   shift 2
   log "START $label"
+  log_rss "before $label"
   set +e
   "$@" 2>&1 | tee "$logfile"
   local code=${PIPESTATUS[0]}
   set -e
+  log_rss "after $label"
   log "END $label exit=$code"
   return "$code"
 }
