@@ -265,6 +265,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
 
     def test_from_source_respects_lazy_materialization_contract(self):
         fd, path = tempfile.mkstemp(suffix=".json", prefix="adapter_source_")
+        os.close(fd)
         Path(path).unlink(missing_ok=True)
         data_path = Path(path)
         data_path.write_text(
@@ -304,6 +305,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
 
     def test_from_source_supports_parquet_with_custom_columns(self):
         fd, path = tempfile.mkstemp(suffix=".parquet", prefix="adapter_source_")
+        os.close(fd)
         Path(path).unlink(missing_ok=True)
         data_path = Path(path)
 
@@ -340,6 +342,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
 
     def test_from_source_lazy_json_warns_and_falls_back_to_eager_load(self):
         fd, path = tempfile.mkstemp(suffix=".json", prefix="adapter_streaming_")
+        os.close(fd)
         Path(path).unlink(missing_ok=True)
         data_path = Path(path)
         rows = [
@@ -367,6 +370,7 @@ class EvalDataNormalizationTest(unittest.TestCase):
 
     def test_from_source_lazy_json_wrapped_payload_warns_and_still_loads(self):
         fd, path = tempfile.mkstemp(suffix=".json", prefix="adapter_wrapped_")
+        os.close(fd)
         Path(path).unlink(missing_ok=True)
         data_path = Path(path)
         data_path.write_text(
