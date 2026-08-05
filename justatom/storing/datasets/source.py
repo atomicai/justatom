@@ -3,9 +3,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from importlib.resources import files
-from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TypeAlias
+
+try:
+    from importlib.resources.abc import Traversable
+except ImportError:  # Python 3.10
+    from importlib.abc import Traversable
 
 from justatom.storing.datasets.errors import DatasetNotFoundError, UnsupportedDatasetSourceError
 
