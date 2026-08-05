@@ -25,6 +25,7 @@ test = [
   "pandas>=2.2,<3",
   "python-dateutil==2.9.0.post0",
   "polars==1.38.1",
+  "pyarrow>=12,<24",
   "weaviate-client==4.11.3",
   "xlsx2csv==0.8.3",
   "xlsxwriter>=3,<4",
