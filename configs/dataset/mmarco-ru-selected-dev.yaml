@@ -2,6 +2,8 @@ display_name: mMARCO-ru-selected dev
 source: justatom/mmarco-ru-selected
 upstream_source: ir_datasets:mmarco/v2/ru/dev
 name_or_path: justatom/mmarco-ru-selected
+lazy: true
+config: null
 labels_field: query
 content_field: positive
 split: dev

@@ -74,3 +74,27 @@ def test_train_config_serialization_is_plain_and_round_trippable():
     assert payload["experiment"]["role"] == "canonical"
     assert payload["memory_bank"]["margin"]["mode"] == "query"
     assert restored == config
+
+
+def test_dataset_loader_options_are_typed_and_round_trippable():
+    config = parse_train_config(
+        {
+            "method": "vanilla",
+            "dataset": {
+                "name_or_path": "owner/data",
+                "lazy": True,
+                "config": "russian",
+                "drop_columns": ["photos", "embedding"],
+            },
+        }
+    )
+
+    assert config.dataset.lazy is True
+    assert config.dataset.config == "russian"
+    assert config.dataset.drop_columns == ("photos", "embedding")
+    assert parse_train_config(train_config_to_dict(config)) == config
+
+
+def test_dataset_lazy_must_be_boolean():
+    with pytest.raises(ValueError, match=r"dataset\.lazy"):
+        parse_train_config({"method": "vanilla", "dataset": {"lazy": "yes"}})

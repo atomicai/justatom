@@ -1,4 +1,6 @@
-name_or_path: hf://d0rj/Electrical-engineering-ru
+name_or_path: d0rj/Electrical-engineering-ru
+lazy: true
+config: null
 labels_field: input
 content_field: output
 split: train

@@ -2,6 +2,7 @@ import argparse
 import asyncio as asio
 import inspect
 import os
+import re
 import sys
 from collections.abc import Iterable
 from pathlib import Path
@@ -31,6 +32,11 @@ logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK
 # looks like an e5 family member and the user did not pass an explicit prefix.
 E5_QUERY_PREFIX = "query: "
 E5_PASSAGE_PREFIX = "passage: "
+_INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _portable_filename(value: str) -> str:
+    return _INVALID_FILENAME_CHARS.sub("_", value).rstrip(" .")
 
 
 def _looks_like_e5_model(model_name_or_path: str | Path | None) -> bool:
@@ -160,7 +166,7 @@ def _cfg_to_main_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         collection_name = resolve_collection_name(
             collection_name,
             model_name_or_path=model.get("name"),
-            dataset_name_or_path=dataset.get("name_or_path") or dataset.get("id"),
+            dataset_name_or_path=dataset.get("id") or dataset.get("name_or_path"),
             collection_tag=collection_tag,
         )
 
@@ -172,6 +178,8 @@ def _cfg_to_main_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "collection_name": collection_name,
         "flush_collection": bool(index.get("flush_collection", False)),
         "dataset_name_or_path": dataset.get("name_or_path"),
+        "dataset_lazy": bool(dataset.get("lazy", True)),
+        "dataset_config": dataset.get("config"),
         "save_results_to_dir": output.get("save_results_to_dir"),
         "top_k": int(search.get("top_k", 20)),
         "index_batch_size": int(index.get("batch_size", 4)),
@@ -280,6 +288,8 @@ async def main(
     collection_name: str = None,
     flush_collection: bool = False,
     dataset_name_or_path: str = None,
+    dataset_lazy: bool = True,
+    dataset_config: str | None = None,
     save_results_to_dir: str = None,
     top_k: int = 20,
     index_batch_size: int = 4,
@@ -316,20 +326,18 @@ async def main(
             content_prefix = E5_PASSAGE_PREFIX
             logger.info("Auto-injected e5 content prefix: {!r}", content_prefix)
 
-    if dataset_name_or_path is None:
-        resolved_dataset_name_or_path = None
-    else:
-        raw_dataset_name_or_path = str(dataset_name_or_path)
-        if "://" in raw_dataset_name_or_path or raw_dataset_name_or_path == "justatom":
-            resolved_dataset_name_or_path = raw_dataset_name_or_path
-        else:
-            resolved_dataset_name_or_path = Path(raw_dataset_name_or_path)
+    resolved_dataset_name_or_path = None if dataset_name_or_path is None else str(dataset_name_or_path)
     save_results_to_dir = Path(os.getcwd()) / "evals" if save_results_to_dir is None else Path(save_results_to_dir)
 
+    queries: list[str] = []
     docs_iter: Iterable[dict] = []
+    dataset_exhausted = True
     if resolved_dataset_name_or_path is not None:
+        dataset_exhausted = False
         docs_adapter = DatasetRecordAdapter.from_source(
-            dataset_name_or_path=str(resolved_dataset_name_or_path),
+            dataset_name_or_path=resolved_dataset_name_or_path,
+            lazy=dataset_lazy,
+            config=dataset_config,
             content_col=content_field,
             queries_col=labels_field,
             split=split,
@@ -342,8 +350,19 @@ async def main(
             filter_fields=(filters or {}).get("fields", []),
             preserve_all_fields=False,
         )
-        docs_iter = tqdm(docs_adapter.iterator())
-        logger.info("Dataset is prepared in lazy/iterative mode for indexing.")
+
+        def capture_labels(documents: Iterable[dict]) -> Iterable[dict]:
+            nonlocal dataset_exhausted
+            for document in documents:
+                meta = document.get("meta") or {}
+                if labels_field is not None and isinstance(meta, dict):
+                    queries.extend(DatasetRecordAdapter.normalize_labels(meta.get("labels")))
+                yield document
+            dataset_exhausted = True
+
+        docs_iter = tqdm(capture_labels(docs_adapter.iterator()))
+        mode = "lazy/iterative" if dataset_lazy else "eager"
+        logger.info("Dataset is prepared in {} mode for indexing.", mode)
     else:
         logger.info("No dataset provided. Using existing index only.")
 
@@ -375,21 +394,11 @@ async def main(
             logger.warning("labels-col is provided but dataset-name-or-path is missing. Evaluation is skipped.")
             return
 
-        labels_adapter = DatasetRecordAdapter.from_source(
-            dataset_name_or_path=str(resolved_dataset_name_or_path),
-            content_col=content_field,
-            queries_col=labels_field,
-            split=split,
-            limit=limit,
-            chunk_id_col=chunk_id_col,
-            keywords_col=keywords_or_phrases_field,
-            keywords_nested_col=keywords_nested_col,
-            explanation_nested_col=explanation_nested_col,
-            drop_columns=drop_columns,
-            filter_fields=(filters or {}).get("fields", []),
-            preserve_all_fields=False,
-        )
-        queries = DatasetRecordAdapter.extract_labels(labels_adapter.iterator())
+        if not dataset_exhausted:
+            logger.info("Index was reused before the dataset was exhausted; reading remaining labels.")
+            for _ in docs_iter:
+                pass
+
         if len(queries) == 0:
             logger.warning("labels-col is provided, but no labels were found in dataset. Evaluation is skipped.")
             return
@@ -424,7 +433,8 @@ async def main(
         snap_props = "|" if snap_props == "" else f"|{snap_props}|"
 
         save_results_to_dir.mkdir(exist_ok=True, parents=True)
-        save_final_path = (save_results_to_dir / f"{search_pipeline}{snap_props}{snap_name}.csv").resolve()
+        result_filename = _portable_filename(f"{search_pipeline}{snap_props}{snap_name}.csv")
+        save_final_path = (save_results_to_dir / result_filename).resolve()
         pl_metrics.write_csv(str(save_final_path))
         logger.info(
             "Evaluation metrics were saved to [{}]",

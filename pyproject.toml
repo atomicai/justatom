@@ -25,7 +25,10 @@ test = [
   "pandas>=2.2,<3",
   "python-dateutil==2.9.0.post0",
   "polars==1.38.1",
+  "pyarrow>=12,<24",
   "weaviate-client==4.11.3",
+  "xlsx2csv==0.8.3",
+  "xlsxwriter>=3,<4",
   "loguru==0.7.2",
   "tqdm",
   "PyYAML>=6,<7",
@@ -33,7 +36,6 @@ test = [
   "simplejson==3.19.2",
   "dotmap==1.3.30",
   "envyaml==1.10.211231",
-  "jsonlines==4.0.0",
   "jarowinkler==2.0.1",
   "openai>=1,<3",
 ]

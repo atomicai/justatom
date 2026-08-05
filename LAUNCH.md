@@ -36,22 +36,23 @@ This means `dataset.id` is just a short alias for a fuller dataset description.
 
 `dataset.name_or_path` can point to several source types.
 
-### 1. Repo-local named dataset
+### 1. Repo-local dataset preset
 
 ```yaml
-name_or_path: justatom
+id: justatom
 ```
 
-This resolves to:
+This preset resolves to:
 
 - `.data/polaroids.ai.data.json`
 
-Use it when you want the repository's own built-in working dataset.
+It sets `lazy: false` because the source is a regular JSON document.
 
 ### 2. Packaged built-in dataset
 
 ```yaml
-name_or_path: builtin://datasets/demo_retrieval.jsonl
+name_or_path: demo
+lazy: true
 ```
 
 Use it for tiny smoke tests and examples.
@@ -59,7 +60,9 @@ Use it for tiny smoke tests and examples.
 ### 3. Hugging Face dataset
 
 ```yaml
-name_or_path: hf://MLNavigator/russian-retrieval
+name_or_path: MLNavigator/russian-retrieval
+config: null
+lazy: true
 split: train
 ```
 
@@ -144,30 +147,23 @@ Best for:
 - training smoke tests
 - gamma/training pipeline checks
 
-### `mlnavigator-russian-retrieval`
+### `boolq-ru`
 
 Source:
 
-- `justatom/builtins/configs/dataset/mlnavigator-russian-retrieval.yaml`
+- `configs/dataset/boolq-ru.yaml`
 
 Meaning:
 
-- uses `hf://MLNavigator/russian-retrieval`
+- uses `d0rj/boolq-ru`
 - `split: train`
-- `content_field: text`
-- `labels_field: q`
-
-Dataset schema observed from HF:
-
-- `text`
-- `q`
-- `a`
-- `context`
+- `content_field: passage`
+- `labels_field: question`
 
 Best for:
 
-- Russian retrieval experiments
-- realistic HF-backed evaluation/training inputs
+- Russian QA retrieval experiments
+- a compact, reproducible Hugging Face example
 
 ## Quick Start: Evaluation
 
@@ -186,7 +182,7 @@ python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id demo-eva
 ### Option C. Evaluate with MLNavigator on Hugging Face
 
 ```bash
-python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id mlnavigator-russian-retrieval
+python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id boolq-ru
 ```
 
 ### Option D. Evaluate with direct overrides instead of preset IDs
@@ -194,7 +190,7 @@ python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id mlnaviga
 ```bash
 python -m justatom.api.eval \
   --config configs/evaluate.yaml \
-  --dataset.name_or_path hf://MLNavigator/russian-retrieval \
+  --dataset.name_or_path MLNavigator/russian-retrieval \
   --dataset.split train \
   --dataset.content_field text \
   --dataset.labels_field q
@@ -306,7 +302,7 @@ The same configuration through scenario overrides:
 ```bash
 python -m justatom.api.eval \
   --config configs/evaluate.yaml \
-  --dataset.id mlnavigator-russian-retrieval \
+  --dataset.id boolq-ru \
   --metrics.top_k HitRate mrr ndcg \
   --metrics.eval_top_k 1 5 20
 ```
@@ -323,9 +319,9 @@ The produced CSV contains one row per metric, with columns:
 Typical output rows look like:
 
 ```text
-HitRate@1,0.33,0.57,hf://MLNavigator/russian-retrieval?split=train
-mrr@5,0.61,0.34,hf://MLNavigator/russian-retrieval?split=train
-ndcg@10,0.71,0.25,hf://MLNavigator/russian-retrieval?split=train
+HitRate@1,0.33,0.57,MLNavigator/russian-retrieval
+mrr@5,0.61,0.34,MLNavigator/russian-retrieval
+ndcg@10,0.71,0.25,MLNavigator/russian-retrieval
 ```
 
 The output filename is assembled from the search pipeline, metric snapshot, model name, and optional runtime properties.
@@ -347,7 +343,7 @@ python -m justatom.api.train --config configs/train.yaml --dataset.id demo-train
 ### Option C. Train with MLNavigator on Hugging Face
 
 ```bash
-python -m justatom.api.train --config configs/train.yaml --dataset.id mlnavigator-russian-retrieval
+python -m justatom.api.train --config configs/train.yaml --dataset.id boolq-ru
 ```
 
 ### Option D. Train with direct dataset path
@@ -356,7 +352,8 @@ python -m justatom.api.train --config configs/train.yaml --dataset.id mlnavigato
 python -m justatom.api.train \
   --config configs/train.yaml \
   --method vanilla \
-  --dataset.name-or-path justatom \
+  --dataset.name-or-path .data/polaroids.ai.data.json \
+  --dataset.lazy false \
   --dataset.content-field content \
   --dataset.labels-field queries
 ```
@@ -383,20 +380,20 @@ Notes:
 
 ## Direct Python Usage
 
-### Repo-local named dataset
+### Repo-local JSON dataset
 
 ```python
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 adapter = DatasetRecordAdapter.from_source(
-    "justatom",
+    ".data/polaroids.ai.data.json",
     content_col="content",
     queries_col="queries",
     chunk_id_col="chunk_id",
     keywords_col="keywords_or_phrases",
     keywords_nested_col="keyword_or_phrase",
     explanation_nested_col="explanation",
-    lazy=True,
+    lazy=False,
 )
 
 first = next(adapter.iterator())
@@ -411,7 +408,7 @@ print(first["meta"]["labels"])
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 adapter = DatasetRecordAdapter.from_source(
-  "hf://MLNavigator/russian-retrieval",
+    "MLNavigator/russian-retrieval",
     content_col="text",
     queries_col="q",
   split="train",
@@ -428,6 +425,8 @@ print(first["meta"]["labels"])
 Common dataset fields in `justatom` configs:
 
 - `name_or_path`: where to load the dataset from
+- `lazy`: `true` returns a real row iterator; `false` loads a Polars `DataFrame`
+- `config`: optional Hugging Face subset/config name, separate from the dataset ID
 - `labels_field`: the field used as the retrieval query or supervision label list
 - `content_field`: the field mapped to document content
 - `split`: dataset split to load; for HF datasets can be `train`, `test`, `dev`, or fallback chains like `dev|test`
@@ -443,7 +442,7 @@ If you want the simplest path:
 
 1. For training: start with `dataset.id=justatom` or `dataset.id=demo-train`.
 2. For evaluation: start with `dataset.id=demo-eval` or `dataset.id=justatom`.
-3. For a real Russian HF retrieval dataset: use `dataset.id=mlnavigator-russian-retrieval`.
+3. For a Russian Hugging Face example: use `dataset.id=boolq-ru`.
 
 ## Troubleshooting
 
@@ -466,8 +465,9 @@ Check:
 
 - internet access
 - `datasets` package installed
-- correct URI format, for example:
-  - `hf://MLNavigator/russian-retrieval?split=train`
+- a normal Hub dataset ID, for example `MLNavigator/russian-retrieval`
+- `config` and `split` are separate fields, not query parameters
+- `.json` and `.xlsx` are loaded only with `lazy: false`
 
 ### Need to override only one field from a preset
 

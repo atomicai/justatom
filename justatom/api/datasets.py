@@ -7,18 +7,21 @@ import os
 import re
 import sys
 from collections.abc import Iterable
-from itertools import islice
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-from justatom.configuring.builtins import resolve_builtin_path
+from justatom.configuring.builtins import load_builtin_prompt
 from justatom.configuring.scenarios import deep_merge, load_scenario_config, parse_unknown_overrides
 from justatom.running.llm import OpenAIAsyncWrapper, OpenAiTask
-from justatom.storing.dataset import API as DatasetApi
+from justatom.storing.datasets import DatasetLoader
 
 _TEMPLATE_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}")
+_PACKAGED_PROMPTS = {
+    "system_path": "prompts/datasets_system_prompt.txt",
+    "user_template_path": "prompts/datasets_user_template_prompt.txt",
+}
 
 
 def _normalize_optional_str(value: Any) -> str | None:
@@ -35,9 +38,12 @@ def _normalize_optional_str(value: Any) -> str | None:
 def _load_prompt_text(path_value: Any, field_name: str) -> str:
     path_raw = _normalize_optional_str(path_value)
     if path_raw is None:
-        raise ValueError(f"prompt.{field_name} must be set")
+        text = load_builtin_prompt(_PACKAGED_PROMPTS[field_name]).strip()
+        if not text:
+            raise ValueError(f"Packaged prompt is empty: {_PACKAGED_PROMPTS[field_name]}")
+        return text
 
-    path = resolve_builtin_path(path_raw)
+    path = Path(path_raw).expanduser()
     if not path.exists():
         raise FileNotFoundError(f"Prompt file does not exist: {path}")
 
@@ -97,25 +103,21 @@ def _normalize_queries_payload(payload: Any) -> list[str]:
 def _rows_from_source(
     dataset_name_or_path: str,
     *,
+    lazy: bool,
+    config: str | None,
     split: str | None,
     limit: int | None,
+    drop_columns: list[str] | tuple[str, ...] | None,
 ) -> Iterable[dict[str, Any]]:
-    try:
-        source = DatasetApi.named(str(dataset_name_or_path)).iterator(
-            lazy=True,
-            split=split,
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            "Failed to load dataset source. "
-            "If this is a HuggingFace dataset and you're on Python 3.14, "
-            "it may be an upstream `datasets` compatibility issue for dataset card/features parsing. "
-            "Try Python 3.11/3.12 environment or pin a newer compatible `datasets` package. "
-            f"dataset_name_or_path={dataset_name_or_path!r}, split={split!r}"
-        ) from exc
-    if limit is None:
-        return source
-    return islice(source, int(limit))
+    source = DatasetLoader.read(
+        dataset_name_or_path,
+        lazy=lazy,
+        config=config,
+        split=split,
+        limit=limit,
+        drop_columns=drop_columns,
+    )
+    return source if lazy else source.iter_rows(named=True)
 
 
 class OpenAIQuestionGenerator(OpenAIAsyncWrapper):
@@ -227,9 +229,12 @@ def _cfg_to_main_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "dataset_name_or_path": dataset.get("name_or_path"),
+        "lazy": bool(dataset.get("lazy", True)),
+        "config": dataset.get("config"),
         "content_field": dataset.get("content_field", "content"),
         "split": dataset.get("split"),
         "limit": dataset.get("limit"),
+        "drop_columns": dataset.get("drop_columns"),
         "target_count": int(generation.get("target_count", 3)),
         "output_language": generation.get("output_language", generation.get("language", "ru")),
         "style": generation.get("style", "diverse"),
@@ -313,9 +318,12 @@ def _parse_args(argv: list[str] | None = None) -> dict[str, Any]:
 
 async def main(
     dataset_name_or_path: str | None = None,
+    lazy: bool = True,
+    config: str | None = None,
     content_field: str = "content",
     split: str | None = None,
     limit: int | None = None,
+    drop_columns: list[str] | tuple[str, ...] | None = None,
     target_count: int = 3,
     output_language: str = "ru",
     style: str = "diverse",
@@ -350,8 +358,11 @@ async def main(
 
     rows = _rows_from_source(
         str(dataset_name_or_path),
+        lazy=lazy,
+        config=config,
         split=split,
         limit=limit,
+        drop_columns=drop_columns,
     )
 
     tasks: list[OpenAiTask] = []

@@ -42,10 +42,13 @@ class ModelConfig:
 class DatasetConfig:
     id: str | None = None
     name_or_path: str | None = None
+    lazy: bool = True
+    config: str | None = None
     labels_field: str = "queries"
     content_field: str = "content"
     split: str | None = None
     limit: int | None = None
+    drop_columns: tuple[str, ...] = ()
     chunk_id_col: str | None = None
     keywords_col: str | None = "keywords_or_phrases"
     keywords_nested_col: str | None = None
@@ -177,7 +180,6 @@ _DATASET_METADATA_FIELDS = {
     "train",
     "eval",
     "corpus",
-    "drop_columns",
 }
 
 
@@ -233,6 +235,14 @@ def _normalize_dataset(raw: Any) -> Any:
     if not isinstance(metadata, Mapping):
         raise ValueError("dataset.metadata must be a mapping")
     metadata = dict(metadata)
+    if "drop_columns" in normalized:
+        raw_drop_columns = normalized["drop_columns"]
+        if raw_drop_columns is None:
+            normalized["drop_columns"] = ()
+        elif isinstance(raw_drop_columns, str):
+            normalized["drop_columns"] = (raw_drop_columns,)
+        else:
+            normalized["drop_columns"] = tuple(raw_drop_columns)
     for name in _DATASET_METADATA_FIELDS:
         if name in normalized:
             if name in metadata:
@@ -272,8 +282,9 @@ def validate_train_config(config: TrainConfig) -> None:
     if config.model.max_query_seq_len is not None:
         _require_int(config.model.max_query_seq_len, "model.max_query_seq_len", 1)
 
+    _require_bool(config.dataset.lazy, "dataset.lazy")
     if config.dataset.limit is not None:
-        _require_int(config.dataset.limit, "dataset.limit", 1)
+        _require_int(config.dataset.limit, "dataset.limit", 0)
     if config.filters.fields is not None and not isinstance(config.filters.fields, Mapping):
         raise ValueError("filters.fields must be a mapping or null")
 

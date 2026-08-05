@@ -31,5 +31,6 @@ def test_resolve_train_config_applies_dataset_preset_and_method_profile():
     config = train.resolve_train_config(config={"method": "atomic", "dataset": {"id": "justatom"}})
 
     assert config.method.value == "atomic"
-    assert config.dataset.name_or_path == "justatom"
+    assert config.dataset.name_or_path == ".data/polaroids.ai.data.json"
+    assert config.dataset.lazy is False
     assert config.memory_bank.enabled

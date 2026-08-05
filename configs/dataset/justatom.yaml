@@ -1,4 +1,6 @@
-name_or_path: justatom
+name_or_path: .data/polaroids.ai.data.json
+lazy: false
+config: null
 labels_field: queries
 content_field: content
 split: null

@@ -3,6 +3,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import polars as pl
+
 from justatom.training import data as training_data
 
 
@@ -16,59 +18,49 @@ def _write_jsonl(rows: list[dict]) -> Path:
     return path
 
 
-def test_prepare_training_data_prefers_frame_batches(monkeypatch):
-    path = _write_jsonl(
-        [
-            {"chunk_id": "a", "content": "doc-a", "queries": ["q1", "q2"]},
-            {"chunk_id": "b", "content": "doc-b", "queries": ["q3"]},
-        ]
-    )
-    monkeypatch.setattr(
-        training_data.DatasetRecordAdapter,
-        "from_source",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("frame-backed sources must not use the adapter fallback")),
-    )
-    try:
-        frame, rows, lexical_lookup = training_data.prepare_training_data(
-            dataset_name_or_path=path,
-            num_samples=2,
-            chunk_id_col="chunk_id",
-        )
-    finally:
-        path.unlink(missing_ok=True)
-
-    assert frame.height == len(rows) == 2
-    assert all(row["content"] in lexical_lookup for row in rows)
-
-
-def test_prepare_training_data_uses_lazy_adapter_for_iterable_sources(monkeypatch):
+def test_prepare_training_data_opens_loader_once(monkeypatch):
     raw_rows = [
         {"chunk_id": "a", "content": "doc-a", "queries": ["q1", "q2"]},
         {"chunk_id": "b", "content": "doc-b", "queries": ["q3"]},
     ]
-    captured: dict[str, object] = {}
+    calls = []
 
-    class FakeDataset:
-        def iterator(self, **kwargs):
-            return iter(raw_rows)
+    def fake_read(*args, **kwargs):
+        calls.append((args, kwargs))
+        return iter(raw_rows)
 
-    original = training_data.DatasetRecordAdapter.from_source
+    monkeypatch.setattr(training_data.DatasetLoader, "read", fake_read)
 
-    def wrapped(*args, **kwargs):
-        captured["lazy"] = kwargs.get("lazy")
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(training_data.DatasetApi, "named", lambda *args, **kwargs: FakeDataset())
-    monkeypatch.setattr(training_data.DatasetRecordAdapter, "from_source", wrapped)
-
-    frame, rows, _ = training_data.prepare_training_data(
-        dataset_name_or_path="hf://dummy/dataset",
+    frame, rows, lexical_lookup = training_data.prepare_training_data(
+        dataset_name_or_path="owner/data",
         num_samples=2,
         chunk_id_col="chunk_id",
     )
 
-    assert captured["lazy"] is True
     assert frame.height == len(rows) == 2
+    assert all(row["content"] in lexical_lookup for row in rows)
+    assert len(calls) == 1
+    assert calls[0][1]["lazy"] is True
+
+
+def test_training_supports_explicit_eager_polars_source(monkeypatch):
+    source = pl.DataFrame(
+        [
+            {"chunk_id": "a", "content": "doc-a", "queries": ["q1"]},
+            {"chunk_id": "b", "content": "doc-b", "queries": ["q2"]},
+        ]
+    )
+    monkeypatch.setattr(training_data.DatasetLoader, "read", lambda *args, **kwargs: source)
+
+    rows = list(
+        training_data.iterate_training_rows(
+            dataset_name_or_path="data.json",
+            lazy=False,
+            chunk_id_col="chunk_id",
+        )
+    )
+
+    assert [row["queries"] for row in rows] == ["q1", "q2"]
 
 
 def test_reservoir_sampling_is_bounded_and_deterministic():
@@ -151,20 +143,20 @@ def test_limit_is_applied_after_query_expansion():
 
 
 def test_iterable_source_supports_custom_fields(monkeypatch):
-    class FakeDataset:
-        def iterator(self, **kwargs):
-            return iter(
-                [
-                    {"passage": "doc-a", "question": "q1"},
-                    {"passage": "doc-b", "question": "q2"},
-                ]
-            )
-
-    monkeypatch.setattr(training_data.DatasetApi, "named", lambda *args, **kwargs: FakeDataset())
+    monkeypatch.setattr(
+        training_data.DatasetLoader,
+        "read",
+        lambda *args, **kwargs: iter(
+            [
+                {"passage": "doc-a", "question": "q1"},
+                {"passage": "doc-b", "question": "q2"},
+            ]
+        ),
+    )
 
     rows = list(
         training_data.iterate_training_rows(
-            dataset_name_or_path="hf://dummy/boolq-like",
+            dataset_name_or_path="dummy/boolq-like",
             content_field="passage",
             labels_field="question",
             limit=2,

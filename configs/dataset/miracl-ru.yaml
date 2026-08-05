@@ -1,4 +1,6 @@
 name_or_path: .data/retrieval/miracl-ru-train.jsonl
+lazy: true
+config: null
 labels_field: queries
 content_field: content
 chunk_id_col: chunk_id

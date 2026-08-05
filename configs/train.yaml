@@ -14,6 +14,8 @@ model:
 dataset:
   id: null
   name_or_path: null
+  lazy: true
+  config: null
   labels_field: queries
   content_field: content
   split: null
@@ -22,6 +24,7 @@ dataset:
   keywords_col: keywords_or_phrases
   keywords_nested_col: null
   explanation_nested_col: null
+  drop_columns: null
 
 filters:
   fields: null

@@ -2,6 +2,8 @@ display_name: mMARCO-ru-selected
 source: justatom/mmarco-ru-selected
 upstream_source: ir_datasets:mmarco/v2/ru
 name_or_path: justatom/mmarco-ru-selected
+lazy: true
+config: null
 labels_field: query
 content_field: positive
 split: train
@@ -13,6 +15,8 @@ explanation_nested_col: null
 
 train:
   name_or_path: justatom/mmarco-ru-selected
+  lazy: true
+  config: null
   split: train
   labels_field: query
   content_field: positive
@@ -20,6 +24,8 @@ train:
 
 eval:
   name_or_path: justatom/mmarco-ru-selected
+  lazy: true
+  config: null
   split: dev
   labels_field: query
   content_field: positive
@@ -27,11 +33,13 @@ eval:
 
 corpus:
   name_or_path: justatom/mmarco-ru-selected
+  lazy: true
+  config: null
   split: corpus
   content_field: content
   chunk_id_col: doc_id
 
-manifest_path: hf://datasets/justatom/mmarco-ru-selected/manifest.json
+manifest_path: https://huggingface.co/datasets/justatom/mmarco-ru-selected/resolve/main/manifest.json
 
 selection:
   seed: 42

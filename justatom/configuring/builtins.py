@@ -10,11 +10,6 @@ from typing import Any
 import yaml
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
-_BUILTIN_URI_PREFIX = "builtin://"
-
-
-def _builtins_root() -> Path:
-    return Path(__file__).resolve().parents[1] / "builtins"
 
 
 def _workspace_root() -> Path:
@@ -27,26 +22,6 @@ def _builtin_resource(relative_path: str):
     for part in parts:
         resource = resource.joinpath(part)
     return resource
-
-
-def is_builtin_uri(value: str | Path | None) -> bool:
-    if value is None:
-        return False
-    return str(value).startswith(_BUILTIN_URI_PREFIX)
-
-
-def builtin_path(relative_path: str | Path) -> Path:
-    relative = Path(relative_path)
-    parts = [part for part in relative.parts if part not in {".", "", "/"}]
-    return _builtins_root().joinpath(*parts)
-
-
-def resolve_builtin_path(value: str | Path) -> Path:
-    raw = str(value)
-    if not is_builtin_uri(raw):
-        return Path(raw)
-    relative = raw[len(_BUILTIN_URI_PREFIX) :]
-    return builtin_path(relative)
 
 
 def _parse_yaml_text(raw: str) -> dict[str, Any]:
@@ -92,11 +67,8 @@ def load_builtin_prompt(relative_path: str) -> str:
 
 
 __all__ = [
-    "builtin_path",
-    "is_builtin_uri",
     "load_builtin_prompt",
     "load_builtin_yaml",
     "load_repo_yaml",
     "render_env_template",
-    "resolve_builtin_path",
 ]
