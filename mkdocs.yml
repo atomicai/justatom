@@ -32,6 +32,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Launch Guide: launch-guide.md
+  - Training: training.md
   - Architecture: architecture.md
   - Modules:
     - Overview: modules/index.md
