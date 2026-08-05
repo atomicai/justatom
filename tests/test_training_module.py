@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+import pytorch_lightning as L
 import torch
 from torch import nn
+from torch.utils.data import DataLoader
 
 from justatom.training.alpha_gate import QueryAlphaGate
 from justatom.training.config import TrainingMethod
@@ -170,3 +172,25 @@ def test_alpha_lexical_scores_are_recovered_from_tokenized_batch():
     assert scores is not None
     assert scores[:, 0].tolist() == pytest.approx([1.0, 1.0])
     assert scores[:, 1].tolist() == pytest.approx([0.0, 0.0])
+
+
+def test_lightning_automatic_optimization_keeps_tau_version_valid(tmp_path):
+    module = ContrastiveTrainingModule.build(
+        TinyEncoder(),
+        canonical_method_config(TrainingMethod.VANILLA),
+    )
+    trainer = L.Trainer(
+        max_epochs=1,
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        enable_progress_bar=False,
+        default_root_dir=tmp_path,
+    )
+
+    trainer.fit(module, train_dataloaders=DataLoader([tiny_batch()], batch_size=None))
+
+    assert trainer.global_step == 1
+    assert torch.isfinite(module.objective.kernel.log_tau)

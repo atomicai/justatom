@@ -313,7 +313,14 @@ class ContrastiveTrainingModule(L.LightningModule):
             )
         return torch.optim.AdamW(groups)
 
-    def on_before_zero_grad(self, optimizer: torch.optim.Optimizer) -> None:
+    def optimizer_step(
+        self,
+        epoch: int,
+        batch_idx: int,
+        optimizer: torch.optim.Optimizer,
+        optimizer_closure: Any | None = None,
+    ) -> None:
+        optimizer.step(closure=optimizer_closure)
         self.objective.kernel.clamp_temperature_()
 
     def save_deployable_encoder(self, destination: Path) -> Path:
