@@ -1,8 +1,17 @@
+import json
+from collections.abc import Iterator
 from pathlib import Path
 
+import polars as pl
 import pytest
 
-from justatom.storing.datasets.errors import DatasetNotFoundError, UnsupportedDatasetSourceError
+from justatom.storing.datasets.errors import (
+    DatasetNotFoundError,
+    DatasetStreamingUnsupportedError,
+    UnsupportedDatasetFormatError,
+    UnsupportedDatasetSourceError,
+)
+from justatom.storing.datasets.readers import iter_source_rows, source_to_frame
 from justatom.storing.datasets.source import (
     DatasetReadOptions,
     HuggingFaceDatasetSource,
@@ -81,3 +90,101 @@ def test_read_options_normalize_drop_columns():
 def test_read_options_reject_negative_limit():
     with pytest.raises(ValueError, match="limit must be >= 0"):
         DatasetReadOptions(limit=-1)
+
+
+def _write_tabular_dataset(path: Path) -> Path:
+    frame = pl.DataFrame(
+        [
+            {"id": 1, "content": "one", "blob": "drop-a"},
+            {"id": 2, "content": "two", "blob": "drop-b"},
+        ]
+    )
+    if path.suffix == ".csv":
+        frame.write_csv(path)
+    elif path.suffix in {".jsonl", ".ndjson"}:
+        frame.write_ndjson(path)
+    elif path.suffix == ".parquet":
+        frame.write_parquet(path)
+    elif path.suffix == ".xlsx":
+        frame.write_excel(path)
+    else:
+        raise AssertionError(f"Unsupported test suffix: {path.suffix}")
+    return path
+
+
+@pytest.mark.parametrize("suffix", [".csv", ".jsonl", ".ndjson", ".parquet"])
+def test_streaming_local_formats_return_bounded_row_iterator(tmp_path, suffix):
+    path = _write_tabular_dataset(tmp_path / f"dataset{suffix}")
+    source = LocalDatasetSource(path.resolve())
+
+    rows = iter_source_rows(
+        source,
+        DatasetReadOptions(limit=1, drop_columns=["blob"]),
+    )
+
+    assert isinstance(rows, Iterator)
+    assert iter(rows) is rows
+    assert list(rows) == [{"id": 1, "content": "one"}]
+
+
+@pytest.mark.parametrize("suffix", [".csv", ".jsonl", ".ndjson", ".parquet", ".xlsx"])
+def test_eager_local_formats_return_polars_frame(tmp_path, suffix):
+    path = _write_tabular_dataset(tmp_path / f"dataset{suffix}")
+    source = LocalDatasetSource(path.resolve())
+
+    frame = source_to_frame(
+        source,
+        DatasetReadOptions(limit=1, drop_columns=["blob"]),
+    )
+
+    assert isinstance(frame, pl.DataFrame)
+    assert frame.to_dicts() == [{"id": 1, "content": "one"}]
+
+
+@pytest.mark.parametrize("suffix", [".json", ".xlsx"])
+def test_non_streaming_formats_fail_before_parsing_file(tmp_path, suffix):
+    path = tmp_path / f"broken{suffix}"
+    path.write_text("not valid data", encoding="utf-8")
+
+    with pytest.raises(DatasetStreamingUnsupportedError, match="lazy=False"):
+        iter_source_rows(LocalDatasetSource(path.resolve()), DatasetReadOptions())
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [{"id": 1, "content": "one"}, {"id": 2, "content": "two"}],
+        {"data": [{"id": 1, "content": "one"}, {"id": 2, "content": "two"}]},
+        {"id": 1, "content": "one"},
+    ],
+)
+def test_eager_json_preserves_supported_shapes(tmp_path, payload):
+    path = tmp_path / "dataset.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    frame = source_to_frame(
+        LocalDatasetSource(path.resolve()),
+        DatasetReadOptions(limit=1),
+    )
+
+    assert isinstance(frame, pl.DataFrame)
+    assert frame.to_dicts() == [{"id": 1, "content": "one"}]
+
+
+def test_packaged_demo_supports_lazy_and_eager_reads():
+    source = resolve_dataset_source("demo")
+
+    rows = iter_source_rows(source, DatasetReadOptions(limit=1))
+    frame = source_to_frame(source, DatasetReadOptions(limit=1))
+
+    assert isinstance(rows, Iterator)
+    assert list(rows) == frame.to_dicts()
+    assert frame.height == 1
+
+
+def test_unsupported_local_extension_lists_supported_formats(tmp_path):
+    path = tmp_path / "dataset.txt"
+    path.write_text("content", encoding="utf-8")
+
+    with pytest.raises(UnsupportedDatasetFormatError, match="csv"):
+        source_to_frame(LocalDatasetSource(path.resolve()), DatasetReadOptions())
