@@ -6,11 +6,12 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from weaviate.collections.classes.batch import DeleteManyReturn
+from weaviate.collections.classes.batch import BatchObject, BatchObjectReturn, DeleteManyReturn, ErrorObject
 from weaviate.collections.classes.internal import MetadataReturn, Object
 
 from justatom.etc.errors import DocumentStoreError
 from justatom.etc.schema import Document
+from justatom.etc.types import DuplicatePolicy
 from justatom.retrieval.contracts import DocumentStore
 from justatom.storing import weaviate as weaviate_module
 from justatom.storing.weaviate import WeaviateDocumentStore
@@ -417,6 +418,72 @@ def test_filter_documents_wraps_weaviate_query_failure_with_cause():
     with pytest.raises(DocumentStoreError, match="Failed to query") as exc_info:
         asyncio.run(store.filter_documents())
     assert exc_info.value.__cause__ is failure
+
+
+def _batch_write_store(response_or_error):
+    store = object.__new__(WeaviateDocumentStore)
+
+    async def ensure_connection():
+        return None
+
+    async def insert_many(documents):
+        if isinstance(response_or_error, Exception):
+            raise response_or_error
+        return response_or_error
+
+    store._ensure_async_connection = ensure_connection
+    store._WeaviateDocumentStore__collection = SimpleNamespace(data=SimpleNamespace(insert_many=insert_many))
+    return store
+
+
+def test_batch_write_rejects_weaviate_object_errors_without_leaking_provider_details():
+    secret = "secret=must-not-appear"
+    response = BatchObjectReturn(
+        errors={
+            2: ErrorObject(
+                message=f"provider body includes {secret}",
+                object_=BatchObject(collection="Documents", properties={"content": "private document"}, index=2),
+            ),
+            0: ErrorObject(
+                message=f"provider body includes {secret}",
+                object_=BatchObject(collection="Documents", properties={"content": "private document"}, index=0),
+            ),
+        },
+        has_errors=True,
+    )
+    store = _batch_write_store(response)
+
+    with pytest.raises(DocumentStoreError) as exc_info:
+        asyncio.run(store._batch_write([Document(content="private document") for _ in range(3)], DuplicatePolicy.OVERWRITE))
+
+    message = str(exc_info.value)
+    assert "documents=3" in message
+    assert "errors=2" in message
+    assert "indexes=[0, 2]" in message
+    assert "error_types=['ErrorObject']" in message
+    assert secret not in message
+    assert "private document" not in message
+
+
+def test_batch_write_returns_full_count_for_successful_weaviate_response():
+    store = _batch_write_store(BatchObjectReturn())
+
+    written = asyncio.run(store._batch_write([Document(content="first"), Document(content="second")], DuplicatePolicy.OVERWRITE))
+
+    assert written == 2
+
+
+def test_batch_write_wraps_client_exception_and_preserves_cause():
+    failure = RuntimeError("provider body secret=must-not-appear")
+    store = _batch_write_store(failure)
+
+    with pytest.raises(DocumentStoreError) as exc_info:
+        asyncio.run(store._batch_write([Document(content="private document")], DuplicatePolicy.OVERWRITE))
+
+    assert exc_info.value.__cause__ is failure
+    assert "documents=1" in str(exc_info.value)
+    assert "RuntimeError" in str(exc_info.value)
+    assert "secret=must-not-appear" not in str(exc_info.value)
 
 
 def test_search_methods_preserve_query_groups_and_include_vectors(fake_client):

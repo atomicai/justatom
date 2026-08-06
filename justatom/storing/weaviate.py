@@ -551,12 +551,20 @@ class WeaviateDocumentStore:
         ]
         try:
             batch_response = await self.__collection.data.insert_many(wrapped_documents)
-        except weaviate.exceptions.UnexpectedStatusCodeError as error:
-            msg = f"Error writing documents to Weaviate: {str(error)}"
-            raise DocumentStoreError(msg) from error
-        else:
-            n_written_docs = len(wrapped_documents) - len(batch_response.errors)
-        return n_written_docs
+        except Exception as error:
+            raise DocumentStoreError(
+                f"Failed to write Weaviate batch: documents={len(wrapped_documents)}, error_type={type(error).__name__}"
+            ) from error
+
+        if batch_response.errors:
+            failed_indexes = sorted(batch_response.errors)[:10]
+            error_types = sorted({type(error).__name__[:80] for error in batch_response.errors.values()})[:10]
+            raise DocumentStoreError(
+                "Weaviate batch write reported object errors: "
+                f"documents={len(wrapped_documents)}, errors={len(batch_response.errors)}, "
+                f"indexes={failed_indexes}, error_types={error_types}"
+            )
+        return len(wrapped_documents)
 
     def get_collection_name(self):
         return self.__collection.name

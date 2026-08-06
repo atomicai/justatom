@@ -70,6 +70,27 @@ def test_indexer_copies_documents_before_attaching_embeddings():
     assert store.batches[0][0].embedding == [0.0, 1.0]
 
 
+def test_indexer_keyword_mode_clears_embeddings_from_cloned_streamed_inputs():
+    document_source = Document(content="document", embedding=[1.0, 2.0])
+    dict_source = {"content": "dict", "embedding": [3.0, 4.0]}
+    seen = []
+
+    def documents():
+        for index, source in enumerate((document_source, dict_source, {"content": "later", "embedding": [5.0, 6.0]})):
+            seen.append(index)
+            yield source
+
+    store = FakeStore()
+    written = asyncio.run(Indexer(store).index(documents(), batch_size=2))
+
+    assert written == 3
+    assert seen == [0, 1, 2]
+    assert [len(batch) for batch in store.batches] == [2, 1]
+    assert [document.embedding for batch in store.batches for document in batch] == [None, None, None]
+    assert document_source.embedding == [1.0, 2.0]
+    assert dict_source["embedding"] == [3.0, 4.0]
+
+
 def test_indexer_preserves_write_failure_as_cause():
     with pytest.raises(DocumentStoreError, match="batch 0") as exc_info:
         asyncio.run(Indexer(FailingStore()).index([{"content": "a"}]))

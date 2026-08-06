@@ -58,6 +58,9 @@ class Indexer:
                     )
                     for document, embedding in zip(batch, embeddings, strict=True):
                         document.embedding = embedding
+                else:
+                    for document in batch:
+                        document.embedding = None
 
                 task = asyncio.create_task(self._write_batch(batch_index, batch, semaphore))
                 pending[task] = batch_index
