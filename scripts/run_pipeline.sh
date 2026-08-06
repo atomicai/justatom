@@ -153,8 +153,17 @@ should_use_e5_prefixes() {
 }
 
 check_weaviate() {
+  local base_url
+  base_url="$(trim "$WEAVIATE_URL")"
+  while [[ "$base_url" == */ ]]; do
+    base_url="${base_url%/}"
+  done
+  case "$base_url" in
+    http://*|https://*) ;;
+    *) return 1 ;;
+  esac
   curl --silent --fail --max-time 3 \
-    "http://${WEAVIATE_HOST_VALUE}:${WEAVIATE_PORT_VALUE}/v1/.well-known/ready" >/dev/null 2>&1
+    "${base_url}/v1/.well-known/ready" >/dev/null 2>&1
 }
 
 log() {

@@ -80,7 +80,7 @@ bash scripts/run_pipeline.sh \
   --dataset-ids demo-eval \
   --method atomic \
   --search-mode hybrid \
-  --embedding-model intfloat/multilingual-e5-small \
+  --model intfloat/multilingual-e5-small \
   --weaviate-url http://localhost:2211
 ```
 
