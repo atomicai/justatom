@@ -1,14 +1,31 @@
 import os
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import patch
 
-from justatom.api.eval import resolve_eval_kwargs
-from justatom.api.train import resolve_train_config
+_legacy_service = ModuleType("justatom.running.service")
+_legacy_service.RunningService = object
+_training_job = ModuleType("justatom.training.job")
+_training_job.TrainingJob = object
+_training_job.TrainingResult = object
+# Isolate config resolution from the Task 8 server migration and training runtime imports.
+with patch.dict(
+    sys.modules,
+    {
+        "justatom.running.service": _legacy_service,
+        "justatom.training.job": _training_job,
+    },
+):
+    from justatom.api.eval import resolve_eval_kwargs
+    from justatom.api.train import resolve_train_config
+
 from justatom.configuring.scenarios import load_scenario_config
 from justatom.etc.errors import DocumentStoreError
-from justatom.storing.weaviate import WeaviateDocStore
+from justatom.storing.weaviate import WeaviateDocumentStore
 
 
 class ScenarioConfigTest(unittest.TestCase):
@@ -353,15 +370,15 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(kwargs["limit"], 25)
 
     def test_weaviate_normalize_host_falls_back_for_empty_like_values(self):
-        self.assertEqual(WeaviateDocStore._normalize_host(None), "localhost")
-        self.assertEqual(WeaviateDocStore._normalize_host(""), "localhost")
-        self.assertEqual(WeaviateDocStore._normalize_host("None"), "localhost")
-        self.assertEqual(WeaviateDocStore._normalize_host("${WEAVIATE_HOST}"), "localhost")
-        self.assertEqual(WeaviateDocStore._normalize_host("weaviate"), "weaviate")
+        self.assertEqual(WeaviateDocumentStore._normalize_host(None), "localhost")
+        self.assertEqual(WeaviateDocumentStore._normalize_host(""), "localhost")
+        self.assertEqual(WeaviateDocumentStore._normalize_host("None"), "localhost")
+        self.assertEqual(WeaviateDocumentStore._normalize_host("${WEAVIATE_HOST}"), "localhost")
+        self.assertEqual(WeaviateDocumentStore._normalize_host("weaviate"), "weaviate")
 
     def test_weaviate_normalize_port_uses_defaults_for_empty_like_values(self):
         self.assertEqual(
-            WeaviateDocStore._normalize_port(
+            WeaviateDocumentStore._normalize_port(
                 None,
                 default=2211,
                 setting_name="WEAVIATE_PORT",
@@ -369,7 +386,7 @@ class ScenarioConfigTest(unittest.TestCase):
             2211,
         )
         self.assertEqual(
-            WeaviateDocStore._normalize_port(
+            WeaviateDocumentStore._normalize_port(
                 "",
                 default=2211,
                 setting_name="WEAVIATE_PORT",
@@ -377,7 +394,7 @@ class ScenarioConfigTest(unittest.TestCase):
             2211,
         )
         self.assertEqual(
-            WeaviateDocStore._normalize_port(
+            WeaviateDocumentStore._normalize_port(
                 "None",
                 default=2211,
                 setting_name="WEAVIATE_PORT",
@@ -385,7 +402,7 @@ class ScenarioConfigTest(unittest.TestCase):
             2211,
         )
         self.assertEqual(
-            WeaviateDocStore._normalize_port(
+            WeaviateDocumentStore._normalize_port(
                 "${WEAVIATE_PORT}",
                 default=2211,
                 setting_name="WEAVIATE_PORT",
@@ -393,7 +410,7 @@ class ScenarioConfigTest(unittest.TestCase):
             2211,
         )
         self.assertEqual(
-            WeaviateDocStore._normalize_port(
+            WeaviateDocumentStore._normalize_port(
                 "2211",
                 default=2211,
                 setting_name="WEAVIATE_PORT",
@@ -403,14 +420,14 @@ class ScenarioConfigTest(unittest.TestCase):
 
     def test_weaviate_normalize_port_rejects_invalid_values(self):
         with self.assertRaises(DocumentStoreError):
-            WeaviateDocStore._normalize_port(
+            WeaviateDocumentStore._normalize_port(
                 "abc",
                 default=2211,
                 setting_name="WEAVIATE_PORT",
             )
 
         with self.assertRaises(DocumentStoreError):
-            WeaviateDocStore._normalize_port(
+            WeaviateDocumentStore._normalize_port(
                 0,
                 default=2211,
                 setting_name="WEAVIATE_PORT",

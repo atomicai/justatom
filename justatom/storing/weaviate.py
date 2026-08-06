@@ -1,17 +1,14 @@
 import asyncio as asio
 import base64
-import copy
 import datetime
-import inspect
 import json
 import os
-from collections.abc import Generator
+from collections.abc import Generator, Mapping, Sequence
 from dataclasses import asdict
 from typing import Any
 
 import weaviate
 from loguru import logger
-from more_itertools import chunked
 from weaviate.classes.query import MetadataQuery
 from weaviate.collections.classes.data import DataObject
 from weaviate.config import AdditionalConfig
@@ -23,7 +20,7 @@ from justatom.etc.errors import DocumentStoreError, DuplicateDocumentError
 from justatom.etc.filters import convert_filters
 from justatom.etc.schema import Document
 from justatom.etc.serialization import default_from_dict, default_to_dict
-from justatom.etc.types import DuplicatePolicy, SearchPolicy
+from justatom.etc.types import DuplicatePolicy
 from justatom.tooling.stl import AsyncConstructor
 
 DOCUMENT_COLLECTION_PROPERTIES = [
@@ -68,7 +65,7 @@ def _to_documents_per_query(results: list[Any], converter) -> list[list[Document
     return response
 
 
-class WeaviateDocStore(AsyncConstructor):
+class WeaviateDocumentStore(AsyncConstructor):
     """
     `WeaviateDocumentStore` is a Document Store for Weaviate.
     It can be used with Weaviate Cloud Services or self-hosted instances.
@@ -78,7 +75,7 @@ class WeaviateDocStore(AsyncConstructor):
         self,
         url: str | None = None,
         collection_schema_name: str = "Default",
-        auth_client_secret: AuthCredentials | None = None,
+        auth_client_secret: Any | None = None,
         additional_headers: dict | None = None,
         embedded_options: EmbeddedOptions | None = None,
         additional_config: AdditionalConfig | None = None,
@@ -132,55 +129,61 @@ class WeaviateDocStore(AsyncConstructor):
         """
         # proxies, timeout_config, trust_env are part of additional_config now
         # startup_period has been removed
-        self._client = weaviate.WeaviateAsyncClient(
-            connection_params=(
-                weaviate.connect.base.ConnectionParams.from_url(url=url, grpc_port=grpc_port, grpc_secure=grpc_secure)
-                if url
+        self._client = None
+        self._close_task = None
+        client_options = dict(props)
+        client_options.setdefault("skip_init_checks", False)
+        if auth_client_secret is not None:
+            client_options["auth_client_secret"] = (
+                auth_client_secret.resolve_value()
+                if isinstance(auth_client_secret, AuthCredentials)
+                else auth_client_secret
+            )
+        if additional_config is not None:
+            client_options["additional_config"] = additional_config
+        if additional_headers is not None:
+            client_options["additional_headers"] = additional_headers
+        if embedded_options is not None:
+            client_options["embedded_options"] = embedded_options
+
+        try:
+            connection_params = (
+                weaviate.connect.base.ConnectionParams.from_url(
+                    url=url,
+                    grpc_port=grpc_port,
+                    grpc_secure=grpc_secure,
+                )
+                if url is not None
                 else None
-            ),
-            auth_client_secret=(auth_client_secret.resolve_value() if auth_client_secret else None),
-            additional_config=additional_config,
-            additional_headers=additional_headers,
-            embedded_options=embedded_options,
-            skip_init_checks=False,
-        )
-        await self._client.connect()
+            )
+            self._client = weaviate.WeaviateAsyncClient(
+                connection_params=connection_params,
+                **client_options,
+            )
+            await self._client.connect()
 
-        self._sync_client = weaviate.WeaviateClient(
-            connection_params=(
-                weaviate.connect.base.ConnectionParams.from_url(url=url, grpc_port=grpc_port, grpc_secure=grpc_secure)
-                if url
-                else None
-            ),
-            auth_client_secret=(auth_client_secret.resolve_value() if auth_client_secret else None),
-            additional_config=additional_config,
-            additional_headers=additional_headers,
-            embedded_options=embedded_options,
-            skip_init_checks=False,
-        )
+            collection_schema_name = collection_schema_name.capitalize()
+            self.collection_settings = {
+                "class": collection_schema_name,
+                "invertedIndexConfig": {"indexNullState": True},
+                "properties": DOCUMENT_COLLECTION_PROPERTIES,
+                "multiTenancyConfig": {"enabled": False},
+            }
 
-        self._sync_client.connect()
+            collection_exists = await self._client.collections.exists(collection_schema_name)
+            if not collection_exists:
+                await self._client.collections.create_from_dict(self.collection_settings)
+            self.__collection = self._client.collections.get(collection_schema_name)
+            self.collection_name = self.__collection.name
+        except BaseException:
+            await self.close()
+            raise
 
-        # Test connection, it will raise an exception if it fails.
-        # TODO: Re=parametrize to make it friendly for hybrid-search via bm25 + embedding search.
-        collection_schema_name = collection_schema_name.capitalize()
-        self.collection_settings = {
-            "class": f"{collection_schema_name}",
-            "invertedIndexConfig": {"indexNullState": True},
-            "properties": DOCUMENT_COLLECTION_PROPERTIES,
-            "multiTenancyConfig": {"enabled": False},
-        }
-
-        collection_exist = await self._client.collections.exists(collection_schema_name)
-        if not collection_exist:
-            await self._client.collections.create_from_dict(self.collection_settings)
         self._url = url
         self._auth_client_secret = auth_client_secret
         self._additional_headers = additional_headers
         self._embedded_options = embedded_options
         self._additional_config = additional_config
-        self.__collection = self._client.collections.get(collection_schema_name)
-        self.collection_name = self.__collection.name
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -245,41 +248,54 @@ class WeaviateDocStore(AsyncConstructor):
         return port
 
     @classmethod
-    async def connect(cls, collection_schema_name: str, **kwargs):
-        weaviate_host = cls._normalize_host(
-            kwargs.get("WEAVIATE_HOST") or os.environ.get("WEAVIATE_HOST"),
-            default=DEFAULT_WEAVIATE_HOST,
-        )
-        weaviate_port = cls._normalize_port(
-            kwargs.get("WEAVIATE_PORT") or os.environ.get("WEAVIATE_PORT"),
-            default=DEFAULT_WEAVIATE_PORT,
-            setting_name="WEAVIATE_PORT",
-        )
-        weaviate_grpc_port = cls._normalize_port(
-            kwargs.get("WEAVIATE_GRPC_PORT") or os.environ.get("WEAVIATE_GRPC_PORT"),
+    async def connect(
+        cls,
+        collection: str,
+        url: str | None = None,
+        grpc_port: int = DEFAULT_WEAVIATE_GRPC_PORT,
+        grpc_secure: bool = False,
+        **client_options: Any,
+    ) -> "WeaviateDocumentStore":
+        if "connection_params" in client_options:
+            raise DocumentStoreError("connection_params conflicts with the url and gRPC connection options")
+
+        if url is None:
+            weaviate_host = cls._normalize_host(os.environ.get("WEAVIATE_HOST"), default=DEFAULT_WEAVIATE_HOST)
+            weaviate_port = cls._normalize_port(
+                os.environ.get("WEAVIATE_PORT"),
+                default=DEFAULT_WEAVIATE_PORT,
+                setting_name="WEAVIATE_PORT",
+            )
+            url = f"http://{weaviate_host}:{weaviate_port}"
+
+        normalized_grpc_port = cls._normalize_port(
+            grpc_port,
             default=DEFAULT_WEAVIATE_GRPC_PORT,
-            setting_name="WEAVIATE_GRPC_PORT",
+            setting_name="grpc_port",
         )
-        logger.info(f"FINDER | collection_schema_name=[{collection_schema_name}]")
-        url = f"http://{weaviate_host}:{weaviate_port}"
+        logger.info("WEAVIATE | connecting collection=[{}] url=[{}]", collection, url)
         try:
             store = await cls(
-                collection_schema_name=collection_schema_name,
+                collection_schema_name=collection,
                 url=url,
-                grpc_port=weaviate_grpc_port,
+                grpc_port=normalized_grpc_port,
+                grpc_secure=grpc_secure,
+                **client_options,
             )  # type: ignore
+        except asio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning(
                 "WEAVIATE | connection failed for url=[{}] grpc_port=[{}] collection=[{}]",
                 url,
-                weaviate_grpc_port,
-                collection_schema_name,
+                normalized_grpc_port,
+                collection,
             )
             raise DocumentStoreError(
                 "Failed to connect to Weaviate at "
-                f"{url} (grpc_port={weaviate_grpc_port}) for collection "
-                f"{collection_schema_name!r}. Check `weaviate.host`, `weaviate.port`, "
-                "`WEAVIATE_HOST`, `WEAVIATE_PORT`, and whether Weaviate is running."
+                f"{url} (grpc_port={normalized_grpc_port}) for collection "
+                f"{collection!r}. Check `WEAVIATE_HOST`, `WEAVIATE_PORT`, "
+                "the explicit URL, and whether Weaviate is running."
             ) from exc
         return store
 
@@ -293,7 +309,7 @@ class WeaviateDocStore(AsyncConstructor):
                 raise DocumentStoreError("Failed to reconnect async Weaviate client") from exc
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "WeaviateDocStore":
+    def from_dict(cls, data: dict[str, Any]) -> "WeaviateDocumentStore":
         """
         Deserializes the component from a dictionary.
 
@@ -528,12 +544,7 @@ class WeaviateDocStore(AsyncConstructor):
             raise DuplicateDocumentError(msg)
         return written
 
-    async def write_documents(
-        self,
-        documents: list[Document],
-        policy: DuplicatePolicy = DuplicatePolicy.OVERWRITE,
-        batch_size: int = 128,
-    ) -> int:
+    async def write_documents(self, documents: Sequence[Document]) -> int:
         """
         Writes documents to Weaviate using the specified policy.
         We recommend using a OVERWRITE policy as it's faster than other policies for Weaviate since it uses
@@ -543,7 +554,11 @@ class WeaviateDocStore(AsyncConstructor):
         Document when using the SKIP policy.
         """
         await self._ensure_async_connection()
-        total_written_docs = await self._batch_write(documents, batch_size=batch_size, policy=policy)
+        total_written_docs = await self._batch_write(
+            list(documents),
+            batch_size=128,
+            policy=DuplicatePolicy.OVERWRITE,
+        )
         return total_written_docs
 
     async def get_all_documents(self, include_vector: bool = False) -> Generator:  # type: ignore
@@ -576,7 +591,7 @@ class WeaviateDocStore(AsyncConstructor):
         weaviate_ids = [generate_uuid5(doc_id) for doc_id in document_ids]
         await self.__collection.data.delete_many(where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids))
 
-    async def delete_all_documents(self) -> bool:
+    async def clear(self) -> None:
         await self._ensure_async_connection()
         ids = []
         async for obj in self.get_all_documents():
@@ -586,248 +601,129 @@ class WeaviateDocStore(AsyncConstructor):
 
         if len(ids) == 0:
             logger.info(f"Nothing to delete in {self.__collection.name}")
-            return True
+            return
 
         try:
             await self.delete_documents(document_ids=ids)
-        except Exception:  # noqa: BLE001
-            logger.error(f"Error deleting documents for {self.collection_settings.get('class')}, see logs for more details.")
-            return False
+        except Exception as exc:
+            collection_name = self.collection_settings.get("class")
+            raise DocumentStoreError(f"Error deleting documents for {collection_name}") from exc
 
-        return True
-
-    def _ensure_sync_connection(self) -> None:
-        if self._sync_client is None:
-            raise DocumentStoreError("Sync Weaviate client is not initialised")
-        if not self._sync_client.is_connected():
-            try:
-                self._sync_client.connect()
-            except Exception as exc:
-                raise DocumentStoreError("Failed to reconnect sync Weaviate client") from exc
-
-    def search_by_keywords_sync(
+    async def search_keywords(
         self,
-        queries: str | list[str],
-        policy: SearchPolicy | None = SearchPolicy.BM25,
-        filters: dict[str, Any] | None = None,
-        keywords: list | None = None,
-        top_k: int | None = None,
-        include_vector: bool | None = False,
-    ) -> list[Document]:
-        queries = [queries] if isinstance(queries, str) else queries
-        self._ensure_sync_connection()
-        collection = self._sync_client.collections.get(self.__collection.name)
-        response = []
-        for q in queries:
-            if policy == SearchPolicy.BM25:
-                result = collection.query.bm25(
-                    query=q,
-                    filters=convert_filters(filters) if filters else None,
-                    limit=top_k,
-                    query_properties=["content"],
-                    return_properties=None,
-                    return_metadata=MetadataQuery(distance=True, score=True, explain_score=True, certainty=True),
-                )  # type: ignore
-                response.append([self._to_document(doc) for doc in result.objects])
-            else:
-                msg = f"You specified {str(policy)} that is not compatable with [search_by_keywords]. Only [BM25] is avalaible"
-                logger.error(msg)
-                raise ValueError(msg)
-        return response
-
-    async def search_by_keywords(
-        self,
-        queries: str | list[str],
-        policy: SearchPolicy | None = SearchPolicy.BM25,
-        filters: dict[str, Any] | None = None,
-        keywords: list | None = None,
-        top_k: int | None = None,
-        include_vector: bool | None = False,
+        queries: Sequence[str],
+        *,
+        top_k: int,
+        filters: Mapping[str, Any] | None = None,
     ) -> list[list[Document]]:
-        # properties = [p.name for p in self._collection.config.get().properties]
         logger.info(f"SEARCH | algo=[BM25] | collection_name=[{self.__collection.name}]")
-        queries = [queries] if isinstance(queries, str) else queries
+        queries = list(queries)
+        if not queries:
+            return []
         await self._ensure_async_connection()
-        if policy == SearchPolicy.BM25:
-            if len(queries) <= 1:
-                result = await self.__collection.query.bm25(
-                    query=queries[0],
-                    filters=convert_filters(filters) if filters else None,
+        weaviate_filters = convert_filters(dict(filters)) if filters else None
+        result = await asio.gather(
+            *(
+                self.__collection.query.bm25(
+                    query=query,
+                    filters=weaviate_filters,
                     limit=top_k,
-                    include_vector=include_vector,  # type: ignore
+                    include_vector=False,
                     query_properties=["content"],
                     return_properties=None,
                     return_metadata=MetadataQuery(distance=True, score=True, explain_score=True, certainty=True),
-                )  # type: ignore
-                result = [result]
-            else:
-                parallel_workers = [
-                    self.__collection.query.bm25(  # type: ignore
-                        query=query,
-                        filters=convert_filters(filters) if filters else None,
-                        limit=top_k,
-                        include_vector=include_vector,  # type: ignore
-                        query_properties=["content"],
-                        return_properties=None,
-                        return_metadata=MetadataQuery(
-                            distance=True,
-                            score=True,
-                            explain_score=True,
-                            certainty=True,
-                        ),
-                    )
-                    for query in queries
-                ]
-                result = await asio.gather(*parallel_workers)
-        else:
-            msg = f"You specified {str(policy)} that is not compatable with [search_by_keywords]. Only [BM25] is avalaible"
-            logger.error(msg)
-            raise ValueError(msg)
-        response = _to_documents_per_query(result, self._to_document)
-        return response
-
-    async def search(
-        self,
-        queries: str | list[str],
-        queries_embeddings: list[float] | list[list[float]],
-        rank_policy: str | None = None,
-        alpha: float | None = 0.22,
-        filters: dict[str, Any] | None = None,
-        keywords: list | None = None,
-        top_k: int | None = None,
-        return_metadata: list[str] | None = None,
-        include_vector: bool | None = False,
-    ) -> list[list[Document]]:
-        """
-        This method assumes the hybrid search with one of the present `ranking` methods out there.
-        """
-        return_metadata = (
-            MetadataQuery(distance=True, score=True, explain_score=True, certainty=True)
-            if return_metadata is None
-            else return_metadata
-        )  # type: ignore
-        queries = [queries] if isinstance(queries, str) else queries
-        queries_embeddings = [queries_embeddings] if isinstance(queries_embeddings[0], float) else queries_embeddings
-        assert len(queries) == len(queries_embeddings), (
-            f"Mismatch in number of queries and embeddings provided. "
-            f"queries=[{len(queries)}] | embeddings=[{len(queries_embeddings)}]"
+                )
+                for query in queries
+            )
         )
-        await self._ensure_async_connection()
+        return _to_documents_per_query(result, self._to_document)
 
-        if len(queries) <= 1:
-            result = await self.__collection.query.hybrid(
-                query=queries[0],
-                vector=queries_embeddings[0],
-                alpha=alpha,  # type: ignore
-                limit=top_k,
-                filters=convert_filters(filters) if filters else None,
-                return_metadata=return_metadata,  # type: ignore
-                include_vector=include_vector,  # type: ignore
-                query_properties=["content"],
-            )  # type: ignore
-            result = [result]
-        else:
-            parallel_workers = [
-                self.__collection.query.hybrid(  # type: ignore
+    async def search_hybrid(
+        self,
+        queries: Sequence[str],
+        vectors: Sequence[Sequence[float]],
+        *,
+        alpha: float,
+        top_k: int,
+        filters: Mapping[str, Any] | None = None,
+        include_vectors: bool = False,
+    ) -> list[list[Document]]:
+        queries = list(queries)
+        vectors = list(vectors)
+        if len(queries) != len(vectors):
+            raise ValueError(f"Expected {len(queries)} vectors, received {len(vectors)}")
+        if not queries:
+            return []
+        await self._ensure_async_connection()
+        weaviate_filters = convert_filters(dict(filters)) if filters else None
+        result = await asio.gather(
+            *(
+                self.__collection.query.hybrid(
                     query=query,
-                    vector=query_embedding,
-                    alpha=alpha,  # type: ignore
+                    vector=vector,
+                    alpha=alpha,
                     limit=top_k,
-                    filters=convert_filters(filters) if filters else None,
-                    return_metadata=return_metadata,  # type: ignore
-                    include_vector=include_vector,  # type: ignore
+                    filters=weaviate_filters,
+                    return_metadata=MetadataQuery(distance=True, score=True, explain_score=True, certainty=True),
+                    include_vector=include_vectors,
                     query_properties=["content"],
                 )
-                for query, query_embedding in zip(queries, queries_embeddings, strict=False)
-            ]
-            result = await asio.gather(*parallel_workers)
-        response = _to_documents_per_query(result, self._to_document)
-        return response
+                for query, vector in zip(queries, vectors, strict=True)
+            )
+        )
+        return _to_documents_per_query(result, self._to_document)
 
-    async def search_by_embedding(
+    async def search_vector(
         self,
-        queries_embeddings: list[float] | list[list[float]],
-        filters: dict[str, Any] | None = None,
-        keywords: list[str] | None = None,
-        top_k: int | None = None,
-        distance: float | None = None,
-        certainty: float | None = None,
-        return_metadata: list[str] | None = None,
-        include_vector: bool | None = False,
+        vectors: Sequence[Sequence[float]],
+        *,
+        top_k: int,
+        filters: Mapping[str, Any] | None = None,
+        include_vectors: bool = False,
     ) -> list[list[Document]]:
-        if distance is not None and certainty is not None:
-            msg = "Can't use 'distance' and 'certainty' parameters together"
-            raise ValueError(msg)
-        queries_embeddings = [queries_embeddings] if isinstance(queries_embeddings[0], float) else queries_embeddings
-        return_metadata = ["certainty"] if return_metadata is None else return_metadata
-        # properties = [p.name for p in self._collection.config.get().properties]
+        vectors = list(vectors)
+        if not vectors:
+            return []
         await self._ensure_async_connection()
-        if len(queries_embeddings) <= 1:
-            result = await self.__collection.query.near_vector(
-                near_vector=queries_embeddings[0],
-                distance=distance,
-                certainty=certainty,
-                include_vector=include_vector,
-                filters=convert_filters(filters) if filters else None,
-                limit=top_k,
-                return_properties=None,
-                return_metadata=return_metadata,  # type: ignore
-            )  # type: ignore
-            result = [result]
-        else:
-            parallel_workers = [
-                self.__collection.query.near_vector(  # type: ignore
-                    near_vector=query_embedding,
-                    distance=distance,
-                    certainty=certainty,
-                    include_vector=include_vector,
-                    filters=convert_filters(filters) if filters else None,
+        weaviate_filters = convert_filters(dict(filters)) if filters else None
+        result = await asio.gather(
+            *(
+                self.__collection.query.near_vector(
+                    near_vector=vector,
+                    include_vector=include_vectors,
+                    filters=weaviate_filters,
                     limit=top_k,
                     return_properties=None,
-                    return_metadata=return_metadata,  # type: ignore
+                    return_metadata=["certainty"],
                 )
-                for query_embedding in queries_embeddings
-            ]
-            result = await asio.gather(*parallel_workers)
-        response = _to_documents_per_query(result, self._to_document)
-        return response
+                for vector in vectors
+            )
+        )
+        return _to_documents_per_query(result, self._to_document)
 
     async def close(self) -> None:
-        async_client = getattr(self, "_client", None)
-        if async_client is not None:
+        close_task = getattr(self, "_close_task", None)
+        if close_task is None:
+            client = getattr(self, "_client", None)
+            if client is None:
+                return
+            self._client = None
+            close_task = asio.create_task(client.close())
+            self._close_task = close_task
+
+        try:
+            await asio.shield(close_task)
+        except asio.CancelledError:
             try:
-                maybe_result = async_client.close()
-                if inspect.isawaitable(maybe_result):
-                    await maybe_result
+                await asio.shield(close_task)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("WEAVIATE | failed to close async client: {}", exc)
-            finally:
-                self._client = None
-
-        sync_client = getattr(self, "_sync_client", None)
-        if sync_client is not None:
-            try:
-                sync_client.close()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("WEAVIATE | failed to close sync client: {}", exc)
-            finally:
-                self._sync_client = None
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("WEAVIATE | failed to close async client: {}", exc)
+        finally:
+            if close_task.done():
+                self._close_task = None
 
 
-class IFinder:
-    async def find(self, collection_name: str, **kwargs):
-        logger.info(f"FINDER | collection_name=[{collection_name}]")
-        store = await WeaviateDocStore.connect(collection_schema_name=collection_name, **kwargs)
-        assert (
-            store.get_collection_name() == collection_name.lower().capitalize()
-        ), f"Mismatch in collection's settings initialization.\
-                collection_name=[{collection_name}] |\
-                store.collection_schema_name=[{store.__collection.name}]"
-
-        return store
-
-
-Finder = IFinder()
-
-
-__all__ = ["WeaviateDocStore"]
+__all__ = ["WeaviateDocumentStore"]
