@@ -1,147 +1,101 @@
 # Launch Guide
 
-This page is the documentation version of the repository launch notes. It explains how `justatom` resolves datasets and how to run evaluation or training from scenario configs.
+Evaluation scenarios combine dataset settings with a strict retrieval runtime
+configuration. The default file is `configs/evaluate.yaml`.
 
-## Core Idea
-
-`justatom` uses scenario configs as the main entrypoint:
-
-- `configs/evaluate.yaml`
-- `configs/train.yaml`
-
-Inside those files, the `dataset` section can be configured in two ways:
-
-1. Set `dataset.id` and let `justatom` resolve a preset.
-2. Set `dataset.name_or_path` directly.
-
-## How `dataset.id` Works
-
-When you set:
+## Retrieval Config
 
 ```yaml
+retrieval:
+  mode: hybrid
+  alpha: 0.5
+  embedding:
+    backend: local
+    model: intfloat/multilingual-e5-small
+    device: auto
+    batch_size: 64
+    max_length: 512
+    query_prefix: "query: "
+    document_prefix: "passage: "
+  store:
+    collection: Document
+    url: http://localhost:2211
+    grpc_port: 50051
+
 dataset:
-  id: justatom
+  id: demo-eval
+
+search:
+  top_k: 20
+  batch_size: 32
 ```
 
-`justatom` resolves a preset in this order:
+`retrieval.mode` must be `keyword`, `vector`, or `hybrid`. Keyword retrieval
+does not need an embedding section; vector and hybrid retrieval do. The runtime
+rejects unknown retrieval, embedding, and store keys rather than silently
+ignoring a misspelling.
 
-1. `configs/dataset/<id>.yaml`
-2. `justatom/builtins/configs/dataset/<id>.yaml`
-
-This keeps scenario files short while still allowing richer dataset definitions.
-
-## Supported Dataset Sources
-
-### Repo-local dataset preset
-
-```yaml
-id: justatom
-```
-
-Resolves to `.data/polaroids.ai.data.json` with `lazy: false`.
-
-### Packaged built-in dataset
-
-```yaml
-name_or_path: demo
-lazy: true
-```
-
-Useful for smoke tests and tiny examples.
-
-### Hugging Face dataset
-
-```yaml
-name_or_path: MLNavigator/russian-retrieval
-config: null
-lazy: true
-split: train
-```
-
-For HF datasets you can also provide fallback split candidates:
-
-```yaml
-split: dev|test
-```
-
-### File path
-
-```yaml
-name_or_path: data/eval.jsonl
-name_or_path: /absolute/path/to/train.parquet
-```
-
-Supported formats include `.json`, `.jsonl`, `.parquet`, `.csv`, and `.xlsx`.
-Lazy mode is a real row iterator for `.jsonl`, `.parquet`, and `.csv`. Use
-`lazy: false` for `.json` and `.xlsx`; these formats raise a clear error when
-lazy mode is requested.
-
-## Current Preset IDs
-
-### `justatom`
-
-- Source: `configs/dataset/justatom.yaml`
-- Best for: repo-local experiments and quick evaluation runs
-
-### `demo-eval`
-
-- Source: `justatom/builtins/configs/dataset/demo-eval.yaml`
-- Best for: evaluation smoke tests
-
-### `demo-train`
-
-- Source: `justatom/builtins/configs/dataset/demo-train.yaml`
-- Best for: training smoke tests
-
-### `boolq-ru`
-
-- Source: `configs/dataset/boolq-ru.yaml`
-- Best for: compact Russian QA retrieval experiments backed by Hugging Face
-
-## Quick Start: Evaluation
-
-### Evaluate with the repo-local preset
-
-```bash
-python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id justatom
-```
-
-### Evaluate with the packaged demo preset
-
-```bash
-python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id demo-eval
-```
-
-### Evaluate with MLNavigator on Hugging Face
-
-```bash
-python -m justatom.api.eval --config configs/evaluate.yaml --dataset.id boolq-ru
-```
-
-### Evaluate with direct overrides
+## Evaluate Locally
 
 ```bash
 python -m justatom.api.eval \
   --config configs/evaluate.yaml \
-  --dataset.name_or_path MLNavigator/russian-retrieval \
-  --dataset.split train \
-  --dataset.content_field text \
-  --dataset.labels_field q
+  --dataset.id demo-eval \
+  --search-mode hybrid \
+  --embedding-model intfloat/multilingual-e5-small \
+  --query-prefix "query: " \
+  --document-prefix "passage: " \
+  --collection-name JustAtomEval \
+  --weaviate-url http://localhost:2211 \
+  --weaviate-grpc-port 50051
 ```
 
-## Useful Overrides
+## Evaluate Against a Remote Embedder
 
 ```bash
 python -m justatom.api.eval \
   --config configs/evaluate.yaml \
-  --dataset.id justatom \
-  --search.pipeline keywords \
-  --search.top_k 10 \
-  --index.flush_collection true
+  --dataset.id demo-eval \
+  --search-mode vector \
+  --embedding-backend openai-compatible \
+  --embedding-base-url http://ubuntu-box:8000/v1 \
+  --embedding-api-key "$EMBEDDING_API_KEY" \
+  --embedding-model deployed-embedding-model \
+  --collection-name JustAtomRemoteEval \
+  --weaviate-url http://localhost:2211
 ```
 
-## Notes
+The evaluator accepts explicit `--search-mode`, `--embedding-model`,
+`--query-prefix`, `--document-prefix`, `--weaviate-url`, and
+`--collection-name` flags. Values are passed to the strict runtime schema; old
+retrieval flag names are rejected.
 
-- Evaluation usually requires a retrieval backend to be available.
-- For local smoke runs, the `keywords` pipeline is often the fastest starting point.
-- CLI dotted flags override the base scenario config.
+## Shell Wrappers
+
+The pipeline wrapper preserves the `vanilla`, `atom_gate`, and `atomic` training
+variants while passing evaluator settings through the current CLI:
+
+```bash
+bash scripts/run_pipeline.sh \
+  --dataset-ids demo-eval \
+  --method atomic \
+  --search-mode hybrid \
+  --embedding-model intfloat/multilingual-e5-small \
+  --weaviate-url http://localhost:2211
+```
+
+`scripts/run_benchmark.sh` records shell-escaped commands in `COMMANDS.md`, so
+each `vanilla`, `atom_gate`, and `atomic` benchmark invocation is reproducible.
+
+## Dataset Presets
+
+Set `dataset.id` to use a configured preset. Resolution checks
+`configs/dataset/<id>.yaml` and then packaged defaults.
+
+- `demo-eval`: small packaged evaluation dataset.
+- `demo-train`: small packaged training dataset.
+- `justatom`: repository-local dataset preset.
+
+You can instead set `dataset.name_or_path` to a JSON, JSONL, Parquet, CSV, XLSX,
+or Hugging Face dataset source. See [Getting Started](getting-started.md) for
+dataset adapter examples.

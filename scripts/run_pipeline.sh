@@ -17,13 +17,19 @@ WANDB_MODE_VALUE="${WANDB_MODE:-disabled}"
 WANDB_PROJECT="${WANDB_PROJECT:-justatom}"
 WEAVIATE_HOST_VALUE="${WEAVIATE_HOST:-localhost}"
 WEAVIATE_PORT_VALUE="${WEAVIATE_PORT:-2211}"
-SEARCH_PIPELINE="${SEARCH_PIPELINE:-}"
+WEAVIATE_URL="${WEAVIATE_URL:-http://${WEAVIATE_HOST_VALUE}:${WEAVIATE_PORT_VALUE}}"
+WEAVIATE_GRPC_PORT="${WEAVIATE_GRPC_PORT:-50051}"
+SEARCH_MODE="${SEARCH_MODE:-}"
 SEARCH_TOP_K="${TOP_K:-}"
 INDEX_BATCH_SIZE="${INDEX_BATCH_SIZE:-}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-64}"
 AUTO_E5_PREFIXES=0
 QUERY_PREFIX=""
-CONTENT_PREFIX=""
+DOCUMENT_PREFIX=""
+EMBEDDING_BACKEND="${EMBEDDING_BACKEND:-}"
+EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-}"
+EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-}"
+RETRIEVAL_ALPHA="${RETRIEVAL_ALPHA:-}"
 NSAMPLES=""
 
 BATCH_SIZE="${BATCH_SIZE:-32}"
@@ -83,14 +89,18 @@ Component overrides:
 Evaluation options:
   --wandb-mode disabled|offline|online
   --wandb-project NAME
-  --weaviate-host HOST
-  --weaviate-port PORT
+  --weaviate-url URL
+  --weaviate-grpc-port PORT
   --eval-batch-size N
-  --search-pipeline NAME
+  --search-mode keyword|vector|hybrid
+  --embedding-backend local|openai-compatible
+  --embedding-base-url URL
+  --embedding-api-key KEY
   --top-k N
   --index-batch-size N
   --query-prefix TEXT
-  --content-prefix TEXT
+  --document-prefix TEXT
+  --alpha VALUE
   --auto-e5-prefixes
 EOF
 }
@@ -192,21 +202,25 @@ evaluate_model() {
   local command=(
     "$PYTHON_BIN" -m justatom.api.eval
     --config configs/evaluate.yaml
-    --model-name-or-path "$model_ref"
+    --embedding-model "$model_ref"
     --collection-name "$collection"
     --save-results-to-dir "$output_dir"
     --flush-collection
     --search-batch-size "$EVAL_BATCH_SIZE"
-    --weaviate-host "$WEAVIATE_HOST_VALUE"
-    --weaviate-port "$WEAVIATE_PORT_VALUE"
+    --weaviate-url "$WEAVIATE_URL"
+    --weaviate-grpc-port "$WEAVIATE_GRPC_PORT"
     --dataset.id "$dataset_id"
   )
-  [[ -z "$SEARCH_PIPELINE" ]] || command+=(--search-pipeline "$SEARCH_PIPELINE")
+  [[ -z "$SEARCH_MODE" ]] || command+=(--search-mode "$SEARCH_MODE")
+  [[ -z "$EMBEDDING_BACKEND" ]] || command+=(--embedding-backend "$EMBEDDING_BACKEND")
+  [[ -z "$EMBEDDING_BASE_URL" ]] || command+=(--embedding-base-url "$EMBEDDING_BASE_URL")
+  [[ -z "$EMBEDDING_API_KEY" ]] || command+=(--embedding-api-key "$EMBEDDING_API_KEY")
   [[ -z "$SEARCH_TOP_K" ]] || command+=(--top-k "$SEARCH_TOP_K")
   [[ -z "$INDEX_BATCH_SIZE" ]] || command+=(--index-batch-size "$INDEX_BATCH_SIZE")
   [[ -z "$QUERY_PREFIX" ]] || command+=(--query-prefix "$QUERY_PREFIX")
-  [[ -z "$CONTENT_PREFIX" ]] || command+=(--content-prefix "$CONTENT_PREFIX")
-  [[ -z "$NSAMPLES" ]] || command+=(--dataset.limit "$NSAMPLES")
+  [[ -z "$DOCUMENT_PREFIX" ]] || command+=(--document-prefix "$DOCUMENT_PREFIX")
+  [[ -z "$RETRIEVAL_ALPHA" ]] || command+=(--alpha "$RETRIEVAL_ALPHA")
+  [[ -z "$NSAMPLES" ]] || command+=(--dataset-limit "$NSAMPLES")
   EVAL_LAST_CSV=""
   run_cmd "$label" "$logfile" "${command[@]}" || return 1
   EVAL_LAST_CSV="$(latest_csv "$output_dir")"
@@ -235,14 +249,18 @@ while [[ $# -gt 0 ]]; do
     --no-baseline) RUN_BASELINE=0; shift ;;
     --wandb-mode) WANDB_MODE_VALUE="$2"; shift 2 ;;
     --wandb-project) WANDB_PROJECT="$2"; shift 2 ;;
-    --weaviate-host) WEAVIATE_HOST_VALUE="$2"; shift 2 ;;
-    --weaviate-port) WEAVIATE_PORT_VALUE="$2"; shift 2 ;;
+    --weaviate-url) WEAVIATE_URL="$2"; shift 2 ;;
+    --weaviate-grpc-port) WEAVIATE_GRPC_PORT="$2"; shift 2 ;;
     --eval-batch-size) EVAL_BATCH_SIZE="$2"; shift 2 ;;
-    --search-pipeline) SEARCH_PIPELINE="$2"; shift 2 ;;
+    --search-mode) SEARCH_MODE="$2"; shift 2 ;;
+    --embedding-backend) EMBEDDING_BACKEND="$2"; shift 2 ;;
+    --embedding-base-url) EMBEDDING_BASE_URL="$2"; shift 2 ;;
+    --embedding-api-key) EMBEDDING_API_KEY="$2"; shift 2 ;;
     --top-k) SEARCH_TOP_K="$2"; shift 2 ;;
     --index-batch-size) INDEX_BATCH_SIZE="$2"; shift 2 ;;
     --query-prefix) QUERY_PREFIX="$2"; shift 2 ;;
-    --content-prefix) CONTENT_PREFIX="$2"; shift 2 ;;
+    --document-prefix) DOCUMENT_PREFIX="$2"; shift 2 ;;
+    --alpha) RETRIEVAL_ALPHA="$2"; shift 2 ;;
     --auto-e5-prefixes) AUTO_E5_PREFIXES=1; shift ;;
     --alpha-gate-layers) EXPLICIT_OVERRIDES+=(--alpha-gate.head.layers "$2"); shift 2 ;;
     --alpha-gate-hidden-dim) EXPLICIT_OVERRIDES+=(--alpha-gate.head.hidden-dim "$2"); shift 2 ;;
@@ -272,10 +290,12 @@ done
 case "$METHOD" in vanilla|atom_gate|atomic) ;; *) echo "invalid method: $METHOD" >&2; exit 2 ;; esac
 case "$EXPERIMENT_ROLE" in canonical|ablation) ;; *) echo "invalid experiment role: $EXPERIMENT_ROLE" >&2; exit 2 ;; esac
 case "$WANDB_MODE_VALUE" in disabled|offline|online) ;; *) echo "invalid wandb mode: $WANDB_MODE_VALUE" >&2; exit 2 ;; esac
+case "$SEARCH_MODE" in ""|keyword|vector|hybrid) ;; *) echo "invalid search mode: $SEARCH_MODE; expected keyword, vector, or hybrid" >&2; exit 2 ;; esac
+case "$EMBEDDING_BACKEND" in ""|local|openai-compatible) ;; *) echo "invalid embedding backend: $EMBEDDING_BACKEND" >&2; exit 2 ;; esac
 
 if [[ "$AUTO_E5_PREFIXES" == "1" ]] && should_use_e5_prefixes; then
   [[ -n "$QUERY_PREFIX" ]] || QUERY_PREFIX="query: "
-  [[ -n "$CONTENT_PREFIX" ]] || CONTENT_PREFIX="passage: "
+  [[ -n "$DOCUMENT_PREFIX" ]] || DOCUMENT_PREFIX="passage: "
 fi
 
 RUN_STAMP="$(date +%Y%m%d_%H%M%S)_$(slugify "$METHOD")_$(slugify "$MODEL_NAME_OR_PATH")"
@@ -347,7 +367,7 @@ for raw_id in "${DATASET_IDS[@]}"; do
     )
     [[ -z "$MAX_QUERY_SEQ_LEN" ]] || train_args+=(--model.max-query-seq-len "$MAX_QUERY_SEQ_LEN")
     [[ -z "$QUERY_PREFIX" ]] || train_args+=(--model.query-prefix "$QUERY_PREFIX")
-    [[ -z "$CONTENT_PREFIX" ]] || train_args+=(--model.content-prefix "$CONTENT_PREFIX")
+    [[ -z "$DOCUMENT_PREFIX" ]] || train_args+=(--model.content-prefix "$DOCUMENT_PREFIX")
     [[ -z "$NSAMPLES" ]] || train_args+=(--dataset.limit "$NSAMPLES")
     train_args+=("${EXPLICIT_OVERRIDES[@]}")
 

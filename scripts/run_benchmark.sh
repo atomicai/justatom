@@ -25,11 +25,12 @@ TEMPERATURE="${TEMPERATURE:-0.05}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-64}"
 WANDB_MODE_VALUE="${WANDB_MODE:-disabled}"
 WANDB_PROJECT="${WANDB_PROJECT:-justatom-benchmark}"
-WEAVIATE_HOST_VALUE="${WEAVIATE_HOST:-localhost}"
-WEAVIATE_PORT_VALUE="${WEAVIATE_PORT:-2211}"
+WEAVIATE_URL="${WEAVIATE_URL:-http://${WEAVIATE_HOST:-localhost}:${WEAVIATE_PORT:-2211}}"
+WEAVIATE_GRPC_PORT="${WEAVIATE_GRPC_PORT:-50051}"
 NSAMPLES=""
 AUTO_E5_PREFIXES=0
 RUN_BASELINE=1
+SEARCH_MODE="${SEARCH_MODE:-}"
 PIPELINE_OVERRIDES=()
 
 usage() {
@@ -51,6 +52,9 @@ Options:
   --bench-root DIR
   --output-root DIR
   --wandb-mode disabled|offline|online
+  --weaviate-url URL
+  --weaviate-grpc-port PORT
+  --search-mode keyword|vector|hybrid
   --no-baseline
   --auto-e5-prefixes
   --dry-run
@@ -77,6 +81,13 @@ normalize_variant() {
   esac
 }
 
+normalize_search_mode() {
+  case "$1" in
+    keyword|vector|hybrid) printf '%s' "$1" ;;
+    *) echo "invalid search mode: $1; expected keyword, vector, or hybrid" >&2; exit 2 ;;
+  esac
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dataset-ids|--datasets) DATASET_IDS_RAW="$2"; shift 2 ;;
@@ -92,13 +103,14 @@ while [[ $# -gt 0 ]]; do
     --output-root) OUTPUT_ROOT="$2"; shift 2 ;;
     --wandb-mode) WANDB_MODE_VALUE="$2"; shift 2 ;;
     --wandb-project) WANDB_PROJECT="$2"; shift 2 ;;
-    --weaviate-host) WEAVIATE_HOST_VALUE="$2"; shift 2 ;;
-    --weaviate-port) WEAVIATE_PORT_VALUE="$2"; shift 2 ;;
+    --weaviate-url) WEAVIATE_URL="$2"; shift 2 ;;
+    --weaviate-grpc-port) WEAVIATE_GRPC_PORT="$2"; shift 2 ;;
+    --search-mode) SEARCH_MODE="$2"; shift 2 ;;
     --auto-e5-prefixes) AUTO_E5_PREFIXES=1; shift ;;
     --no-auto-e5-prefixes) AUTO_E5_PREFIXES=0; shift ;;
     --no-baseline) RUN_BASELINE=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
-    --memory-bank-size|--memory-bank-warmup-steps|--memory-bank-mining|--memory-bank-hard-negatives|--memory-bank-random-negatives|--memory-bank-hard-warmup-steps|--memory-bank-hard-ramp-steps|--memory-bank-collision-threshold|--memory-bank-collision-beta|--memory-bank-margin-mode|--memory-bank-margin-base|--memory-bank-margin-scale|--memory-bank-margin-min|--memory-bank-margin-max|--memory-bank-admission-beta|--memory-bank-margin-reg-weight|--alpha-gate-layers|--alpha-gate-hidden-dim|--alpha-gate-dropout|--experiment-role|--lr-encoder|--lr-heads|--weight-decay|--max-query-seq-len|--search-pipeline|--top-k|--index-batch-size)
+    --memory-bank-size|--memory-bank-warmup-steps|--memory-bank-mining|--memory-bank-hard-negatives|--memory-bank-random-negatives|--memory-bank-hard-warmup-steps|--memory-bank-hard-ramp-steps|--memory-bank-collision-threshold|--memory-bank-collision-beta|--memory-bank-margin-mode|--memory-bank-margin-base|--memory-bank-margin-scale|--memory-bank-margin-min|--memory-bank-margin-max|--memory-bank-admission-beta|--memory-bank-margin-reg-weight|--alpha-gate-layers|--alpha-gate-hidden-dim|--alpha-gate-dropout|--experiment-role|--lr-encoder|--lr-heads|--weight-decay|--max-query-seq-len|--top-k|--index-batch-size)
       PIPELINE_OVERRIDES+=("$1" "$2"); shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -113,6 +125,9 @@ VARIANTS=()
 for raw in "${RAW_VARIANTS[@]}"; do
   VARIANTS+=("$(normalize_variant "$raw")")
 done
+if [[ -n "$SEARCH_MODE" ]]; then
+  SEARCH_MODE="$(normalize_search_mode "$SEARCH_MODE")"
+fi
 
 if [[ -z "$BENCH_ROOT" ]]; then
   BENCH_ROOT="$OUTPUT_ROOT/$(date +%Y%m%d_%H%M%S)_$(slugify "$MODEL_NAME_OR_PATH")"
@@ -146,12 +161,13 @@ build_variant_command() {
     --eval-batch-size "$EVAL_BATCH_SIZE"
     --wandb-mode "$WANDB_MODE_VALUE"
     --wandb-project "$WANDB_PROJECT"
-    --weaviate-host "$WEAVIATE_HOST_VALUE"
-    --weaviate-port "$WEAVIATE_PORT_VALUE"
+    --weaviate-url "$WEAVIATE_URL"
+    --weaviate-grpc-port "$WEAVIATE_GRPC_PORT"
     --output-root "$output_root"
     --table-results "$table_path"
   )
   [[ -z "$NSAMPLES" ]] || command+=(--nsamples "$NSAMPLES")
+  [[ -z "$SEARCH_MODE" ]] || command+=(--search-mode "$SEARCH_MODE")
   [[ "$AUTO_E5_PREFIXES" == "0" ]] || command+=(--auto-e5-prefixes)
   [[ "$RUN_BASELINE" == "1" ]] || command+=(--no-baseline)
   command+=("${PIPELINE_OVERRIDES[@]}")

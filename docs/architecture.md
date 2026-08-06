@@ -1,81 +1,48 @@
 # Architecture
 
-## Repository Shape
+`justatom` separates retrieval composition from training and command-line
+orchestration. A retrieval application owns concrete dependencies and passes
+them to one `RetrievalRuntime`:
 
-`justatom` is organized around a few clear layers that map well to real retrieval systems.
+```text
+DocumentStore + Embedder -> RetrievalRuntime -> Indexer + Retriever
+```
+
+The runtime creates an `Indexer` for writes and a mode-specific `Retriever` for
+`keyword`, `vector`, or `hybrid` reads. It is an async context manager and owns
+closing the supplied store and embedder.
 
 ![Architecture overview](atom-arch.png)
 
-## Main Packages
+## Packages
 
-### `justatom.api`
+### `justatom.retrieval`
 
-Command-line entrypoints for:
-
-- evaluation
-- training
-- runtime and service helpers
-
-### `justatom.running`
-
-Execution layer for:
-
-- retrievers
-- evaluators
-- services
-- embeddings
-
-### `justatom.training`
-
-The production training path is compositional and has one owner per concern:
-
-- `config.py` and `methods.py`: strict configuration and canonical profiles
-- `data.py` and `sampling.py`: bounded loading and safe negative selection
-- `alpha_gate.py`: query-only `alpha(q)`
-- `memory_bank.py`: detached FIFO candidates and adaptive mining
-- `objective.py`: InfoNCE, auxiliary terms, soft admission, and `m(q)` regularization
-- `module.py`: the only Lightning training module
-- `job.py`: orchestration, manifests, and model artifacts
-
-### `justatom.processing`
-
-Data preparation layer for:
-
-- loading
-- tokenization
-- sampling
-- data `silo` and `batch`es
+The retrieval contracts and runtime live here. `DocumentStore`, `Embedder`,
+`Indexer`, `Retriever`, and `RetrievalRuntime` keep storage, embedding, and
+search responsibilities explicit. `build_runtime` is the config composition
+root and validates the retrieval schema before creating backend objects.
 
 ### `justatom.storing`
 
-Persistence and external data interfaces:
+Backend-facing persistence lives here. `WeaviateDocumentStore` is the async
+Weaviate implementation used by the runtime.
 
-- dataset storage
-- vector-related integrations
-- Weaviate helpers
+### `justatom.api`
 
-### `justatom.modeling`
+Thin entrypoints for evaluation, training, and serving. The evaluator overlays
+explicit retrieval command-line flags onto scenario configuration before calling
+the runtime builder.
 
-Model implementations and shared numeric or metric helpers.
+### `justatom.training`
+
+Training remains separate from retrieval. Its public variants are `vanilla`,
+`atom_gate`, and `atomic`; trained checkpoints can later be selected as an
+embedding model during evaluation.
 
 ### `configs`
 
-Scenario configuration files for training, evaluation, and dataset presets.
-
-## Why This Layout Works
-
-- API entrypoints stay thin.
-- Training composition lives separately from retrieval runtime code.
-- Data loading and persistence are isolated from experimentation logic.
-- Config-driven runs are easy to reproduce inside CI and notebooks.
-
-## Assets Already In The Repo
-
-The `docs/` directory already stores project visuals such as:
-
-- `Logo.png`
-- `atom-arch.png`
-- charts comparing retrieval behavior
-- math-related diagrams in `docs/math/`
-
-MkDocs now turns those assets into a browsable documentation site instead of leaving them as disconnected files.
+Scenario configuration for training, evaluation, and datasets. Evaluation
+contains a strict `retrieval` mapping plus dataset, indexing, search, metric,
+and output settings. See the [Launch Guide](launch-guide.md) for the current
+shape.
