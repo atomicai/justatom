@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -20,6 +21,15 @@ def _available_devices() -> tuple[bool, bool]:
     return torch.cuda.is_available(), bool(mps and mps.is_available())
 
 
+def _cuda_device_count() -> int:
+    try:
+        import torch
+    except ImportError as exc:
+        raise ConfigurationError(_LOCAL_DEPENDENCY_ERROR) from exc
+
+    return torch.cuda.device_count()
+
+
 def resolve_device(requested: str) -> str:
     device = requested.strip().lower()
     if device == "auto":
@@ -31,10 +41,12 @@ def resolve_device(requested: str) -> str:
         return "cpu"
     if device == "cpu":
         return "cpu"
-    if device in {"cuda", "cuda:0"}:
-        if not _available_devices()[0]:
+    cuda_match = re.fullmatch(r"cuda(?::(\d+))?", device)
+    if cuda_match:
+        index = int(cuda_match.group(1) or 0)
+        if not _available_devices()[0] or index >= _cuda_device_count():
             raise ConfigurationError(f"Requested device {requested!r} is unavailable")
-        return "cuda:0"
+        return f"cuda:{index}"
     if device == "mps":
         if not _available_devices()[1]:
             raise ConfigurationError(f"Requested device {requested!r} is unavailable")
@@ -120,6 +132,12 @@ class HuggingFaceEmbedder:
         self.profile = profile or EmbeddingProfile()
         self.device = resolve_device(device)
         self._encoder: _LocalEncoder | None = _build_local_encoder(model, self.device, self.profile.max_length)
+        self._lifecycle_lock = asyncio.Lock()
+        self._idle = asyncio.Event()
+        self._idle.set()
+        self._close_complete = asyncio.Event()
+        self._active_encodes = 0
+        self._closing = False
         self._closed = False
 
     async def embed_queries(self, texts: Sequence[str]) -> list[list[float]]:
@@ -129,22 +147,65 @@ class HuggingFaceEmbedder:
         return await self._embed(texts, prefix=self.profile.document_prefix)
 
     async def close(self) -> None:
-        if not self._closed:
-            if self._encoder is not None:
-                self._encoder.close()
-                self._encoder = None
-            self._closed = True
+        async with self._lifecycle_lock:
+            if self._closed:
+                return
+            if self._closing:
+                wait_for_close = True
+            else:
+                self._closing = True
+                wait_for_close = False
+
+        if wait_for_close:
+            await self._close_complete.wait()
+            return
+
+        await self._idle.wait()
+        async with self._lifecycle_lock:
+            encoder = self._encoder
+            self._encoder = None
+
+        try:
+            if encoder is not None:
+                encoder.close()
+        finally:
+            async with self._lifecycle_lock:
+                self._closed = True
+                self._close_complete.set()
+
+    async def _acquire_encoder(self) -> _LocalEncoder:
+        async with self._lifecycle_lock:
+            if self._closing or self._closed or self._encoder is None:
+                raise RuntimeError("HuggingFaceEmbedder is closed")
+            self._active_encodes += 1
+            self._idle.clear()
+            return self._encoder
+
+    async def _release_encoder(self) -> None:
+        async with self._lifecycle_lock:
+            self._active_encodes -= 1
+            if self._active_encodes == 0:
+                self._idle.set()
+
+    @staticmethod
+    async def _encode_batch(encoder: _LocalEncoder, batch: Sequence[str]) -> list[list[float]]:
+        task = asyncio.create_task(asyncio.to_thread(encoder.encode, batch))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await asyncio.shield(task)
+            raise
 
     async def _embed(self, texts: Sequence[str], *, prefix: str) -> list[list[float]]:
         if not texts:
             return []
-        normalized = [apply_prefix(text, prefix, skip_if_present=self.profile.skip_prefix_if_present) for text in texts]
-        encoder = self._encoder
-        if encoder is None:
-            raise RuntimeError("HuggingFaceEmbedder is closed")
-
-        vectors: list[list[float]] = []
-        for start in range(0, len(normalized), self.profile.batch_size):
-            batch = normalized[start : start + self.profile.batch_size]
-            vectors.extend(await asyncio.to_thread(encoder.encode, batch))
-        return validate_embeddings(vectors, expected_count=len(texts))
+        encoder = await self._acquire_encoder()
+        try:
+            normalized = [apply_prefix(text, prefix, skip_if_present=self.profile.skip_prefix_if_present) for text in texts]
+            vectors: list[list[float]] = []
+            for start in range(0, len(normalized), self.profile.batch_size):
+                batch = normalized[start : start + self.profile.batch_size]
+                vectors.extend(await self._encode_batch(encoder, batch))
+            return validate_embeddings(vectors, expected_count=len(texts))
+        finally:
+            await self._release_encoder()
