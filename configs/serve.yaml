@@ -1,0 +1,8 @@
+retrieval:
+  mode: keyword
+  alpha: 0.5
+  store:
+    collection: Document
+    url: null
+    grpc_port: 50051
+    grpc_secure: false

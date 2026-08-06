@@ -20,8 +20,8 @@ except ModuleNotFoundError:
             self.word_embedding_model = word_embedding_model
 
 
-from justatom.etc.schema import Document
 from justatom.modeling.mask import ILanguageModel
+from justatom.retrieval.contracts import Retriever
 
 
 class IModelRunner:
@@ -162,20 +162,8 @@ class IClusteringRunner(abc.ABC):
         pass
 
 
-class IRetrieverRunner(abc.ABC):
-    @abc.abstractmethod
-    async def retrieve_topk(self, queries: str | list[str], top_k: int = 5):
-        pass
-
-
-class IIndexerRunner(abc.ABC):
-    @abc.abstractmethod
-    async def index(self, documents: list[Document], **kwargs):
-        pass
-
-
 class IEvaluatorRunner(abc.ABC):
-    def __init__(self, ir: IRetrieverRunner):
+    def __init__(self, ir: Retriever):
         self.ir = ir
 
     @abc.abstractmethod

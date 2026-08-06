@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from justatom.running.service import RunningService
-from justatom.storing.weaviate import Finder as WeaviateApi
+from justatom.retrieval import build_runtime
+from justatom.storing.weaviate import WeaviateDocumentStore
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 pytestmark = pytest.mark.integration
@@ -27,17 +27,21 @@ class EvalStreamingIntegrationTest(unittest.TestCase):
     @staticmethod
     def _ensure_weaviate_up() -> None:
         async def _ping() -> bool:
+            store = None
             try:
-                store = await WeaviateApi.find(
+                store = await WeaviateDocumentStore.connect(
                     "Healthcheck",
-                    WEAVIATE_HOST="localhost",
-                    WEAVIATE_PORT=2211,
+                    url="http://localhost:2211",
+                    grpc_port=50051,
                 )
                 await store.count_documents()
                 await store.delete_collection()
                 return True
             except Exception:
                 return False
+            finally:
+                if store is not None:
+                    await store.close()
 
         if asyncio.run(_ping()):
             return
@@ -94,32 +98,36 @@ class EvalStreamingIntegrationTest(unittest.TestCase):
                     chunk_id_col="chunk_id",
                 )
 
-                ir_runner = await RunningService.do_index_and_prepare_for_search(
-                    collection_name=collection_name,
-                    documents=docs_adapter.iterator(),
-                    model_name_or_path=None,
-                    index_and_eval_by="keywords",
-                    batch_size=4,
-                    flush_collection=True,
-                    weaviate_host="localhost",
-                    weaviate_port=2211,
+                runtime = await build_runtime(
+                    {
+                        "mode": "keyword",
+                        "store": {
+                            "collection": collection_name,
+                            "url": "http://localhost:2211",
+                            "grpc_port": 50051,
+                        },
+                    }
                 )
+                try:
+                    await runtime.store.clear()
+                    await runtime.index(docs_adapter.iterator(), batch_size=4)
+                    n_docs = await runtime.store.count_documents()
 
-                n_docs = await ir_runner.store.count_documents()
+                    labels_adapter = DatasetRecordAdapter.from_source(
+                        dataset_name_or_path=dataset_path,
+                        content_col="content",
+                        queries_col="labels",
+                        chunk_id_col="chunk_id",
+                    )
 
-                labels_adapter = DatasetRecordAdapter.from_source(
-                    dataset_name_or_path=dataset_path,
-                    content_col="content",
-                    queries_col="labels",
-                    chunk_id_col="chunk_id",
-                )
-
-                n_total, n_hit = 0, 0
-                for q in DatasetRecordAdapter.extract_labels(labels_adapter.iterator()):
-                    retrieved = await ir_runner.retrieve_topk(queries=q, top_k=5)
-                    n_total += 1
-                    if any(q in (doc.meta or {}).get("labels", []) for doc in retrieved):
-                        n_hit += 1
+                    n_total, n_hit = 0, 0
+                    for q in DatasetRecordAdapter.extract_labels(labels_adapter.iterator()):
+                        retrieved = await runtime.retrieve(q, top_k=5)
+                        n_total += 1
+                        if any(q in (doc.meta or {}).get("labels", []) for doc in retrieved):
+                            n_hit += 1
+                finally:
+                    await runtime.close()
 
                 return n_docs, n_total, n_hit
 
@@ -131,12 +139,15 @@ class EvalStreamingIntegrationTest(unittest.TestCase):
             try:
 
                 async def _cleanup() -> None:
-                    store = await WeaviateApi.find(
+                    store = await WeaviateDocumentStore.connect(
                         collection_name,
-                        WEAVIATE_HOST="localhost",
-                        WEAVIATE_PORT=2211,
+                        url="http://localhost:2211",
+                        grpc_port=50051,
                     )
-                    await store.delete_collection()
+                    try:
+                        await store.delete_collection()
+                    finally:
+                        await store.close()
 
                 asyncio.run(_cleanup())
             except Exception:

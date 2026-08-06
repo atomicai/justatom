@@ -5,14 +5,14 @@ set -euo pipefail
 # The script is config-first: it uses `configs/evaluate.yaml` as the source of
 # truth and only applies a small set of launch-time overrides.
 # Example:
-#   bash scripts/run_eval_model_on_datasets.sh intfloat/multilingual-e5-small
+#   bash scripts/run_eval_model_on_datasets.sh --embedding-model intfloat/multilingual-e5-small
 #
 # Common overrides:
 #   DATASET_IDS="demo-eval justatom miracl-ru" \
 #   CUDA_VISIBLE_DEVICES=0 \
 #   ENABLE_WANDB=1 \
 #   WANDB_PROJECT=justatom-evals \
-#   bash scripts/run_eval_model_on_datasets.sh intfloat/multilingual-e5-small
+#   bash scripts/run_eval_model_on_datasets.sh --embedding-model intfloat/multilingual-e5-small
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -21,17 +21,17 @@ cd "$REPO_ROOT"
 export PYTHONPATH="${PYTHONPATH:-$REPO_ROOT}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
-MODEL_NAME_OR_PATH="${1:-${MODEL_NAME_OR_PATH:-intfloat/multilingual-e5-small}}"
+MODEL_NAME_OR_PATH="${MODEL_NAME_OR_PATH:-intfloat/multilingual-e5-small}"
 CONFIG_PATH="${CONFIG_PATH:-configs/evaluate.yaml}"
 DATASET_IDS_RAW="${DATASET_IDS:-demo-eval justatom miracl-ru}"
 COLLECTION_PREFIX="${COLLECTION_PREFIX:-EvalBench}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-artifacts/eval_runs}"
-SEARCH_PIPELINE="${SEARCH_PIPELINE:-}"
+SEARCH_MODE="${SEARCH_MODE:-}"
 TOP_K="${TOP_K:-}"
 SEARCH_BATCH_SIZE="${SEARCH_BATCH_SIZE:-}"
 INDEX_BATCH_SIZE="${INDEX_BATCH_SIZE:-}"
-WEAVIATE_HOST="${WEAVIATE_HOST:-}"
-WEAVIATE_PORT="${WEAVIATE_PORT:-}"
+WEAVIATE_URL="${WEAVIATE_URL:-http://${WEAVIATE_HOST:-localhost}:${WEAVIATE_PORT:-2211}}"
+WEAVIATE_GRPC_PORT="${WEAVIATE_GRPC_PORT:-50051}"
 INDEX_FLUSH_COLLECTION="${INDEX_FLUSH_COLLECTION:-}"
 ENABLE_WANDB="${ENABLE_WANDB:-0}"
 WANDB_PROJECT="${WANDB_PROJECT:-justatom-evals}"
@@ -39,9 +39,39 @@ WANDB_ENTITY="${WANDB_ENTITY:-}"
 WANDB_RUN_PREFIX="${WANDB_RUN_PREFIX:-eval-bench}"
 WANDB_TAGS="${WANDB_TAGS:-}"
 QUERY_PREFIX="${QUERY_PREFIX:-}"
-CONTENT_PREFIX="${CONTENT_PREFIX:-}"
+DOCUMENT_PREFIX="${DOCUMENT_PREFIX:-}"
 AUTO_E5_PREFIXES="${AUTO_E5_PREFIXES:-0}"
-EXTRA_EVAL_ARGS="${EXTRA_EVAL_ARGS:-}"
+RETRIEVAL_ALPHA="${RETRIEVAL_ALPHA:-}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/run_eval_model_on_datasets.sh [options]
+
+Options:
+  --embedding-model MODEL
+  --search-mode keyword|vector|hybrid
+  --query-prefix TEXT
+  --document-prefix TEXT
+  --weaviate-url URL
+  --weaviate-grpc-port PORT
+  --alpha VALUE
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --embedding-model) MODEL_NAME_OR_PATH="$2"; shift 2 ;;
+    --search-mode) SEARCH_MODE="$2"; shift 2 ;;
+    --query-prefix) QUERY_PREFIX="$2"; shift 2 ;;
+    --document-prefix) DOCUMENT_PREFIX="$2"; shift 2 ;;
+    --weaviate-url) WEAVIATE_URL="$2"; shift 2 ;;
+    --weaviate-grpc-port) WEAVIATE_GRPC_PORT="$2"; shift 2 ;;
+    --alpha) RETRIEVAL_ALPHA="$2"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_DIR="$OUTPUT_ROOT/$TIMESTAMP"
 mkdir -p "$RUN_DIR"
@@ -85,9 +115,11 @@ if [[ "$AUTO_E5_PREFIXES" == "1" ]] && [[ -z "$QUERY_PREFIX" ]] && should_use_e5
   QUERY_PREFIX="query: "
 fi
 
-if [[ "$AUTO_E5_PREFIXES" == "1" ]] && [[ -z "$CONTENT_PREFIX" ]] && should_use_e5_prefixes; then
-  CONTENT_PREFIX="passage: "
+if [[ "$AUTO_E5_PREFIXES" == "1" ]] && [[ -z "$DOCUMENT_PREFIX" ]] && should_use_e5_prefixes; then
+  DOCUMENT_PREFIX="passage: "
 fi
+
+case "$SEARCH_MODE" in ""|keyword|vector|hybrid) ;; *) echo "invalid search mode: $SEARCH_MODE; expected keyword, vector, or hybrid" >&2; exit 2 ;; esac
 
 printf 'Repo root: %s\n' "$REPO_ROOT"
 printf 'Config: %s\n' "$CONFIG_PATH"
@@ -95,11 +127,11 @@ printf 'Run dir: %s\n' "$RUN_DIR"
 printf 'Model: %s\n' "$MODEL_NAME_OR_PATH"
 printf 'Datasets: %s\n' "$DATASET_IDS_RAW"
 printf 'CUDA_VISIBLE_DEVICES: %s\n' "$CUDA_VISIBLE_DEVICES"
-if [[ -n "$SEARCH_PIPELINE" ]]; then
-  printf 'Pipeline override: %s\n' "$SEARCH_PIPELINE"
+if [[ -n "$SEARCH_MODE" ]]; then
+  printf 'Search mode override: %s\n' "$SEARCH_MODE"
 fi
-if [[ -n "$QUERY_PREFIX" || -n "$CONTENT_PREFIX" ]]; then
-  printf 'Prefixes: query=%q content=%q\n' "$QUERY_PREFIX" "$CONTENT_PREFIX"
+if [[ -n "$QUERY_PREFIX" || -n "$DOCUMENT_PREFIX" ]]; then
+  printf 'Prefixes: query=%q document=%q\n' "$QUERY_PREFIX" "$DOCUMENT_PREFIX"
 fi
 
 upload_csv_to_wandb() {
@@ -129,7 +161,7 @@ PY
   CSV_PATH="$csv_path" \
   DATASET_ID="$dataset_id" \
   MODEL_NAME="$MODEL_NAME_OR_PATH" \
-  SEARCH_PIPELINE="$SEARCH_PIPELINE" \
+  SEARCH_MODE="$SEARCH_MODE" \
   WANDB_PROJECT="$WANDB_PROJECT" \
   WANDB_ENTITY="$WANDB_ENTITY" \
   WANDB_RUN_NAME="$run_name" \
@@ -144,13 +176,13 @@ import wandb
 csv_path = Path(os.environ["CSV_PATH"])
 dataset_id = os.environ["DATASET_ID"]
 model_name = os.environ["MODEL_NAME"]
-search_pipeline = os.environ["SEARCH_PIPELINE"]
+search_mode = os.environ["SEARCH_MODE"]
 project = os.environ["WANDB_PROJECT"]
 entity = os.environ.get("WANDB_ENTITY") or None
 run_name = os.environ["WANDB_RUN_NAME"]
 raw_tags = os.environ.get("WANDB_TAGS", "")
 tags = [tag for tag in raw_tags.split(",") if tag]
-tags.extend([dataset_id, search_pipeline, "eval"])
+tags.extend([dataset_id, search_mode, "eval"])
 
 run = wandb.init(
     project=project,
@@ -160,7 +192,7 @@ run = wandb.init(
     config={
         "model_name_or_path": model_name,
         "dataset_id": dataset_id,
-        "search_pipeline": search_pipeline,
+        "search_mode": search_mode,
         "csv_path": str(csv_path),
     },
 )
@@ -191,7 +223,7 @@ artifact = wandb.Artifact(
     metadata={
         "dataset_id": dataset_id,
         "model_name_or_path": model_name,
-        "search_pipeline": search_pipeline,
+        "search_mode": search_mode,
     },
 )
 artifact.add_file(str(csv_path))
@@ -218,38 +250,37 @@ for dataset_id in "${DATASET_IDS[@]}"; do
     python -m justatom.api.eval
     --config "$CONFIG_PATH"
     --dataset.id "$dataset_id"
-    --model.name "$MODEL_NAME_OR_PATH"
-    --collection.name "$collection_name"
-    --output.save_results_to_dir "$dataset_out_dir"
+    --embedding-model "$MODEL_NAME_OR_PATH"
+    --collection-name "$collection_name"
+    --save-results-to-dir "$dataset_out_dir"
+    --weaviate-url "$WEAVIATE_URL"
+    --weaviate-grpc-port "$WEAVIATE_GRPC_PORT"
   )
 
-  if [[ -n "$SEARCH_PIPELINE" ]]; then
-    cmd+=(--search.pipeline "$SEARCH_PIPELINE")
+  if [[ -n "$SEARCH_MODE" ]]; then
+    cmd+=(--search-mode "$SEARCH_MODE")
   fi
   if [[ -n "$TOP_K" ]]; then
-    cmd+=(--search.top_k "$TOP_K")
+    cmd+=(--top-k "$TOP_K")
   fi
   if [[ -n "$SEARCH_BATCH_SIZE" ]]; then
-    cmd+=(--search.batch_size "$SEARCH_BATCH_SIZE")
+    cmd+=(--search-batch-size "$SEARCH_BATCH_SIZE")
   fi
   if [[ -n "$INDEX_BATCH_SIZE" ]]; then
-    cmd+=(--index.batch_size "$INDEX_BATCH_SIZE")
+    cmd+=(--index-batch-size "$INDEX_BATCH_SIZE")
   fi
   if [[ -n "$INDEX_FLUSH_COLLECTION" ]]; then
-    cmd+=(--index.flush_collection "$INDEX_FLUSH_COLLECTION")
-  fi
-  if [[ -n "$WEAVIATE_HOST" ]]; then
-    cmd+=(--weaviate.host "$WEAVIATE_HOST")
-  fi
-  if [[ -n "$WEAVIATE_PORT" ]]; then
-    cmd+=(--weaviate.port "$WEAVIATE_PORT")
+    cmd+=(--flush-collection)
   fi
 
   if [[ -n "$QUERY_PREFIX" ]]; then
-    cmd+=(--model.query_prefix "$QUERY_PREFIX")
+    cmd+=(--query-prefix "$QUERY_PREFIX")
   fi
-  if [[ -n "$CONTENT_PREFIX" ]]; then
-    cmd+=(--model.content_prefix "$CONTENT_PREFIX")
+  if [[ -n "$DOCUMENT_PREFIX" ]]; then
+    cmd+=(--document-prefix "$DOCUMENT_PREFIX")
+  fi
+  if [[ -n "$RETRIEVAL_ALPHA" ]]; then
+    cmd+=(--alpha "$RETRIEVAL_ALPHA")
   fi
 
   printf '\n[%s] Evaluating dataset.id=%s\n' "$(date +%H:%M:%S)" "$dataset_id"
@@ -257,16 +288,7 @@ for dataset_id in "${DATASET_IDS[@]}"; do
   printf '[%s] Output dir: %s\n' "$(date +%H:%M:%S)" "$dataset_out_dir"
   printf '[%s] Command:' "$(date +%H:%M:%S)"
   printf ' %q' "${cmd[@]}"
-  if [[ -n "$EXTRA_EVAL_ARGS" ]]; then
-    printf ' %s' "$EXTRA_EVAL_ARGS"
-  fi
   printf '\n'
-
-  if [[ -n "$EXTRA_EVAL_ARGS" ]]; then
-    # shellcheck disable=SC2206
-    extra_args=( $EXTRA_EVAL_ARGS )
-    cmd+=("${extra_args[@]}")
-  fi
 
   "${cmd[@]}"
 

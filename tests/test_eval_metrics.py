@@ -1,25 +1,10 @@
 import asyncio
 import math
-import sys
-import types
 import unittest
 
-# Provide lightweight stub for optional dependency required by justatom.running.mask
-if "bertopic" not in sys.modules:
-    bertopic_mod = types.ModuleType("bertopic")
-    backend_mod = types.ModuleType("bertopic.backend")
-
-    class _BaseEmbedder:  # pragma: no cover
-        pass
-
-    backend_mod.BaseEmbedder = _BaseEmbedder
-    bertopic_mod.backend = backend_mod
-    sys.modules["bertopic"] = bertopic_mod
-    sys.modules["bertopic.backend"] = backend_mod
-
 from justatom.etc.schema import Document
+from justatom.retrieval.retriever import KeywordRetriever
 from justatom.running.evaluator import EvaluatorRunner
-from justatom.running.retriever import KeywordsRetriever
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 
@@ -61,18 +46,51 @@ class _DummyKeywordsStore:
             ],
         }
 
-    async def search_by_keywords(
+    async def search_keywords(
         self,
         queries: list[str],
-        top_k: int = 5,
+        *,
+        top_k: int,
         filters: dict | None = None,
-        keywords: list[str] | None = None,
     ):
-        del filters, keywords
+        del filters
         return [self._rankings[q][:top_k] for q in queries]
 
 
+class _MalformedCardinalityRetriever:
+    def __init__(self, result_groups):
+        self.result_groups = result_groups
+        self.calls = []
+
+    async def retrieve_many(self, queries, *, top_k=5, **kwargs):
+        self.calls.append((list(queries), top_k, kwargs))
+        return self.result_groups
+
+
 class EvalMetricsTest(unittest.TestCase):
+    def test_evaluator_rejects_too_few_or_too_many_result_groups(self):
+        for result_groups in ([[]], [[], [], []]):
+            retriever = _MalformedCardinalityRetriever(result_groups)
+            evaluator = EvaluatorRunner(ir=retriever)
+
+            with self.subTest(actual_groups=len(result_groups)):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"Expected 2 result groups, received {len(result_groups)}",
+                ):
+                    asyncio.run(
+                        evaluator.evaluate_topk(
+                            queries=["q1", "q2"],
+                            metrics=None,
+                            metrics_top_k=["HitRate"],
+                            eval_top_k=[1],
+                            top_k=1,
+                            batch_size=2,
+                        )
+                    )
+
+            self.assertEqual(retriever.calls, [(["q1", "q2"], 1, {})])
+
     def test_keywords_retriever_evaluator_metrics_k_1_2_5(self):
         rows = [
             {"content": "Paragraph about Python.", "queries": None},
@@ -99,7 +117,7 @@ class EvalMetricsTest(unittest.TestCase):
         queries = DatasetRecordAdapter.extract_labels(docs)
         self.assertEqual(queries, ["cat diet", "dog training", "planet facts"])
 
-        retriever = KeywordsRetriever(store=_DummyKeywordsStore())
+        retriever = KeywordRetriever(store=_DummyKeywordsStore())
         evaluator = EvaluatorRunner(ir=retriever)
         metrics = asyncio.run(
             evaluator.evaluate_topk(

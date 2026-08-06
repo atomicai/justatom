@@ -1,10 +1,10 @@
 import argparse
 import asyncio as asio
-import inspect
 import os
 import re
 import sys
 from collections.abc import Iterable
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +14,9 @@ from loguru import logger
 from tqdm.auto import tqdm
 
 from justatom.configuring.scenarios import deep_merge, load_scenario_config, parse_unknown_overrides
+from justatom.retrieval import build_runtime
 from justatom.running.evaluator import EvaluatorRunner
 from justatom.running.mask import IEvaluatorRunner
-from justatom.running.service import RunningService
 from justatom.tooling import stl
 from justatom.tooling.collections import resolve_collection_name, resolve_collection_tag
 from justatom.tooling.dataset import DatasetRecordAdapter
@@ -33,6 +33,14 @@ logger.info(f"Enable MPS fallback = {os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK
 E5_QUERY_PREFIX = "query: "
 E5_PASSAGE_PREFIX = "passage: "
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_RETIRED_CONFIG_SECTIONS = {"collection", "model", "props", "weaviate"}
+_RETIRED_CLI_OPTIONS = {
+    "--content-prefix",
+    "--model-name-or-path",
+    "--search-pipeline",
+    "--weaviate-host",
+    "--weaviate-port",
+}
 
 
 def _portable_filename(value: str) -> str:
@@ -60,28 +68,37 @@ def _looks_like_e5_model(model_name_or_path: str | Path | None) -> bool:
     return False
 
 
-def _legacy_cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
+def _cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
     cfg: dict[str, Any] = {}
     if args.dataset_name_or_path is not None:
         cfg.setdefault("dataset", {})["name_or_path"] = args.dataset_name_or_path
     if args.collection_name is not None:
-        cfg.setdefault("collection", {})["name"] = args.collection_name
+        cfg.setdefault("retrieval", {}).setdefault("store", {})["collection"] = args.collection_name
     if args.save_results_to_dir is not None:
         cfg.setdefault("output", {})["save_results_to_dir"] = args.save_results_to_dir
 
-    if args.search_pipeline is not None:
-        cfg.setdefault("search", {})["pipeline"] = args.search_pipeline
+    if args.search_mode is not None:
+        cfg.setdefault("retrieval", {})["mode"] = args.search_mode
     if args.top_k is not None:
         cfg.setdefault("search", {})["top_k"] = args.top_k
     if args.search_batch_size is not None:
         cfg.setdefault("search", {})["batch_size"] = args.search_batch_size
 
-    if args.model_name_or_path is not None:
-        cfg.setdefault("model", {})["name"] = args.model_name_or_path
+    embedding = cfg.setdefault("retrieval", {}).setdefault("embedding", {})
+    if args.embedding_backend is not None:
+        embedding["backend"] = args.embedding_backend
+    if args.embedding_base_url is not None:
+        embedding["base_url"] = args.embedding_base_url
+    if args.embedding_api_key is not None:
+        embedding["api_key"] = args.embedding_api_key
+    if args.embedding_model is not None:
+        embedding["model"] = args.embedding_model
     if args.query_prefix is not None:
-        cfg.setdefault("model", {})["query_prefix"] = args.query_prefix
-    if args.content_prefix is not None:
-        cfg.setdefault("model", {})["content_prefix"] = args.content_prefix
+        embedding["query_prefix"] = args.query_prefix
+    if args.document_prefix is not None:
+        embedding["document_prefix"] = args.document_prefix
+    if not embedding:
+        cfg["retrieval"].pop("embedding")
 
     if args.index_batch_size is not None:
         cfg.setdefault("index", {})["batch_size"] = args.index_batch_size
@@ -117,13 +134,13 @@ def _legacy_cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
     if args.filter_fields is not None:
         cfg.setdefault("filters", {})["fields"] = args.filter_fields
 
-    if args.weaviate_host is not None:
-        cfg.setdefault("weaviate", {})["host"] = args.weaviate_host
-    if args.weaviate_port is not None:
-        cfg.setdefault("weaviate", {})["port"] = args.weaviate_port
+    if args.weaviate_url is not None:
+        cfg.setdefault("retrieval", {}).setdefault("store", {})["url"] = args.weaviate_url
+    if args.weaviate_grpc_port is not None:
+        cfg.setdefault("retrieval", {}).setdefault("store", {})["grpc_port"] = args.weaviate_grpc_port
 
     if args.alpha is not None:
-        cfg.setdefault("props", {})["alpha"] = args.alpha
+        cfg.setdefault("retrieval", {})["alpha"] = args.alpha
 
     return cfg
 
@@ -143,39 +160,63 @@ def load_eval_config(
 
 
 def _cfg_to_main_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
-    dataset = cfg.get("dataset") or {}
-    collection = cfg.get("collection") or {}
-    output = cfg.get("output") or {}
+    cfg = deepcopy(cfg)
+    retired_sections = sorted(_RETIRED_CONFIG_SECTIONS.intersection(cfg))
     search = cfg.get("search") or {}
-    model = cfg.get("model") or {}
+    if "pipeline" in search:
+        retired_sections.append("search.pipeline")
+    if retired_sections:
+        retired = ", ".join(retired_sections)
+        raise ValueError(f"retired evaluation config keys are not supported: {retired}")
+
+    dataset = cfg.get("dataset") or {}
+    output = cfg.get("output") or {}
     index = cfg.get("index") or {}
     metrics = cfg.get("metrics") or {}
     filters_cfg = cfg.get("filters") or {}
-    weaviate = cfg.get("weaviate") or {}
-    props = cfg.get("props") or {}
+    retrieval = cfg.get("retrieval") or {}
+    if not isinstance(retrieval, dict):
+        raise ValueError("retrieval config must be a mapping")
+    store = retrieval.get("store") or {}
+    if not isinstance(store, dict):
+        raise ValueError("retrieval.store config must be a mapping")
+    retrieval["store"] = store
+    embedding = retrieval.get("embedding") or {}
+    if not isinstance(embedding, dict):
+        raise ValueError("retrieval.embedding config must be a mapping")
 
     filter_fields = filters_cfg.get("fields")
     filters = {"fields": filter_fields} if filter_fields else None
     collection_tag = resolve_collection_tag(
-        collection.get("tag"),
+        store.pop("tag", None),
         auto_generate=False,
     )
-    should_auto_resolve_collection = bool(dataset.get("id") or collection_tag or model.get("name"))
-    collection_name = collection.get("name", "Document")
+    model_name_or_path = embedding.get("model")
+    should_auto_resolve_collection = bool(dataset.get("id") or collection_tag or model_name_or_path)
+    collection_name = store.get("collection", "Document")
     if should_auto_resolve_collection:
         collection_name = resolve_collection_name(
             collection_name,
-            model_name_or_path=model.get("name"),
+            model_name_or_path=model_name_or_path,
             dataset_name_or_path=dataset.get("id") or dataset.get("name_or_path"),
             collection_tag=collection_tag,
         )
+    store["collection"] = collection_name
+
+    mode = retrieval.get("mode", "vector")
+    if mode == "keyword":
+        retrieval.pop("embedding", None)
+    else:
+        backend = embedding.get("backend")
+        if backend == "openai-compatible":
+            embedding.pop("device", None)
+        elif backend == "local":
+            for key in ("api_key", "base_url", "encoding_format", "extra_body", "timeout"):
+                embedding.pop(key, None)
+        retrieval["embedding"] = embedding
 
     out = {
-        "model_name_or_path": model.get("name"),
-        "search_pipeline": search.get("pipeline", "embedding"),
-        "query_prefix": model.get("query_prefix"),
-        "content_prefix": model.get("content_prefix"),
-        "collection_name": collection_name,
+        "retrieval_config": retrieval,
         "flush_collection": bool(index.get("flush_collection", False)),
         "dataset_name_or_path": dataset.get("name_or_path"),
         "dataset_lazy": bool(dataset.get("lazy", True)),
@@ -194,14 +235,10 @@ def _cfg_to_main_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "limit": dataset.get("limit"),
         "chunk_id_col": dataset.get("chunk_id_col"),
         "keywords_or_phrases_field": dataset.get("keywords_col"),
-        "collection_tag": collection_tag,
         "keywords_nested_col": dataset.get("keywords_nested_col"),
         "explanation_nested_col": dataset.get("explanation_nested_col"),
         "drop_columns": dataset.get("drop_columns"),
-        "weaviate_host": weaviate.get("host"),
-        "weaviate_port": weaviate.get("port"),
     }
-    out.update({k: v for k, v in props.items() if v is not None})
     return out
 
 
@@ -234,12 +271,15 @@ def _parse_args(argv: list[str] | None = None) -> dict:
     parser.add_argument("--save-results-to-dir")
 
     parser.add_argument(
-        "--search-pipeline",
-        choices=["embedding", "hybrid", "keywords", "atomicai"],
+        "--search-mode",
+        choices=["keyword", "vector", "hybrid"],
     )
-    parser.add_argument("--model-name-or-path")
+    parser.add_argument("--embedding-backend", choices=["local", "openai-compatible"])
+    parser.add_argument("--embedding-base-url")
+    parser.add_argument("--embedding-api-key")
+    parser.add_argument("--embedding-model")
     parser.add_argument("--query-prefix")
-    parser.add_argument("--content-prefix")
+    parser.add_argument("--document-prefix")
     flush_group = parser.add_mutually_exclusive_group()
     flush_group.add_argument("--flush-collection", dest="flush_collection", action="store_true")
     flush_group.add_argument("--no-flush-collection", dest="flush_collection", action="store_false")
@@ -263,13 +303,18 @@ def _parse_args(argv: list[str] | None = None) -> dict:
     parser.add_argument("--eval-top-k", nargs="+", type=int)
     parser.add_argument("--filter-fields", nargs="+")
 
-    parser.add_argument("--weaviate-host")
-    parser.add_argument("--weaviate-port", type=int)
+    parser.add_argument("--weaviate-url")
+    parser.add_argument("--weaviate-grpc-port", type=int)
 
     parser.add_argument("--alpha", type=float)
 
+    for token in argv:
+        option = token.split("=", 1)[0]
+        if option in _RETIRED_CLI_OPTIONS:
+            parser.error(f"retired option is not supported: {option}")
+
     args, unknown = parser.parse_known_args(argv)
-    overrides = _legacy_cli_overlay(args)
+    overrides = _cli_overlay(args)
     dotted_overrides = parse_unknown_overrides(unknown)
     if dotted_overrides:
         overrides = deep_merge(overrides, dotted_overrides)
@@ -281,11 +326,7 @@ def _parse_args(argv: list[str] | None = None) -> dict:
 
 
 async def main(
-    model_name_or_path: str | None = None,
-    search_pipeline: str = "embedding",
-    query_prefix: str = None,
-    content_prefix: str = None,
-    collection_name: str = None,
+    retrieval_config: dict[str, Any],
     flush_collection: bool = False,
     dataset_name_or_path: str = None,
     dataset_lazy: bool = True,
@@ -296,7 +337,7 @@ async def main(
     search_batch_size: int = 32,
     filters: dict | None = None,
     metrics=None,
-    metrics_top_k=["HitRate"],
+    metrics_top_k=None,
     eval_top_k=None,
     labels_field: str | None = None,
     content_field: str = "content",
@@ -307,80 +348,73 @@ async def main(
     keywords_nested_col: str | None = None,
     explanation_nested_col: str | None = None,
     drop_columns: list[str] | None = None,
-    weaviate_host: str = None,
-    weaviate_port: int = None,
-    **props,
 ):
-    ir_runner = None
-    collection_name = collection_name or "Document"
+    runtime_config = deepcopy(retrieval_config)
+    embedding_config = runtime_config.get("embedding") or {}
+    model_name_or_path = embedding_config.get("model")
 
     # Auto-inject e5 prefixes when the model looks like an e5 family checkpoint
     # and the caller did not pass an explicit prefix. Training side always wraps
     # queries/passages with these prefixes (justatom.processing.prime defaults),
     # so eval must mirror them or we silently lose ~3-5 pp HR@1 on every metric.
     if _looks_like_e5_model(model_name_or_path):
-        if query_prefix is None:
-            query_prefix = E5_QUERY_PREFIX
-            logger.info("Auto-injected e5 query prefix: {!r}", query_prefix)
-        if content_prefix is None:
-            content_prefix = E5_PASSAGE_PREFIX
-            logger.info("Auto-injected e5 content prefix: {!r}", content_prefix)
+        if embedding_config.get("query_prefix") is None:
+            embedding_config["query_prefix"] = E5_QUERY_PREFIX
+            logger.info("Auto-injected e5 query prefix: {!r}", E5_QUERY_PREFIX)
+        if embedding_config.get("document_prefix") is None:
+            embedding_config["document_prefix"] = E5_PASSAGE_PREFIX
+            logger.info("Auto-injected e5 document prefix: {!r}", E5_PASSAGE_PREFIX)
+        runtime_config["embedding"] = embedding_config
 
     resolved_dataset_name_or_path = None if dataset_name_or_path is None else str(dataset_name_or_path)
     save_results_to_dir = Path(os.getcwd()) / "evals" if save_results_to_dir is None else Path(save_results_to_dir)
+    metrics_top_k = ["HitRate"] if metrics_top_k is None else metrics_top_k
 
     queries: list[str] = []
     docs_iter: Iterable[dict] = []
     dataset_exhausted = True
-    if resolved_dataset_name_or_path is not None:
-        dataset_exhausted = False
-        docs_adapter = DatasetRecordAdapter.from_source(
-            dataset_name_or_path=resolved_dataset_name_or_path,
-            lazy=dataset_lazy,
-            config=dataset_config,
-            content_col=content_field,
-            queries_col=labels_field,
-            split=split,
-            limit=limit,
-            chunk_id_col=chunk_id_col,
-            keywords_col=keywords_or_phrases_field,
-            keywords_nested_col=keywords_nested_col,
-            explanation_nested_col=explanation_nested_col,
-            drop_columns=drop_columns,
-            filter_fields=(filters or {}).get("fields", []),
-            preserve_all_fields=False,
-        )
-
-        def capture_labels(documents: Iterable[dict]) -> Iterable[dict]:
-            nonlocal dataset_exhausted
-            for document in documents:
-                meta = document.get("meta") or {}
-                if labels_field is not None and isinstance(meta, dict):
-                    queries.extend(DatasetRecordAdapter.normalize_labels(meta.get("labels")))
-                yield document
-            dataset_exhausted = True
-
-        docs_iter = tqdm(capture_labels(docs_adapter.iterator()))
-        mode = "lazy/iterative" if dataset_lazy else "eager"
-        logger.info("Dataset is prepared in {} mode for indexing.", mode)
-    else:
-        logger.info("No dataset provided. Using existing index only.")
-
+    runtime = await build_runtime(runtime_config)
     try:
-        ir_runner = await RunningService.do_index_and_prepare_for_search(
-            collection_name=collection_name,
-            documents=docs_iter,
-            batch_size=index_batch_size,
-            flush_collection=flush_collection,
-            index_and_eval_by=search_pipeline,
-            query_prefix=query_prefix,
-            content_prefix=content_prefix,
-            model_name_or_path=model_name_or_path,
-            weaviate_host=weaviate_host,
-            weaviate_port=weaviate_port,
-            **props,
-        )
-        n_total_docs = await ir_runner.store.count_documents()
+        if resolved_dataset_name_or_path is not None:
+            dataset_exhausted = False
+            docs_adapter = DatasetRecordAdapter.from_source(
+                dataset_name_or_path=resolved_dataset_name_or_path,
+                lazy=dataset_lazy,
+                config=dataset_config,
+                content_col=content_field,
+                queries_col=labels_field,
+                split=split,
+                limit=limit,
+                chunk_id_col=chunk_id_col,
+                keywords_col=keywords_or_phrases_field,
+                keywords_nested_col=keywords_nested_col,
+                explanation_nested_col=explanation_nested_col,
+                drop_columns=drop_columns,
+                filter_fields=(filters or {}).get("fields", []),
+                preserve_all_fields=False,
+            )
+
+            def capture_labels(documents: Iterable[dict]) -> Iterable[dict]:
+                nonlocal dataset_exhausted
+                for document in documents:
+                    meta = document.get("meta") or {}
+                    if labels_field is not None and isinstance(meta, dict):
+                        queries.extend(DatasetRecordAdapter.normalize_labels(meta.get("labels")))
+                    yield document
+                dataset_exhausted = True
+
+            docs_iter = tqdm(capture_labels(docs_adapter.iterator()))
+            mode = "lazy/iterative" if dataset_lazy else "eager"
+            logger.info("Dataset is prepared in {} mode for indexing.", mode)
+        else:
+            logger.info("No dataset provided. Using existing index only.")
+
+        n_total_docs = await runtime.store.count_documents()
+        if flush_collection:
+            await runtime.store.clear()
+            n_total_docs = 0
+        if n_total_docs == 0:
+            n_total_docs = await runtime.index(docs_iter, batch_size=index_batch_size)
         logger.info(f"INDEX stage is ready. Total docs in index = {n_total_docs}")
 
         if labels_field is None:
@@ -403,7 +437,7 @@ async def main(
             logger.warning("labels-col is provided, but no labels were found in dataset. Evaluation is skipped.")
             return
 
-        el: IEvaluatorRunner = EvaluatorRunner(ir=ir_runner)
+        el: IEvaluatorRunner = EvaluatorRunner(ir=runtime.retriever)
         eval_metrics = await el.evaluate_topk(
             queries=queries,
             top_k=top_k,
@@ -427,13 +461,12 @@ async def main(
         pl_metrics = pl.from_dicts(comp_eval_metrics)
 
         snap_eval_metrics = [] if eval_metrics is None else eval_metrics
+        search_mode = runtime_config.get("mode", "vector")
         model_name = "keywords" if model_name_or_path is None else Path(model_name_or_path).stem
         snap_name = stl.snapshot({"Evaluation": " ".join(snap_eval_metrics), "Model": model_name}, sep="|")
-        snap_props = stl.snapshot(props, sep="|")
-        snap_props = "|" if snap_props == "" else f"|{snap_props}|"
 
         save_results_to_dir.mkdir(exist_ok=True, parents=True)
-        result_filename = _portable_filename(f"{search_pipeline}{snap_props}{snap_name}.csv")
+        result_filename = _portable_filename(f"{search_mode}|{snap_name}.csv")
         save_final_path = (save_results_to_dir / result_filename).resolve()
         pl_metrics.write_csv(str(save_final_path))
         logger.info(
@@ -441,15 +474,7 @@ async def main(
             save_final_path,
         )
     finally:
-        try:
-            if ir_runner is not None:
-                maybe_close = getattr(ir_runner.store, "close", None)
-                if callable(maybe_close):
-                    maybe_result = maybe_close()
-                    if inspect.isawaitable(maybe_result):
-                        await maybe_result
-        finally:
-            await RunningService.close_embedding_clients()
+        await runtime.close()
 
 
 async def run(

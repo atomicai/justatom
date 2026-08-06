@@ -1,286 +1,236 @@
-import asyncio as asio
-import os
-from pathlib import Path
+from __future__ import annotations
 
-import simplejson as json
-from loguru import logger
-from quart import Quart, request, send_from_directory, session
-from quart_session import Session
+import asyncio
+from collections.abc import Awaitable
+from typing import Any
+
+from quart import Quart, request
 
 from justatom.api.dataset_input import documents_from_input
-from justatom.configuring.prime import Config
-from justatom.etc.filters import check_filters_and_cast
-from justatom.running.indexer import API as IndexerAPI
-from justatom.running.retriever import API as RetrieverApi
-from justatom.running.service import RunningService
-from justatom.storing.weaviate import Finder as WeaviateApi
-
-app = Quart(
-    __name__,
-    static_url_path="",
-    static_folder=str(Path(os.getcwd()) / "justatom" / "build"),
-    template_folder=str(Path(os.getcwd()) / "justatom" / "build"),
-)
-app.config["SESSION_TYPE"] = "redis"
-app.config["SESSION_URI"] = f'redis://{os.environ.get("REDIS_HOST", "127.0.0.1")}:6379'
-logger.info(f'Session(s) storage redis=[{app.config["SESSION_URI"]}]')
-Session(app)
+from justatom.configuring.scenarios import load_scenario_config
+from justatom.retrieval.runtime import RetrievalRuntime, build_runtime
 
 
-@app.route("/", defaults={"path": ""})
-@app.route("/<path:path>")
-async def main(path):
-    if path != "" and os.path.exists(app.static_folder + "/" + path):
-        response = await send_from_directory(app.static_folder, path)
-    else:
-        response = await send_from_directory(app.static_folder, "index.html")
-    return response
+def _reject_unknown_fields(payload: dict[str, Any], allowed: set[str]):
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        return {"error": f"unsupported fields: {', '.join(unknown)}"}, 400
+    return None
 
 
-@app.before_serving
-async def serve():
-    from justatom.mq.clients.rabbitmq import RabbitMQClient
-    from justatom.mq.settings.rabbitmq import SettingsRabbitMQ
-
-    settings = SettingsRabbitMQ()
-
-    CLIENT_NAME = "consumer"
-
-    client = RabbitMQClient(settings, client_name=CLIENT_NAME)
-
-    def server(message: str, metadata: dict):
-        logger.info(f"MQ callback received message with metadata keys={list(metadata.keys())}")
-
-    app.run_and_serve = asio.get_event_loop().create_task(client.consume_with_callback(callback=server, routing_key=CLIENT_NAME))
+async def _payload() -> tuple[dict[str, Any] | None, tuple[dict[str, str], int] | None]:
+    payload = await request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return None, ({"error": "request body must be a JSON object"}, 400)
+    return payload, None
 
 
-@app.after_serving
-async def finish():
-    loop = asio.get_event_loop()
+def _positive_integer(value: object, name: str, default: int) -> tuple[int | None, tuple[dict[str, str], int] | None]:
+    if value is None:
+        return default, None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None, ({"error": f"{name} must be a positive integer"}, 400)
+    return value, None
+
+
+def _documents_are_valid(source: object) -> bool:
+    if isinstance(source, str):
+        return bool(source.strip())
+    if not isinstance(source, list):
+        return False
+    return all(
+        isinstance(document, dict)
+        and isinstance(document.get("content"), str)
+        and isinstance(document.get("meta", {}), dict)
+        and isinstance(document.get("keywords_or_phrases", []), list)
+        for document in source
+    )
+
+
+async def _finish_cleanup(awaitable: Awaitable[object]) -> None:
+    cleanup_task = asyncio.ensure_future(awaitable)
     try:
-        app.run_and_serve.cancel()
-    except asio.CancelledError:
-        logger.warning(f"Coulnd't stop the task with id {app.run_and_serve}")
+        await asyncio.shield(cleanup_task)
+    except asyncio.CancelledError as cancellation:
+        if cleanup_task.done():
+            cleanup_task.result()
+            return
+        try:
+            await asyncio.shield(cleanup_task)
+        except BaseException as cleanup_error:
+            raise cancellation from cleanup_error
+        raise
+
+
+def _begin_runtime_close(app: Quart) -> asyncio.Task[None] | None:
+    runtime = app.extensions.pop("retrieval_runtime", None)
+    if runtime is None:
+        return None
+    close_task = asyncio.create_task(runtime.close())
+    app.extensions["retrieval_runtime_close_task"] = close_task
+    return close_task
+
+
+async def _rollback_startup(app: Quart, startup_error: BaseException) -> None:
+    app.extensions.pop("retrieval_mq_task", None)
+    close_task = _begin_runtime_close(app)
+    if close_task is None:
+        raise startup_error
+
+    try:
+        await _finish_cleanup(close_task)
+    except asyncio.CancelledError as cancellation:
+        raise startup_error from cancellation
+    except BaseException as cleanup_error:
+        raise startup_error from cleanup_error
     finally:
-        loop.close()
+        app.extensions.pop("retrieval_runtime_close_task", None)
+
+    raise startup_error
 
 
-@app.post("/echo")
-async def echo():
-    data = await request.get_json()
-    return {"input": data, "extra": True}
+async def _shutdown(app: Quart) -> None:
+    primary_error: BaseException | None = None
+    try:
+        mq_task = app.extensions.pop("retrieval_mq_task", None)
+        if mq_task is not None:
+            if not mq_task.done():
+                mq_task.cancel()
+            try:
+                await asyncio.shield(mq_task)
+            except asyncio.CancelledError:
+                if not mq_task.cancelled():
+                    raise
+            except BaseException as error:
+                primary_error = error
+    except BaseException as error:
+        primary_error = error
+    finally:
+        close_task = _begin_runtime_close(app)
+        if close_task is not None:
+            try:
+                await _finish_cleanup(close_task)
+            except BaseException as close_error:
+                if primary_error is not None:
+                    raise primary_error from close_error
+                raise
+
+    if primary_error is not None:
+        raise primary_error
 
 
-@app.post("/searching")
-async def search():
-    data = await request.get_data(parse_form_data=True)
-    data = data.decode("utf-8")
-    data = json.loads(data)
-    # Placeholder to retrieve all the document(s) from the indexing stage
-    logger.info(data)
-    query, collection_name, filter_by, search_by, top_k, top_p, alpha = (
-        data.get("text", "").strip(),
-        data.get("collection_name", "justatom").strip(),
-        data.get("filter_by", None),
-        data.get("search_by", "keywords").strip(),
-        data.get("top_k", 2),
-        data.get("top_p", None),
-        data.get("alpha", None),
-    )
-    session["searching"] = query  # TODO: wrap around with meta fields and prepare for logging
-    if top_p is not None and search_by != "gamma-hybrid":
-        msg = f"You provided `top_p`=[{top_p}] but `search_by`=[{search_by}]. " "Please use `gamma-hybrid` for top-p retrieval"
-        logger.error(msg)
-        return json.dumps({"msg": msg})
-    filters = check_filters_and_cast(filter_by)
-    store = await WeaviateApi.find(
-        collection_name,
-        WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),
-        WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT")),
-    )
-    device = RunningService.maybe_cuda_or_mps(devices=(Config.api.gpu_props or {}).get("devices", ["cuda", "mps", "cpu"]))
-    logger.info(f"/SEARCHING collection=[{collection_name}] device=[{device}]")
-    _, retriever = RunningService.igni_runners(
-        store=store,
-        search_pipeline=search_by,
-        model_name_or_path=Config.api.model_name_or_path,
-        device=device,
-        top_p=top_p,
-        alpha=alpha,
-    )
-    response = await retriever.retrieve_topk(queries=query, top_k=top_k, top_p=top_p, alpha=alpha, filters=filters)
-    return json.dumps({"docs": [d.to_dict(uuid_to_str=True) for d in response]}, ensure_ascii=False).encode("utf-8")
+def create_app(
+    config: dict[str, Any] | None = None,
+    runtime: RetrievalRuntime | None = None,
+    start_mq: bool = True,
+) -> Quart:
+    scenario_config = load_scenario_config("serve", config=config)
+    retrieval_config = scenario_config["retrieval"]
+    app = Quart(__name__, static_folder=None)
+    app.config.setdefault("PROVIDE_AUTOMATIC_OPTIONS", True)
+    app.extensions["retrieval_config"] = retrieval_config
+    if runtime is not None:
+        app.extensions["retrieval_runtime"] = runtime
 
+    def _runtime() -> RetrievalRuntime:
+        return app.extensions["retrieval_runtime"]
 
-@app.post("/indexing")
-async def index():
-    data = await request.get_data(parse_form_data=True)
-    data = data.decode("utf-8")
-    data = json.loads(data)
-    # List[str]
-    collection_name, dataset_name_or_docs, index_by, batch_size = (
-        data.get("collection_name", "justatom").strip(),
-        data.get("dataset_name_or_docs", "demo"),
-        data.get("index_by", "keywords"),
-        data.get("batch_size", 16),
-    )
-    docs = documents_from_input(dataset_name_or_docs)
-    store = await WeaviateApi.find(
-        collection_name,
-        WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),
-        WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT")),
-    )
-    device = RunningService.maybe_cuda_or_mps(devices=(Config.api.gpu_props or {}).get("devices", ["cuda", "mps", "cpu"]))
-    logger.info(f"/INDEXING collection=[{collection_name}] device=[{device}]")
-    indexer = IndexerAPI.named(
-        index_by,
-        store=store,
-        device=device,
-    )
+    @app.before_serving
+    async def start() -> None:
+        try:
+            if "retrieval_runtime" not in app.extensions:
+                app.extensions["retrieval_runtime"] = await build_runtime(app.extensions["retrieval_config"])
 
-    await indexer.index(docs, batch_size=int(batch_size))
+            if not start_mq:
+                return
 
-    return json.dumps({"total_docs": await indexer.store.count_documents()})
+            from justatom.mq.clients.rabbitmq import RabbitMQClient
+            from justatom.mq.settings.rabbitmq import SettingsRabbitMQ
 
+            client_name = "consumer"
 
-@app.post("/delete")
-async def delete():
-    data = await request.get_data(parse_form_data=True)
-    data = data.decode("utf-8")
-    data = json.loads(data)
+            def receive(message: str, metadata: dict[str, Any]) -> None:
+                del message, metadata
 
-    collection_name = data.get("collection_name", None)
-    assert collection_name is not None, logger.error("/DELETE | `collection_name` is not specified")
+            client = RabbitMQClient(SettingsRabbitMQ(), client_name=client_name)
+            app.extensions["retrieval_mq_task"] = asyncio.create_task(
+                client.consume_with_callback(callback=receive, routing_key=client_name)
+            )
+        except BaseException as startup_error:
+            await _rollback_startup(app, startup_error)
 
-    store = await WeaviateApi.find(
-        collection_name,
-        WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),
-        WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT")),
-    )
+    @app.after_serving
+    async def stop() -> None:
+        shutdown_task = app.extensions.get("retrieval_shutdown_task")
+        if shutdown_task is None:
+            shutdown_task = asyncio.create_task(_shutdown(app))
+            app.extensions["retrieval_shutdown_task"] = shutdown_task
+        await _finish_cleanup(shutdown_task)
 
-    total_docs = await store.count_documents()
-    await store.delete_all_documents()
+    @app.get("/")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
 
-    return json.dumps({"deleted_docs": total_docs})
+    @app.post("/searching")
+    async def search():
+        payload, error = await _payload()
+        if error is not None:
+            return error
+        assert payload is not None
+        rejected = _reject_unknown_fields(payload, {"text", "top_k", "filter_by"})
+        if rejected is not None:
+            return rejected
 
+        query = payload.get("text")
+        if not isinstance(query, str) or not query.strip():
+            return {"error": "text must be a non-empty string"}, 400
+        top_k, error = _positive_integer(payload.get("top_k"), "top_k", default=5)
+        if error is not None:
+            return error
+        filter_by = payload.get("filter_by")
+        if filter_by is not None and not isinstance(filter_by, dict):
+            return {"error": "filter_by must be an object"}, 400
 
-@app.post("/patching")
-async def patch():
-    # `collection_name` - old collection
-    # `new_collection_name` - new collection
-    data = await request.get_data(parse_form_data=True)
-    data = data.decode("utf-8")
-    data = json.loads(data)
+        documents = await _runtime().retrieve(query.strip(), top_k=top_k, filters=filter_by)
+        return {"docs": [document.to_dict(uuid_to_str=True) for document in documents]}
 
-    collection_name = data.get("collection_name", None)
-    assert collection_name is not None, logger.error("/PATCHING | `collection_name` to delete is not specified")
-    new_collection_name = data.get("new_collection_name", None)
-    assert new_collection_name is not None, logger.error("/PATCHING | `new_collection_name` to create is not specified")
+    @app.post("/indexing")
+    async def index():
+        payload, error = await _payload()
+        if error is not None:
+            return error
+        assert payload is not None
+        rejected = _reject_unknown_fields(payload, {"dataset_name_or_docs", "batch_size"})
+        if rejected is not None:
+            return rejected
 
-    keep_previous_collection = data.get("keep_previous_collection", True)
-    batch_size = data.get("batch_size", 256)
-    source_store = await WeaviateApi.find(
-        collection_name,
-        WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),
-        WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT")),
-    )
-    target_store = await WeaviateApi.find(
-        new_collection_name,
-        WEAVIATE_HOST=os.environ.get("WEAVIATE_HOST"),
-        WEAVIATE_PORT=int(os.environ.get("WEAVIATE_PORT")),
-    )
+        source = payload.get("dataset_name_or_docs")
+        if not _documents_are_valid(source):
+            return {"error": "dataset_name_or_docs must be a non-empty dataset name or a list of documents"}, 400
+        batch_size, error = _positive_integer(payload.get("batch_size"), "batch_size", default=64)
+        if error is not None:
+            return error
 
-    docs = [source_store._to_document(doc) async for doc in source_store.get_all_documents(include_vector=True)]
-    n_written = await target_store.write_documents(docs, batch_size=int(batch_size))
+        await _runtime().index(documents_from_input(source), batch_size=batch_size)
+        return {"total_docs": await _runtime().store.count_documents()}
 
-    if not keep_previous_collection:
-        await source_store.delete_collection()
+    @app.post("/delete")
+    async def delete():
+        payload, error = await _payload()
+        if error is not None:
+            return error
+        assert payload is not None
+        rejected = _reject_unknown_fields(payload, set())
+        if rejected is not None:
+            return rejected
 
-    response = {
-        "from_collection": collection_name,
-        "to_collection": new_collection_name,
-        "copied_docs": n_written,
-        "keep_previous_collection": keep_previous_collection,
-    }
-    status = True
+        app_runtime = _runtime()
+        total_docs = await app_runtime.store.count_documents()
+        await app_runtime.store.clear()
+        return {"deleted_docs": total_docs}
 
-    return json.dumps(response)
-
-
-@app.post("/deletebyids")
-async def deletebyids():
-    data = await request.get_data(parse_form_data=True)
-    data = data.decode("utf-8")
-    data = json.loads(data)
-    collection_name = data.get("collection_name", None)
-    assert collection_name is not None, logger.error("/DELETEBYIDS | `collection_name` is not specified")
-    document_ids = data.get("document_ids", None)
-    assert document_ids is not None, logger.error("/DELETEBYIDS | `document_ids` are not specified")
-
-    store = await WeaviateApi.find(collection_name)
-    js_existed_documents = [
-        doc
-        async for doc in store.get_all_documents_by_ids(
-            document_ids=document_ids,
-            include_vector=False,
-        )
-    ]
-    logger.info(f"/DELETEBYIDS | Found K=[{len(js_existed_documents)}]")
-    await store.delete_documents(document_ids=document_ids)
-    is_ok: bool = True
-
-    return json.dumps(
-        {
-            "deleted_docs": [js_doc.to_dict(uuid_to_str=True) for js_doc in js_existed_documents],
-            "status": is_ok,
-        },
-        ensure_ascii=False,
-    ).encode("utf-8")
-
-
-@app.post("/findbyids")
-async def findbyids():
-    data = await request.get_data(parse_form_data=True)
-    data = data.decode("utf-8")
-    data = json.loads(data)
-
-    collection_name = data.get("collection_name", None)
-    assert collection_name is not None, logger.error("/FINDBYIDS | `collection_name` is not specified")
-    document_ids = data.get("document_ids", None)
-    assert document_ids is not None, "/FINDBYIDS | `document_ids` are not specified"
-    include_vector = data.get("include_vector", False)
-
-    store = await WeaviateApi.find(collection_name)
-    response = [
-        doc
-        async for doc in store.get_all_documents_by_ids(
-            document_ids=document_ids,
-            include_vector=include_vector,
-        )
-    ]
-
-    return json.dumps(
-        {"found_docs": [d.to_dict(uuid_to_str=True) for d in response]},
-        ensure_ascii=False,
-    ).encode("utf-8")
-
-
-@app.post("/find")
-async def find():
-    data = await request.get_data(parse_form_data=True)
-    data = data.decode("utf-8")
-    data = json.loads(data)
-
-    collection_name = data.get("collection_name", None)
-    include_vector = data.get("include_vector", None) or False
-    assert collection_name is not None, "Collection is not specified."
-    store = await WeaviateApi.find(collection_name)
-
-    result = [
-        store._to_document(doc).to_dict(uuid_to_str=True) async for doc in store.get_all_documents(include_vector=include_vector)
-    ]
-    return json.dumps({"found_docs": result}, ensure_ascii=False).encode("utf-8")
+    return app
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5555)
+    create_app().run(host="0.0.0.0", port=5555)

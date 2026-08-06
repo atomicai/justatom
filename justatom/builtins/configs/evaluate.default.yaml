@@ -1,5 +1,19 @@
-collection:
-  name: Document
+retrieval:
+  mode: vector
+  alpha: 0.5
+  embedding:
+    backend: local
+    model: null
+    device: auto
+    batch_size: 64
+    max_length: 512
+    query_prefix: null
+    document_prefix: null
+  store:
+    collection: Document
+    tag: null
+    url: null
+    grpc_port: 50051
 
 dataset:
   id: null
@@ -21,18 +35,12 @@ output:
   save_results_to_dir: null
 
 search:
-  pipeline: embedding
   top_k: 20
   batch_size: 32
 
 index:
   batch_size: 4
   flush_collection: false
-
-model:
-  name: null
-  query_prefix: null
-  content_prefix: null
 
 metrics:
   names: null
@@ -42,10 +50,3 @@ metrics:
 
 filters:
   fields: null
-
-weaviate:
-  host: null
-  port: null
-
-props:
-  alpha: null

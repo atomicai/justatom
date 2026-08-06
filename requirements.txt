@@ -12,6 +12,7 @@ tqdm
 boto3==1.34.7
 # Used for downloading models over HTTP
 requests
+httpx>=0.27,<1
 # Scipy & sklearn for stats in run_classifier
 scipy>=1.11.4
 scikit-learn

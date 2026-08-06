@@ -1,21 +1,38 @@
-# justatom.storing
+# Storage
 
-The `justatom.storing` package focuses on persistence and backend-facing storage logic.
+`WeaviateDocumentStore` is the async document-store implementation used by the
+retrieval runtime. It owns one async Weaviate client, creates the collection
+when necessary, and implements document writes, deletes, keyword search, vector
+search, hybrid search, and shutdown.
 
-## Files
+## Connect Explicitly
 
-- `dataset.py`: dataset storage and adapter-facing persistence helpers
-- `weaviate.py`: Weaviate integration points
-- `mask.py`: storage-related support layer
+```python
+from justatom.storing.weaviate import WeaviateDocumentStore
 
-## When You Read This Package
+store = await WeaviateDocumentStore.connect(
+    "JustAtom",
+    url="http://localhost:2211",
+    grpc_port=50051,
+)
+try:
+    count = await store.count_documents()
+finally:
+    await store.close()
+```
 
-Open this part of the codebase when you need to answer questions like:
+When the store is passed to `RetrievalRuntime`, let the runtime close it through
+`async with RetrievalRuntime(...)` instead of closing it separately.
 
-- how documents are persisted
-- how dataset objects are represented for downstream retrieval work
-- how Weaviate is wired into the rest of the project
+## Runtime Role
 
-## Why It Is Separate
+The store is the `DocumentStore` component in the public composition:
 
-Keeping storage concerns out of `justatom.running` and `justatom.modeling` makes the system easier to swap, test, and reason about.
+```text
+WeaviateDocumentStore + Embedder -> RetrievalRuntime -> Indexer + Retriever
+```
+
+Keyword mode needs only the store. Vector and hybrid modes also require an
+embedder. Store URLs must be absolute `http` or `https` origins, and the
+retrieval config validates collection names, gRPC ports, and unknown keys before
+opening a connection.
