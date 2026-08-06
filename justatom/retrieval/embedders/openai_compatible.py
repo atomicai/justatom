@@ -4,7 +4,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import httpx
-from more_itertools import chunked
 
 from justatom.retrieval.contracts import EmbeddingProfile, apply_prefix, validate_embeddings
 from justatom.retrieval.errors import EmbeddingBackendError, EmbeddingResponseError
@@ -54,8 +53,9 @@ class OpenAICompatibleEmbedder:
             apply_prefix(text, prefix, skip_if_present=self.profile.skip_prefix_if_present) for text in texts
         ]
         vectors: list[list[float]] = []
-        for chunk in chunked(normalized, self.profile.batch_size):
-            payload = {**self.extra_body, "model": self.model, "input": list(chunk)}
+        for start in range(0, len(normalized), self.profile.batch_size):
+            chunk = normalized[start : start + self.profile.batch_size]
+            payload = {**self.extra_body, "model": self.model, "input": chunk}
             if self.encoding_format is not None:
                 payload["encoding_format"] = self.encoding_format
             try:
@@ -70,8 +70,15 @@ class OpenAICompatibleEmbedder:
                 raise EmbeddingBackendError(
                     f"Embedding endpoint {self.base_url!r} failed for model {self.model!r}: {type(exc).__name__}"
                 ) from exc
-            vectors.extend(self._parse_response(response.json(), expected_count=len(chunk)))
-        return validate_embeddings(vectors, expected_count=len(texts))
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise EmbeddingResponseError("Embedding response was not valid JSON") from exc
+            vectors.extend(self._parse_response(payload, expected_count=len(chunk)))
+        try:
+            return validate_embeddings(vectors, expected_count=len(texts))
+        except (TypeError, ValueError) as exc:
+            raise EmbeddingResponseError("Embedding response contains invalid embeddings") from exc
 
     @staticmethod
     def _parse_response(payload: Any, *, expected_count: int) -> list[list[float]]:
@@ -89,9 +96,12 @@ class OpenAICompatibleEmbedder:
             index = item["index"]
             if index in vectors_by_index:
                 raise EmbeddingResponseError("Embedding response indexes must be unique and complete")
+            embedding = item["embedding"]
+            if not isinstance(embedding, Sequence) or isinstance(embedding, (str, bytes, bytearray, Mapping)):
+                raise EmbeddingResponseError("Embedding response embeddings must be non-string sequences")
             try:
-                vectors_by_index[index] = list(item["embedding"])
-            except TypeError as exc:
+                vectors_by_index[index] = list(embedding)
+            except (TypeError, ValueError) as exc:
                 raise EmbeddingResponseError("Embedding response embeddings must be sequences") from exc
 
         expected_indexes = set(range(expected_count))

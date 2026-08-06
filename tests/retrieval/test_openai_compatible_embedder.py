@@ -87,3 +87,48 @@ def test_remote_embedder_rejects_missing_or_duplicate_response_indexes():
     with pytest.raises(EmbeddingResponseError, match="indexes"):
         asyncio.run(embedder.embed_queries(["a", "b"]))
     asyncio.run(embedder.close())
+
+
+def test_remote_embedder_sanitizes_malformed_json_responses():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"{not valid json")
+
+    embedder = OpenAICompatibleEmbedder(
+        base_url="http://embedding.test/v1",
+        model="test-model",
+        api_key="top-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(EmbeddingResponseError, match="valid JSON") as exc_info:
+        asyncio.run(embedder.embed_documents(["private input text"]))
+    assert "top-secret" not in str(exc_info.value)
+    assert "private input text" not in str(exc_info.value)
+    asyncio.run(embedder.close())
+
+
+def test_remote_embedder_rejects_string_embeddings():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": "not a vector"}]})
+
+    embedder = OpenAICompatibleEmbedder(
+        base_url="http://embedding.test/v1",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(EmbeddingResponseError, match="embeddings"):
+        asyncio.run(embedder.embed_documents(["text"]))
+    asyncio.run(embedder.close())
+
+
+def test_remote_embedder_rejects_non_numeric_embedding_values():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": ["not a number"]}]})
+
+    embedder = OpenAICompatibleEmbedder(
+        base_url="http://embedding.test/v1",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(EmbeddingResponseError, match="embeddings"):
+        asyncio.run(embedder.embed_documents(["text"]))
+    asyncio.run(embedder.close())
