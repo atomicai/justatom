@@ -60,6 +60,7 @@ class FakeCollections:
 class FakeAsyncClient:
     instances = []
     connect_error = None
+    close_errors = []
 
     def __init__(self, **kwargs):
         self.constructor_options = kwargs
@@ -78,6 +79,8 @@ class FakeAsyncClient:
 
     async def close(self):
         self.close_calls += 1
+        if self.close_errors:
+            raise self.close_errors.pop(0)
         self.connected = False
 
 
@@ -85,6 +88,7 @@ class FakeAsyncClient:
 def fake_client(monkeypatch):
     FakeAsyncClient.instances = []
     FakeAsyncClient.connect_error = None
+    FakeAsyncClient.close_errors = []
     monkeypatch.setattr(weaviate_module.weaviate, "WeaviateAsyncClient", FakeAsyncClient)
     return FakeAsyncClient
 
@@ -218,6 +222,57 @@ def test_connect_closes_async_client_and_retains_cause_on_connect_failure(fake_c
     assert exc_info.value.__cause__ is failure
     assert len(fake_client.instances) == 1
     assert fake_client.instances[0].close_calls == 1
+
+
+def test_init_failure_retries_flaky_cleanup_and_preserves_original_error(fake_client, monkeypatch):
+    init_failure = RuntimeError("connection failed")
+    cleanup_failure = RuntimeError("cleanup credential=super-secret")
+    fake_client.connect_error = init_failure
+    fake_client.close_errors = [cleanup_failure]
+    warnings = []
+    monkeypatch.setattr(weaviate_module.logger, "warning", lambda message, *args: warnings.append((message, args)))
+
+    with pytest.raises(DocumentStoreError, match="Failed to connect") as exc_info:
+        asyncio.run(
+            WeaviateDocumentStore.connect(
+                "documents",
+                url="https://weaviate.example:8443",
+                additional_headers={"Authorization": "Bearer super-secret"},
+            )
+        )
+
+    client = fake_client.instances[0]
+    assert exc_info.value.__cause__ is init_failure
+    assert client.close_calls == 2
+    assert all("super-secret" not in repr(entry) for entry in warnings)
+
+
+def test_init_failure_bounds_persistent_cleanup_and_drops_partial_client(fake_client, monkeypatch):
+    init_failure = RuntimeError("collection initialization failed")
+    first_cleanup_failure = RuntimeError("first cleanup secret=super-secret")
+    final_cleanup_failure = RuntimeError("final cleanup secret=super-secret")
+    fake_client.connect_error = init_failure
+    fake_client.close_errors = [first_cleanup_failure, final_cleanup_failure]
+    warnings = []
+    monkeypatch.setattr(weaviate_module.logger, "warning", lambda message, *args: warnings.append((message, args)))
+    store = object.__new__(WeaviateDocumentStore)
+
+    with pytest.raises(RuntimeError, match="collection initialization failed") as exc_info:
+        asyncio.run(
+            store.__init__(
+                url="https://weaviate.example:8443",
+                collection_schema_name="documents",
+                additional_headers={"Authorization": "Bearer super-secret"},
+            )
+        )
+
+    client = fake_client.instances[0]
+    assert exc_info.value is init_failure
+    assert exc_info.value.__cause__ is final_cleanup_failure
+    assert client.close_calls == 2
+    assert store._client is None
+    assert store._close_task is None
+    assert all("super-secret" not in repr(entry) for entry in warnings)
 
 
 @pytest.mark.parametrize(

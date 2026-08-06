@@ -178,8 +178,10 @@ class WeaviateDocumentStore(AsyncConstructor):
                 await self._client.collections.create_from_dict(self.collection_settings)
             self.__collection = self._client.collections.get(collection_schema_name)
             self.collection_name = self.__collection.name
-        except BaseException:
-            await self.close()
+        except BaseException as init_error:
+            cleanup_error = await self._cleanup_failed_initialization()
+            if cleanup_error is not None:
+                raise init_error from cleanup_error
             raise
 
         self._url = normalized_url
@@ -338,6 +340,28 @@ class WeaviateDocumentStore(AsyncConstructor):
                 await self._client.connect()
             except Exception as exc:
                 raise DocumentStoreError("Failed to reconnect async Weaviate client") from exc
+
+    async def _cleanup_failed_initialization(self) -> BaseException | None:
+        client = self._client
+        self._client = None
+        self._close_task = None
+        if client is None:
+            return None
+
+        cleanup_error = None
+        for attempt in range(1, 3):
+            try:
+                await client.close()
+            except BaseException as exc:
+                cleanup_error = exc
+                logger.warning(
+                    "WEAVIATE | initialization cleanup attempt [{}]/[2] failed with [{}]",
+                    attempt,
+                    type(exc).__name__,
+                )
+            else:
+                return None
+        return cleanup_error
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WeaviateDocumentStore":
