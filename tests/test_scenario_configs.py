@@ -7,14 +7,11 @@ from copy import deepcopy
 from pathlib import Path
 from types import ModuleType
 
-_legacy_service = ModuleType("justatom.running.service")
-_legacy_service.RunningService = object
 _training_job = ModuleType("justatom.training.job")
 _training_job.TrainingJob = object
 _training_job.TrainingResult = object
 # Isolate config resolution from training runtime imports.
 _isolated_modules = {
-    "justatom.running.service": _legacy_service,
     "justatom.training.job": _training_job,
 }
 _previous_modules = {name: sys.modules.get(name) for name in _isolated_modules}

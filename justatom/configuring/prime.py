@@ -56,16 +56,6 @@ def _default_config_data() -> dict[str, Any]:
             "LOG_ROTATION": "10 MB",
             "LOG_RETENTION": "10 days",
         },
-        "api": {
-            "model_name_or_path": "${EMBEDDING_MODEL_NAME_OR_PATH}",
-            "prefix_for_queries": "${EMBEDDING_MODEL_QUERY_PREFIX}",
-            "prefix_for_passages": "${EMBEDDING_MODEL_PASSAGE_PREFIX}",
-            "max_seq_len": 512,
-            "gpu_props": {
-                "local_rank": 0,
-                "devices": ["cuda", "mps", "cpu"],
-            },
-        },
         "train": {
             "max_seq_len": 512,
             "index_name": "justatom",
@@ -105,25 +95,6 @@ def _default_config_data() -> dict[str, Any]:
 
 def _normalize_legacy_config(data: dict[str, Any]) -> dict[str, Any]:
     cfg = deepcopy(data)
-    api_cfg = cfg.get("api")
-    if isinstance(api_cfg, dict):
-        embedder_cfg = api_cfg.get("embedder")
-        if isinstance(embedder_cfg, dict):
-            api_cfg.setdefault("model_name_or_path", embedder_cfg.get("model_name_or_path"))
-            api_cfg.setdefault("prefix_for_queries", embedder_cfg.get("prefix_for_queries"))
-            api_cfg.setdefault("prefix_for_passages", embedder_cfg.get("prefix_for_passages"))
-            api_cfg.setdefault("max_seq_len", embedder_cfg.get("max_seq_len"))
-
-        gpu_props = api_cfg.get("gpu_props")
-        if not isinstance(gpu_props, dict):
-            gpu_props = {}
-            api_cfg["gpu_props"] = gpu_props
-
-        if "devices" not in gpu_props:
-            devices = api_cfg.get("devices_to_use")
-            if isinstance(devices, list) and devices:
-                gpu_props["devices"] = devices
-
     train_cfg = cfg.get("train")
     if isinstance(train_cfg, dict):
         train_cfg.setdefault("index_name", "justatom")
@@ -141,7 +112,6 @@ def _build_config_tree(data: dict[str, Any] | None = None) -> ConfigNode:
 @singleton
 class IConfig:
     loguru: ConfigNode
-    api: ConfigNode
     train: ConfigNode
 
     def __init__(self):
