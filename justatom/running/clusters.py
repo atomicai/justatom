@@ -1,6 +1,7 @@
 import asyncio as asio
 import threading
-from collections.abc import Iterator
+from collections.abc import Coroutine, Iterator
+from typing import Any, TypeVar
 
 import numpy as np
 import torch
@@ -16,6 +17,8 @@ from justatom.processing.mask import IProcessor
 from justatom.processing.silo import igniset
 from justatom.retrieval.contracts import Embedder
 from justatom.running.mask import IClusteringRunner, IDimReducer, IDocEmbedder
+
+_T = TypeVar("_T")
 
 
 class DocEmbedder(IDocEmbedder):
@@ -94,30 +97,96 @@ class EmbeddingBackendAdapter(BaseEmbedder):
     def __init__(self, embedder: Embedder):
         super().__init__()
         self.embedder = embedder
+        self._condition = threading.Condition()
+        self._ready = threading.Event()
+        self._loop: asio.AbstractEventLoop | None = None
+        self._startup_error: BaseException | None = None
+        self._active_calls = 0
+        self._closing = False
+        self._closed = False
+        self._thread = threading.Thread(
+            target=self._run_owner_loop,
+            name="justatom-embedding-adapter",
+            daemon=True,
+        )
+        self._thread.start()
+        self._ready.wait()
+        if self._startup_error is not None:
+            raise RuntimeError("Could not start embedding adapter event loop") from self._startup_error
 
-    @staticmethod
-    def _run_async(coro):
+    def _run_owner_loop(self) -> None:
         try:
-            asio.get_running_loop()
-        except RuntimeError:
-            return asio.run(coro)
+            loop = asio.new_event_loop()
+        except BaseException as error:  # pragma: no cover - platform startup failure
+            self._startup_error = error
+            self._ready.set()
+            return
 
-        result: dict[str, object] = {}
-        error: dict[str, BaseException] = {}
+        asio.set_event_loop(loop)
+        with self._condition:
+            self._loop = loop
+        self._ready.set()
 
-        def _runner() -> None:
+        try:
+            loop.run_forever()
+        finally:
             try:
-                result["value"] = asio.run(coro)
-            except BaseException as ex:  # pragma: no cover - passthrough wrapper
-                error["value"] = ex
+                pending = asio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(asio.gather(*pending, return_exceptions=True))
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                loop.run_until_complete(loop.shutdown_default_executor())
+            finally:
+                asio.set_event_loop(None)
+                loop.close()
+                with self._condition:
+                    self._loop = None
+                    self._closed = True
+                    self._condition.notify_all()
 
-        thread = threading.Thread(target=_runner, daemon=True)
-        thread.start()
-        thread.join()
+    def _run_async(self, coro: Coroutine[Any, Any, _T]) -> _T:
+        with self._condition:
+            if self._closing or self._closed:
+                coro.close()
+                raise RuntimeError("Embedding backend adapter is closed")
+            loop = self._loop
+            if loop is None:  # pragma: no cover - guarded by startup synchronization
+                coro.close()
+                raise RuntimeError("Embedding backend adapter event loop is unavailable")
+            self._active_calls += 1
 
-        if "value" in error:
-            raise error["value"]
-        return result.get("value", [])
+        try:
+            try:
+                future = asio.run_coroutine_threadsafe(coro, loop)
+            except BaseException:
+                coro.close()
+                raise
+            return future.result()
+        finally:
+            with self._condition:
+                self._active_calls -= 1
+                if self._active_calls == 0:
+                    self._condition.notify_all()
+
+    def close(self) -> None:
+        if threading.current_thread() is self._thread:
+            raise RuntimeError("Embedding backend adapter cannot close from its owner thread")
+
+        with self._condition:
+            if self._closed:
+                return
+            if self._closing:
+                self._condition.wait_for(lambda: self._closed)
+                return
+            self._closing = True
+            self._condition.wait_for(lambda: self._active_calls == 0)
+            loop = self._loop
+
+        if loop is not None:
+            loop.call_soon_threadsafe(loop.stop)
+        self._thread.join()
 
     def embed(self, documents: list[str], verbose: bool = False) -> np.ndarray:
         del verbose
