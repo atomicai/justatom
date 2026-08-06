@@ -1,10 +1,16 @@
 import asyncio
+import base64
+import copy
 import inspect
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
+from weaviate.collections.classes.batch import DeleteManyReturn
+from weaviate.collections.classes.internal import MetadataReturn, Object
 
 from justatom.etc.errors import DocumentStoreError
+from justatom.etc.schema import Document
 from justatom.retrieval.contracts import DocumentStore
 from justatom.storing import weaviate as weaviate_module
 from justatom.storing.weaviate import WeaviateDocumentStore
@@ -214,6 +220,152 @@ def test_connect_closes_async_client_and_retains_cause_on_connect_failure(fake_c
     assert fake_client.instances[0].close_calls == 1
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:secret@weaviate.example:8443",
+        "https://weaviate.example:8443/v1",
+        "https://weaviate.example:8443?debug=true",
+        "https://weaviate.example:8443#fragment",
+    ],
+)
+def test_connect_rejects_unsafe_url_components_without_logging_them(fake_client, monkeypatch, url):
+    logs = []
+    monkeypatch.setattr(weaviate_module.logger, "info", lambda message, *args: logs.append((message, args)))
+
+    with pytest.raises(DocumentStoreError, match="URL") as exc_info:
+        asyncio.run(WeaviateDocumentStore.connect("documents", url=url))
+
+    assert "secret" not in str(exc_info.value)
+    assert logs == []
+    assert fake_client.instances == []
+
+
+def test_connect_normalizes_root_path_and_does_not_log_the_endpoint(fake_client, monkeypatch):
+    logs = []
+    monkeypatch.setattr(weaviate_module.logger, "info", lambda message, *args: logs.append((message, args)))
+
+    store = asyncio.run(
+        WeaviateDocumentStore.connect(
+            "documents",
+            url="https://weaviate.example:8443/",
+        )
+    )
+
+    params = fake_client.instances[0].constructor_options["connection_params"]
+    assert (params.http.host, params.http.port, params.http.secure) == ("weaviate.example", 8443, True)
+    assert logs == [("WEAVIATE | connecting collection=[{}]", ("documents",))]
+    asyncio.run(store.close())
+
+
+def _sdk_object(*, score=None, certainty=None):
+    return Object(
+        uuid=uuid4(),
+        metadata=MetadataReturn(score=score, certainty=certainty),
+        properties={
+            "_original_id": "doc-1",
+            "content": "document text",
+            "blob_data": base64.b64encode(b"payload").decode(),
+            "blob_mime_type": "text/plain",
+            "meta": {"labels": ["one"], "nested": {"value": 1}},
+        },
+        references=None,
+        vector={"default": [0.1, 0.2]},
+        collection="Documents",
+    )
+
+
+def test_document_conversion_is_repeatable_and_does_not_mutate_sdk_object():
+    store = object.__new__(WeaviateDocumentStore)
+    source = _sdk_object(score=0.75, certainty=0.5)
+    original_properties = copy.deepcopy(source.properties)
+
+    first = store._to_document(source)
+    second = store._to_document(source)
+
+    assert first == second
+    assert first.id == "doc-1"
+    assert first.embedding == [0.1, 0.2]
+    assert source.properties == original_properties
+
+
+def test_write_conversion_does_not_mutate_document_blob():
+    store = object.__new__(WeaviateDocumentStore)
+    document = Document(content="document text", id="doc-1", embedding=[0.1, 0.2])
+    document.blob = {"data": bytearray(b"payload"), "mime_type": "text/plain"}
+    original_blob = copy.deepcopy(document.blob)
+
+    converted = store._to_data_object(document)
+
+    assert converted["blob_data"] == base64.b64encode(b"payload").decode()
+    assert converted["blob_mime_type"] == "text/plain"
+    assert document.blob == original_blob
+
+
+@pytest.mark.parametrize(
+    ("score", "certainty", "expected"),
+    [
+        (0.0, None, 0.0),
+        (None, 0.0, 0.0),
+        (0.4, 0.8, 0.4),
+    ],
+    ids=["bm25-zero-score", "vector-zero-certainty", "hybrid-score-precedence"],
+)
+def test_document_conversion_uses_score_then_certainty(score, certainty, expected):
+    store = object.__new__(WeaviateDocumentStore)
+
+    document = store._to_document(_sdk_object(score=score, certainty=certainty))
+
+    assert document.score == expected
+
+
+class AsyncObjectIterator:
+    def __init__(self, objects=(), error=None):
+        self._objects = iter(objects)
+        self._error = error
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._error is not None:
+            error, self._error = self._error, None
+            raise error
+        try:
+            return next(self._objects)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+def test_filter_documents_consumes_async_iterator_without_awaiting_it():
+    store = object.__new__(WeaviateDocumentStore)
+    source = _sdk_object()
+    calls = []
+
+    def iterator(**kwargs):
+        calls.append(kwargs)
+        return AsyncObjectIterator([source])
+
+    store._WeaviateDocumentStore__collection = SimpleNamespace(iterator=iterator)
+
+    documents = asyncio.run(store.filter_documents())
+
+    assert [document.id for document in documents] == ["doc-1"]
+    assert calls == [{"include_vector": True, "return_properties": None}]
+
+
+def test_filter_documents_wraps_weaviate_query_failure_with_cause():
+    store = object.__new__(WeaviateDocumentStore)
+    failure = weaviate_module.weaviate.exceptions.WeaviateQueryError("offline", "GRPC search")
+    store._WeaviateDocumentStore__collection = SimpleNamespace(
+        iterator=lambda **kwargs: AsyncObjectIterator(error=failure)
+    )
+
+    with pytest.raises(DocumentStoreError, match="Failed to query") as exc_info:
+        asyncio.run(store.filter_documents())
+    assert exc_info.value.__cause__ is failure
+
+
 def test_search_methods_preserve_query_groups_and_include_vectors(fake_client):
     store = asyncio.run(WeaviateDocumentStore.connect("documents", url="http://localhost:2211"))
     store._to_document = lambda value: value
@@ -277,6 +429,67 @@ def test_clear_raises_document_store_error_with_deletion_cause():
     with pytest.raises(DocumentStoreError, match="deleting documents") as exc_info:
         asyncio.run(store.clear())
     assert exc_info.value.__cause__ is failure
+
+
+def test_delete_documents_raises_when_weaviate_reports_failed_objects():
+    store = object.__new__(WeaviateDocumentStore)
+
+    async def ensure_connection():
+        return None
+
+    async def delete_many(**kwargs):
+        return DeleteManyReturn(failed=1, matches=2, objects=None, successful=1)
+
+    store._ensure_async_connection = ensure_connection
+    store._WeaviateDocumentStore__collection = SimpleNamespace(data=SimpleNamespace(delete_many=delete_many))
+
+    with pytest.raises(DocumentStoreError, match="1 of 2"):
+        asyncio.run(store.delete_documents(["doc-1", "doc-2"]))
+
+
+def test_clear_wraps_enumeration_failure_with_cause():
+    failure = RuntimeError("query failed")
+    store = object.__new__(WeaviateDocumentStore)
+    store.collection_settings = {"class": "Documents"}
+
+    async def ensure_connection():
+        return None
+
+    async def get_all_documents():
+        raise failure
+        yield
+
+    store._ensure_async_connection = ensure_connection
+    store.get_all_documents = get_all_documents
+
+    with pytest.raises(DocumentStoreError, match="deleting documents") as exc_info:
+        asyncio.run(store.clear())
+    assert exc_info.value.__cause__ is failure
+
+
+def test_close_failure_propagates_retains_client_and_allows_retry(fake_client):
+    store = asyncio.run(WeaviateDocumentStore.connect("documents", url="http://localhost:2211"))
+    client = fake_client.instances[0]
+    failure = RuntimeError("close failed")
+
+    async def flaky_close():
+        client.close_calls += 1
+        if client.close_calls == 1:
+            raise failure
+        client.connected = False
+
+    client.close = flaky_close
+
+    async def close_concurrently():
+        return await asyncio.gather(store.close(), store.close(), return_exceptions=True)
+
+    results = asyncio.run(close_concurrently())
+    assert results == [failure, failure]
+    assert store._client is client
+
+    asyncio.run(store.close())
+    assert client.close_calls == 2
+    assert store._client is None
 
 
 def test_close_is_idempotent_and_waits_for_cleanup_when_cancelled(fake_client):

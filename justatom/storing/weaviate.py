@@ -4,8 +4,10 @@ import datetime
 import json
 import os
 from collections.abc import Generator, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import weaviate
 from loguru import logger
@@ -147,13 +149,14 @@ class WeaviateDocumentStore(AsyncConstructor):
             client_options["embedded_options"] = embedded_options
 
         try:
+            normalized_url = self._normalize_url(url) if url is not None else None
             connection_params = (
                 weaviate.connect.base.ConnectionParams.from_url(
-                    url=url,
+                    url=normalized_url,
                     grpc_port=grpc_port,
                     grpc_secure=grpc_secure,
                 )
-                if url is not None
+                if normalized_url is not None
                 else None
             )
             self._client = weaviate.WeaviateAsyncClient(
@@ -179,7 +182,7 @@ class WeaviateDocumentStore(AsyncConstructor):
             await self.close()
             raise
 
-        self._url = url
+        self._url = normalized_url
         self._auth_client_secret = auth_client_secret
         self._additional_headers = additional_headers
         self._embedded_options = embedded_options
@@ -247,6 +250,32 @@ class WeaviateDocumentStore(AsyncConstructor):
 
         return port
 
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        try:
+            parsed = urlsplit(url)
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError as exc:
+            raise DocumentStoreError("Invalid Weaviate URL: malformed host or port") from exc
+
+        if parsed.scheme.lower() not in {"http", "https"}:
+            raise DocumentStoreError("Invalid Weaviate URL: scheme must be http or https")
+        if hostname is None:
+            raise DocumentStoreError("Invalid Weaviate URL: host is required")
+        if parsed.username is not None or parsed.password is not None:
+            raise DocumentStoreError("Invalid Weaviate URL: userinfo is not allowed")
+        if parsed.path not in {"", "/"}:
+            raise DocumentStoreError("Invalid Weaviate URL: paths are not allowed")
+        if parsed.query:
+            raise DocumentStoreError("Invalid Weaviate URL: query parameters are not allowed")
+        if parsed.fragment:
+            raise DocumentStoreError("Invalid Weaviate URL: fragments are not allowed")
+
+        normalized_host = f"[{hostname}]" if ":" in hostname else hostname
+        netloc = normalized_host if port is None else f"{normalized_host}:{port}"
+        return urlunsplit((parsed.scheme.lower(), netloc, "", "", ""))
+
     @classmethod
     async def connect(
         cls,
@@ -268,12 +297,14 @@ class WeaviateDocumentStore(AsyncConstructor):
             )
             url = f"http://{weaviate_host}:{weaviate_port}"
 
+        url = cls._normalize_url(url)
+
         normalized_grpc_port = cls._normalize_port(
             grpc_port,
             default=DEFAULT_WEAVIATE_GRPC_PORT,
             setting_name="grpc_port",
         )
-        logger.info("WEAVIATE | connecting collection=[{}] url=[{}]", collection, url)
+        logger.info("WEAVIATE | connecting collection=[{}]", collection)
         try:
             store = await cls(
                 collection_schema_name=collection,
@@ -345,7 +376,7 @@ class WeaviateDocumentStore(AsyncConstructor):
         """
         Converts a Document to a Weaviate data object ready to be saved.
         """
-        data = document.to_dict()
+        data = deepcopy(document.to_dict())
         # Weaviate forces a UUID as an id.
         # We don't know if the id of our Document is a UUID or not, so we save it on a different field
         # and let Weaviate a UUID that we're going to ignore completely.
@@ -382,12 +413,12 @@ class WeaviateDocumentStore(AsyncConstructor):
         """
         Converts a data object read from Weaviate into a Document.
         """
-        document_data = data.properties
+        document_data = deepcopy(data.properties)
         document_data["id"] = document_data.pop("_original_id")
         if isinstance(data.vector, list):
-            document_data["embedding"] = data.vector
+            document_data["embedding"] = deepcopy(data.vector)
         elif isinstance(data.vector, dict):
-            document_data["embedding"] = data.vector.get("default")
+            document_data["embedding"] = deepcopy(data.vector.get("default"))
         else:
             document_data["embedding"] = None
 
@@ -405,15 +436,12 @@ class WeaviateDocumentStore(AsyncConstructor):
             if isinstance(value, datetime.datetime):
                 document_data[key] = value.strftime("%Y-%m-%dT%H:%M:%SZ")
         weaviate_meta = getattr(data, "metadata", None)
-        if getattr(weaviate_meta, "score", None) is not None:
-            # Depending on the type of retrieval we get score from different fields.
-            # score is returned when using BM25 retrieval.
-            # certainty is returned when using embedding retrieval.
-            # TODO: When using hybrid search
-            if weaviate_meta.score is not None:  # type: ignore
-                document_data["score"] = weaviate_meta.score  # type: ignore
-            elif weaviate_meta.certainty is not None:  # type: ignore
-                document_data["score"] = weaviate_meta.certainty  # type: ignore
+        score = getattr(weaviate_meta, "score", None)
+        certainty = getattr(weaviate_meta, "certainty", None)
+        if score is not None:
+            document_data["score"] = score
+        elif certainty is not None:
+            document_data["score"] = certainty
 
         return Document.from_dict(document_data)
 
@@ -426,8 +454,10 @@ class WeaviateDocumentStore(AsyncConstructor):
 
     async def _query(self) -> list[dict[str, Any]]:
         # properties = [p.name for p in self._collection.config.get().properties]
+        result = []
         try:
-            result = await self.__collection.iterator(include_vector=True, return_properties=None)  # type: ignore
+            async for obj in self.__collection.iterator(include_vector=True, return_properties=None):
+                result.append(obj)
         except weaviate.exceptions.WeaviateQueryError as e:
             msg = f"Failed to query documents in Weaviate. Error: {e.message}"
             raise DocumentStoreError(msg) from e
@@ -589,24 +619,32 @@ class WeaviateDocumentStore(AsyncConstructor):
         """
         await self._ensure_async_connection()
         weaviate_ids = [generate_uuid5(doc_id) for doc_id in document_ids]
-        await self.__collection.data.delete_many(where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids))
+        result = await self.__collection.data.delete_many(
+            where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids)
+        )
+        if result.failed > 0:
+            raise DocumentStoreError(
+                f"Weaviate failed to delete {result.failed} of {result.matches} matched documents"
+            )
 
     async def clear(self) -> None:
-        await self._ensure_async_connection()
-        ids = []
-        async for obj in self.get_all_documents():
-            maybe_original_id = obj.properties.get("_original_id")
-            if maybe_original_id is not None:
-                ids.append(maybe_original_id)
-
-        if len(ids) == 0:
-            logger.info(f"Nothing to delete in {self.__collection.name}")
-            return
-
+        collection_name = self.collection_settings.get("class")
         try:
+            await self._ensure_async_connection()
+            ids = []
+            async for obj in self.get_all_documents():
+                maybe_original_id = obj.properties.get("_original_id")
+                if maybe_original_id is not None:
+                    ids.append(maybe_original_id)
+
+            if len(ids) == 0:
+                logger.info(f"Nothing to delete in {self.__collection.name}")
+                return
+
             await self.delete_documents(document_ids=ids)
+        except asio.CancelledError:
+            raise
         except Exception as exc:
-            collection_name = self.collection_settings.get("class")
             raise DocumentStoreError(f"Error deleting documents for {collection_name}") from exc
 
     async def search_keywords(
@@ -707,22 +745,29 @@ class WeaviateDocumentStore(AsyncConstructor):
             client = getattr(self, "_client", None)
             if client is None:
                 return
-            self._client = None
             close_task = asio.create_task(client.close())
             self._close_task = close_task
 
         try:
             await asio.shield(close_task)
-        except asio.CancelledError:
+        except asio.CancelledError as cancellation:
             try:
                 await asio.shield(close_task)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("WEAVIATE | failed to close async client: {}", exc)
+            except BaseException as cleanup_error:
+                if self._close_task is close_task:
+                    self._close_task = None
+                raise cleanup_error from cancellation
+            if self._close_task is close_task:
+                self._client = None
+                self._close_task = None
             raise
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("WEAVIATE | failed to close async client: {}", exc)
-        finally:
-            if close_task.done():
+        except BaseException:
+            if self._close_task is close_task:
+                self._close_task = None
+            raise
+        else:
+            if self._close_task is close_task:
+                self._client = None
                 self._close_task = None
 
 
