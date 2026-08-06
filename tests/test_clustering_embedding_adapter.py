@@ -166,6 +166,7 @@ def test_openai_compatible_embedder_reuses_loop_sensitive_transport_without_netw
     class LoopSensitiveTransport(httpx.AsyncBaseTransport):
         def __init__(self):
             self.loop = None
+            self.close_loop = None
             self.close_calls = 0
 
         async def handle_async_request(self, request):
@@ -186,6 +187,10 @@ def test_openai_compatible_embedder_reuses_loop_sensitive_transport_without_netw
             )
 
         async def aclose(self):
+            loop = asyncio.get_running_loop()
+            if loop is not self.loop:
+                raise RuntimeError("Event loop is closed")
+            self.close_loop = loop
             self.close_calls += 1
 
     transport = LoopSensitiveTransport()
@@ -198,7 +203,36 @@ def test_openai_compatible_embedder_reuses_loop_sensitive_transport_without_netw
     try:
         np.testing.assert_array_equal(adapter.embed(["a"]), np.asarray([[1.0, 1.0]], dtype=np.float32))
         np.testing.assert_array_equal(adapter.embed(["bb"]), np.asarray([[2.0, 1.0]], dtype=np.float32))
-        assert transport.close_calls == 0
+        adapter.close_embedder()
+        adapter.close_embedder()
+
+        assert transport.close_calls == 1
+        assert transport.close_loop is transport.loop
     finally:
         _close_if_supported(adapter)
-        asyncio.run(embedder.close())
+
+
+def test_close_embedder_propagates_errors_and_adapter_can_still_close():
+    class CloseFailingEmbedder(FakeEmbedder):
+        async def close(self):
+            self.close_calls += 1
+            raise RuntimeError("provider close failed")
+
+    embedder = CloseFailingEmbedder()
+    adapter = EmbeddingBackendAdapter(embedder)
+    try:
+        with pytest.raises(RuntimeError, match="provider close failed"):
+            adapter.close_embedder()
+        assert embedder.close_calls == 1
+    finally:
+        adapter.close()
+
+
+def test_close_embedder_rejects_after_adapter_shutdown_without_calling_embedder():
+    embedder = FakeEmbedder()
+    adapter = EmbeddingBackendAdapter(embedder)
+    adapter.close()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        adapter.close_embedder()
+    assert embedder.close_calls == 0

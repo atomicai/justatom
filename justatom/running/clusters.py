@@ -102,6 +102,8 @@ class EmbeddingBackendAdapter(BaseEmbedder):
         self._loop: asio.AbstractEventLoop | None = None
         self._startup_error: BaseException | None = None
         self._active_calls = 0
+        self._embedder_closing = False
+        self._embedder_closed = False
         self._closing = False
         self._closed = False
         self._thread = threading.Thread(
@@ -151,6 +153,9 @@ class EmbeddingBackendAdapter(BaseEmbedder):
             if self._closing or self._closed:
                 coro.close()
                 raise RuntimeError("Embedding backend adapter is closed")
+            if self._embedder_closing or self._embedder_closed:
+                coro.close()
+                raise RuntimeError("Supplied embedder is closed")
             loop = self._loop
             if loop is None:  # pragma: no cover - guarded by startup synchronization
                 coro.close()
@@ -158,17 +163,57 @@ class EmbeddingBackendAdapter(BaseEmbedder):
             self._active_calls += 1
 
         try:
-            try:
-                future = asio.run_coroutine_threadsafe(coro, loop)
-            except BaseException:
-                coro.close()
-                raise
-            return future.result()
+            return self._submit(coro, loop)
         finally:
             with self._condition:
                 self._active_calls -= 1
                 if self._active_calls == 0:
                     self._condition.notify_all()
+
+    @staticmethod
+    def _submit(coro: Coroutine[Any, Any, _T], loop: asio.AbstractEventLoop) -> _T:
+        try:
+            future = asio.run_coroutine_threadsafe(coro, loop)
+        except BaseException:
+            coro.close()
+            raise
+        return future.result()
+
+    def close_embedder(self) -> None:
+        """Close the supplied embedder on its adapter loop before calling close().
+
+        This operation is caller-controlled because the adapter does not own the
+        embedder. Normal adapter close never invokes it implicitly.
+        """
+        if threading.current_thread() is self._thread:
+            raise RuntimeError("Supplied embedder cannot close from the adapter owner thread")
+
+        with self._condition:
+            self._condition.wait_for(lambda: not self._embedder_closing)
+            if self._embedder_closed:
+                return
+            if self._closing or self._closed:
+                raise RuntimeError("Embedding backend adapter is closed")
+
+            self._embedder_closing = True
+            self._condition.wait_for(lambda: self._active_calls == 0)
+            loop = self._loop
+            if loop is None:  # pragma: no cover - guarded by adapter close state
+                self._embedder_closing = False
+                self._condition.notify_all()
+                raise RuntimeError("Embedding backend adapter event loop is unavailable")
+            self._active_calls += 1
+
+        succeeded = False
+        try:
+            self._submit(self.embedder.close(), loop)
+            succeeded = True
+        finally:
+            with self._condition:
+                self._active_calls -= 1
+                self._embedder_closing = False
+                self._embedder_closed = succeeded
+                self._condition.notify_all()
 
     def close(self) -> None:
         if threading.current_thread() is self._thread:
@@ -181,7 +226,7 @@ class EmbeddingBackendAdapter(BaseEmbedder):
                 self._condition.wait_for(lambda: self._closed)
                 return
             self._closing = True
-            self._condition.wait_for(lambda: self._active_calls == 0)
+            self._condition.wait_for(lambda: self._active_calls == 0 and not self._embedder_closing)
             loop = self._loop
 
         if loop is not None:
