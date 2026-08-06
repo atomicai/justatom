@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#justatomstoring" class="md-skip">
+        <a href="#storage" class="md-skip">
           Skip to content
         </a>
       
@@ -515,27 +515,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#files" class="md-nav__link">
+  <a href="#connect-explicitly" class="md-nav__link">
     <span class="md-ellipsis">
-      Files
+      Connect Explicitly
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#when-you-read-this-package" class="md-nav__link">
+  <a href="#runtime-role" class="md-nav__link">
     <span class="md-ellipsis">
-      When You Read This Package
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#why-it-is-separate" class="md-nav__link">
-    <span class="md-ellipsis">
-      Why It Is Separate
+      Runtime Role
     </span>
   </a>
   
@@ -606,27 +597,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#files" class="md-nav__link">
+  <a href="#connect-explicitly" class="md-nav__link">
     <span class="md-ellipsis">
-      Files
+      Connect Explicitly
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#when-you-read-this-package" class="md-nav__link">
+  <a href="#runtime-role" class="md-nav__link">
     <span class="md-ellipsis">
-      When You Read This Package
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#why-it-is-separate" class="md-nav__link">
-    <span class="md-ellipsis">
-      Why It Is Separate
+      Runtime Role
     </span>
   </a>
   
@@ -648,23 +630,34 @@
 
 
 
-<h1 id="justatomstoring">justatom.storing<a class="headerlink" href="#justatomstoring" title="Permanent link">&para;</a></h1>
-<p>The <code>justatom.storing</code> package focuses on persistence and backend-facing storage logic.</p>
-<h2 id="files">Files<a class="headerlink" href="#files" title="Permanent link">&para;</a></h2>
-<ul>
-<li><code>dataset.py</code>: dataset storage and adapter-facing persistence helpers</li>
-<li><code>weaviate.py</code>: Weaviate integration points</li>
-<li><code>mask.py</code>: storage-related support layer</li>
-</ul>
-<h2 id="when-you-read-this-package">When You Read This Package<a class="headerlink" href="#when-you-read-this-package" title="Permanent link">&para;</a></h2>
-<p>Open this part of the codebase when you need to answer questions like:</p>
-<ul>
-<li>how documents are persisted</li>
-<li>how dataset objects are represented for downstream retrieval work</li>
-<li>how Weaviate is wired into the rest of the project</li>
-</ul>
-<h2 id="why-it-is-separate">Why It Is Separate<a class="headerlink" href="#why-it-is-separate" title="Permanent link">&para;</a></h2>
-<p>Keeping storage concerns out of <code>justatom.running</code> and <code>justatom.modeling</code> makes the system easier to swap, test, and reason about.</p>
+<h1 id="storage">Storage<a class="headerlink" href="#storage" title="Permanent link">&para;</a></h1>
+<p><code>WeaviateDocumentStore</code> is the async document-store implementation used by the
+retrieval runtime. It owns one async Weaviate client, creates the collection
+when necessary, and implements document writes, deletes, keyword search, vector
+search, hybrid search, and shutdown.</p>
+<h2 id="connect-explicitly">Connect Explicitly<a class="headerlink" href="#connect-explicitly" title="Permanent link">&para;</a></h2>
+<p>```python
+from justatom.storing.weaviate import WeaviateDocumentStore</p>
+<p>store = await WeaviateDocumentStore.connect(
+    "JustAtom",
+    url="http://localhost:2211",
+    grpc_port=50051,
+)
+try:
+    count = await store.count_documents()
+finally:
+    await store.close()
+```</p>
+<p>When the store is passed to <code>RetrievalRuntime</code>, let the runtime close it through
+<code>async with RetrievalRuntime(...)</code> instead of closing it separately.</p>
+<h2 id="runtime-role">Runtime Role<a class="headerlink" href="#runtime-role" title="Permanent link">&para;</a></h2>
+<p>The store is the <code>DocumentStore</code> component in the public composition:</p>
+<p><code>text
+WeaviateDocumentStore + Embedder -&gt; RetrievalRuntime -&gt; Indexer + Retriever</code></p>
+<p>Keyword mode needs only the store. Vector and hybrid modes also require an
+embedder. Store URLs must be absolute <code>http</code> or <code>https</code> origins, and the
+retrieval config validates collection names, gRPC ports, and unknown keys before
+opening a connection.</p>
 
 
 

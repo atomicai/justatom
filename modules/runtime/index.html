@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#justatomrunning" class="md-skip">
+        <a href="#retrieval-runtime" class="md-skip">
           Skip to content
         </a>
       
@@ -471,27 +471,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#files" class="md-nav__link">
+  <a href="#local-runtime" class="md-nav__link">
     <span class="md-ellipsis">
-      Files
+      Local Runtime
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#mental-model" class="md-nav__link">
+  <a href="#remote-runtime" class="md-nav__link">
     <span class="md-ellipsis">
-      Mental Model
+      Remote Runtime
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#typical-flow" class="md-nav__link">
+  <a href="#strict-config-builder" class="md-nav__link">
     <span class="md-ellipsis">
-      Typical Flow
+      Strict Config Builder
     </span>
   </a>
   
@@ -606,27 +606,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#files" class="md-nav__link">
+  <a href="#local-runtime" class="md-nav__link">
     <span class="md-ellipsis">
-      Files
+      Local Runtime
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#mental-model" class="md-nav__link">
+  <a href="#remote-runtime" class="md-nav__link">
     <span class="md-ellipsis">
-      Mental Model
+      Remote Runtime
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#typical-flow" class="md-nav__link">
+  <a href="#strict-config-builder" class="md-nav__link">
     <span class="md-ellipsis">
-      Typical Flow
+      Strict Config Builder
     </span>
   </a>
   
@@ -648,36 +648,81 @@
 
 
 
-<h1 id="justatomrunning">justatom.running<a class="headerlink" href="#justatomrunning" title="Permanent link">&para;</a></h1>
-<p>The <code>justatom.running</code> package is where orchestration lives. It connects encoders, embeddings, retrievers, evaluators, indexing flows, and service logic.</p>
-<h2 id="files">Files<a class="headerlink" href="#files" title="Permanent link">&para;</a></h2>
-<ul>
-<li><code>encoders.py</code>: encoding orchestration</li>
-<li><code>embeddings/</code>: embedding-related runtime helpers</li>
-<li><code>retriever.py</code>: retrieval flow composition</li>
-<li><code>indexer.py</code>: indexing pipeline logic</li>
-<li><code>evaluator.py</code>: evaluation runtime layer</li>
-<li><code>service.py</code>: service wrappers and runtime glue</li>
-<li><code>llm.py</code>: LLM-facing runtime helpers</li>
-<li><code>clusters.py</code>: clustering-oriented runtime flows</li>
-</ul>
-<h2 id="mental-model">Mental Model<a class="headerlink" href="#mental-model" title="Permanent link">&para;</a></h2>
-<p>Think of <code>justatom.running</code> as the coordination layer between:</p>
-<ul>
-<li>package entrypoints in <code>justatom.api</code></li>
-<li>raw data structures from <code>justatom.processing</code></li>
-<li>persistence backends from <code>justatom.storing</code></li>
-<li>reusable model code in <code>justatom.modeling</code></li>
-</ul>
-<h2 id="typical-flow">Typical Flow<a class="headerlink" href="#typical-flow" title="Permanent link">&para;</a></h2>
-<ol>
-<li>A CLI command enters through <code>justatom.api</code>.</li>
-<li>Runtime objects inside <code>justatom.running</code> resolve encoders, retrievers, and scenario settings.</li>
-<li>Data is loaded or normalized.</li>
-<li>Results are evaluated, indexed, or served.</li>
-</ol>
-<p>Training orchestration lives in <code>justatom.training</code> and enters through
-<code>justatom.api.train</code>; it is intentionally separate from retrieval runtime.</p>
+<h1 id="retrieval-runtime">Retrieval Runtime<a class="headerlink" href="#retrieval-runtime" title="Permanent link">&para;</a></h1>
+<p>The retrieval runtime is built from direct components rather than a process-wide
+service or string factory. <code>RetrievalRuntime</code> receives a <code>DocumentStore</code>, an
+optional <code>Embedder</code>, a search mode, and a hybrid alpha. It exposes <code>index</code>,
+<code>retrieve</code>, and <code>retrieve_many</code>, while owning the <code>Indexer</code>, mode-specific
+<code>Retriever</code>, and asynchronous cleanup lifecycle.</p>
+<h2 id="local-runtime">Local Runtime<a class="headerlink" href="#local-runtime" title="Permanent link">&para;</a></h2>
+<p>```python
+from justatom.etc.schema import Document
+from justatom.retrieval import EmbeddingProfile, RetrievalRuntime
+from justatom.retrieval.embedders.huggingface import HuggingFaceEmbedder
+from justatom.storing.weaviate import WeaviateDocumentStore</p>
+<p>documents = [Document(content="Документ для локального поиска.")]
+store = await WeaviateDocumentStore.connect("JustAtom", url="http://localhost:2211")
+embedder = HuggingFaceEmbedder(
+    "intfloat/multilingual-e5-small",
+    device="auto",
+    profile=EmbeddingProfile(query_prefix="query: ", document_prefix="passage: "),
+)</p>
+<p>async with RetrievalRuntime(store, embedder, mode="hybrid", alpha=0.5) as runtime:
+    await runtime.index(documents)
+    results = await runtime.retrieve("как устроен индекс", top_k=10)
+```</p>
+<p><code>device="auto"</code> resolves to CUDA, MPS, or CPU as available. Leaving the
+<code>async with</code> block closes the runtime's store and embedder.</p>
+<h2 id="remote-runtime">Remote Runtime<a class="headerlink" href="#remote-runtime" title="Permanent link">&para;</a></h2>
+<p>```python
+import os</p>
+<p>from justatom.etc.schema import Document
+from justatom.retrieval import EmbeddingProfile, RetrievalRuntime
+from justatom.retrieval.embedders.openai_compatible import OpenAICompatibleEmbedder
+from justatom.storing.weaviate import WeaviateDocumentStore</p>
+<p>store = await WeaviateDocumentStore.connect("JustAtom", url="http://localhost:2211")
+embedder = OpenAICompatibleEmbedder(
+    base_url="http://ubuntu-box:8000/v1",
+    model="deployed-embedding-model",
+    api_key=os.getenv("EMBEDDING_API_KEY"),
+    profile=EmbeddingProfile(query_prefix="query: ", document_prefix="passage: "),
+)</p>
+<p>async with RetrievalRuntime(store, embedder, mode="vector") as runtime:
+    await runtime.index([Document(content="Документ для удаленного поиска.")])
+    results = await runtime.retrieve("где работает модель", top_k=10)
+```</p>
+<p>An OpenAI-compatible Triton deployment is used only through its HTTP API. The
+client does not import or require <code>tritonclient</code>, so it can run on macOS while
+the Triton server runs on its supported host.</p>
+<h2 id="strict-config-builder">Strict Config Builder<a class="headerlink" href="#strict-config-builder" title="Permanent link">&para;</a></h2>
+<p>For config-driven applications, <code>build_runtime</code> accepts exactly the retrieval
+keys <code>mode</code>, <code>alpha</code>, <code>embedding</code>, and <code>store</code>. Unknown keys, invalid value
+types, missing stores, missing vector embedders, and unsupported modes fail with
+<code>ConfigurationError</code> before the runtime is built.</p>
+<p>```python
+from justatom.retrieval import build_runtime</p>
+<p>runtime = await build_runtime(
+    {
+        "mode": "vector",
+        "embedding": {
+            "backend": "openai-compatible",
+            "base_url": "http://ubuntu-box:8000/v1",
+            "model": "deployed-embedding-model",
+        },
+        "store": {
+            "collection": "JustAtom",
+            "url": "http://localhost:2211",
+            "grpc_port": 50051,
+        },
+    }
+)
+try:
+    results = await runtime.retrieve("проверочный запрос", top_k=5)
+finally:
+    await runtime.close()
+```</p>
+<p>Use the context-manager form when possible. The explicit <code>try</code>/<code>finally</code> form
+is useful when a framework owns the surrounding lifecycle.</p>
 
 
 
