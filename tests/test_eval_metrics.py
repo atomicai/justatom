@@ -57,7 +57,40 @@ class _DummyKeywordsStore:
         return [self._rankings[q][:top_k] for q in queries]
 
 
+class _MalformedCardinalityRetriever:
+    def __init__(self, result_groups):
+        self.result_groups = result_groups
+        self.calls = []
+
+    async def retrieve_many(self, queries, *, top_k=5, **kwargs):
+        self.calls.append((list(queries), top_k, kwargs))
+        return self.result_groups
+
+
 class EvalMetricsTest(unittest.TestCase):
+    def test_evaluator_rejects_too_few_or_too_many_result_groups(self):
+        for result_groups in ([[]], [[], [], []]):
+            retriever = _MalformedCardinalityRetriever(result_groups)
+            evaluator = EvaluatorRunner(ir=retriever)
+
+            with self.subTest(actual_groups=len(result_groups)):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"Expected 2 result groups, received {len(result_groups)}",
+                ):
+                    asyncio.run(
+                        evaluator.evaluate_topk(
+                            queries=["q1", "q2"],
+                            metrics=None,
+                            metrics_top_k=["HitRate"],
+                            eval_top_k=[1],
+                            top_k=1,
+                            batch_size=2,
+                        )
+                    )
+
+            self.assertEqual(retriever.calls, [(["q1", "q2"], 1, {})])
+
     def test_keywords_retriever_evaluator_metrics_k_1_2_5(self):
         rows = [
             {"content": "Paragraph about Python.", "queries": None},

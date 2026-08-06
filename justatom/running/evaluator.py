@@ -79,7 +79,13 @@ class EvaluatorRunner:
         async for batch_queries in tqdm_asyncio(chunked(queries, n=batch_size)):
             js_batch_queries = [qi for qi in batch_queries if qi is not None]
             res_topk = await self.ir.retrieve_many(js_batch_queries, top_k=retrieval_top_k)
-            for question, docs_topk in zip(js_batch_queries, res_topk, strict=False):
+            if not isinstance(res_topk, list):
+                raise ValueError("Retriever returned a non-list result-group response")
+            if len(res_topk) != len(js_batch_queries):
+                raise ValueError(f"Expected {len(js_batch_queries)} result groups, received {len(res_topk)}")
+            if any(not isinstance(docs_topk, list) for docs_topk in res_topk):
+                raise ValueError("Retriever returned a non-list result group")
+            for question, docs_topk in zip(js_batch_queries, res_topk, strict=True):
                 target = []
                 preds = []
                 indexes = []
