@@ -51,9 +51,72 @@ async def _finish_cleanup(awaitable: Awaitable[object]) -> None:
     cleanup_task = asyncio.ensure_future(awaitable)
     try:
         await asyncio.shield(cleanup_task)
-    except asyncio.CancelledError:
-        await asyncio.shield(cleanup_task)
+    except asyncio.CancelledError as cancellation:
+        if cleanup_task.done():
+            cleanup_task.result()
+            return
+        try:
+            await asyncio.shield(cleanup_task)
+        except BaseException as cleanup_error:
+            raise cancellation from cleanup_error
         raise
+
+
+def _begin_runtime_close(app: Quart) -> asyncio.Task[None] | None:
+    runtime = app.extensions.pop("retrieval_runtime", None)
+    if runtime is None:
+        return None
+    close_task = asyncio.create_task(runtime.close())
+    app.extensions["retrieval_runtime_close_task"] = close_task
+    return close_task
+
+
+async def _rollback_startup(app: Quart, startup_error: BaseException) -> None:
+    app.extensions.pop("retrieval_mq_task", None)
+    close_task = _begin_runtime_close(app)
+    if close_task is None:
+        raise startup_error
+
+    try:
+        await _finish_cleanup(close_task)
+    except asyncio.CancelledError as cancellation:
+        raise startup_error from cancellation
+    except BaseException as cleanup_error:
+        raise startup_error from cleanup_error
+    finally:
+        app.extensions.pop("retrieval_runtime_close_task", None)
+
+    raise startup_error
+
+
+async def _shutdown(app: Quart) -> None:
+    primary_error: BaseException | None = None
+    try:
+        mq_task = app.extensions.pop("retrieval_mq_task", None)
+        if mq_task is not None:
+            if not mq_task.done():
+                mq_task.cancel()
+            try:
+                await asyncio.shield(mq_task)
+            except asyncio.CancelledError:
+                if not mq_task.cancelled():
+                    raise
+            except BaseException as error:
+                primary_error = error
+    except BaseException as error:
+        primary_error = error
+    finally:
+        close_task = _begin_runtime_close(app)
+        if close_task is not None:
+            try:
+                await _finish_cleanup(close_task)
+            except BaseException as close_error:
+                if primary_error is not None:
+                    raise primary_error from close_error
+                raise
+
+    if primary_error is not None:
+        raise primary_error
 
 
 def create_app(
@@ -74,38 +137,35 @@ def create_app(
 
     @app.before_serving
     async def start() -> None:
-        if "retrieval_runtime" not in app.extensions:
-            app.extensions["retrieval_runtime"] = await build_runtime(app.extensions["retrieval_config"])
+        try:
+            if "retrieval_runtime" not in app.extensions:
+                app.extensions["retrieval_runtime"] = await build_runtime(app.extensions["retrieval_config"])
 
-        if not start_mq:
-            return
+            if not start_mq:
+                return
 
-        from justatom.mq.clients.rabbitmq import RabbitMQClient
-        from justatom.mq.settings.rabbitmq import SettingsRabbitMQ
+            from justatom.mq.clients.rabbitmq import RabbitMQClient
+            from justatom.mq.settings.rabbitmq import SettingsRabbitMQ
 
-        client_name = "consumer"
+            client_name = "consumer"
 
-        def receive(message: str, metadata: dict[str, Any]) -> None:
-            del message, metadata
+            def receive(message: str, metadata: dict[str, Any]) -> None:
+                del message, metadata
 
-        client = RabbitMQClient(SettingsRabbitMQ(), client_name=client_name)
-        app.extensions["retrieval_mq_task"] = asyncio.create_task(
-            client.consume_with_callback(callback=receive, routing_key=client_name)
-        )
+            client = RabbitMQClient(SettingsRabbitMQ(), client_name=client_name)
+            app.extensions["retrieval_mq_task"] = asyncio.create_task(
+                client.consume_with_callback(callback=receive, routing_key=client_name)
+            )
+        except BaseException as startup_error:
+            await _rollback_startup(app, startup_error)
 
     @app.after_serving
     async def stop() -> None:
-        mq_task = app.extensions.pop("retrieval_mq_task", None)
-        if mq_task is not None:
-            mq_task.cancel()
-            try:
-                await _finish_cleanup(mq_task)
-            except asyncio.CancelledError:
-                pass
-
-        app_runtime = app.extensions.pop("retrieval_runtime", None)
-        if app_runtime is not None:
-            await _finish_cleanup(app_runtime.close())
+        shutdown_task = app.extensions.get("retrieval_shutdown_task")
+        if shutdown_task is None:
+            shutdown_task = asyncio.create_task(_shutdown(app))
+            app.extensions["retrieval_shutdown_task"] = shutdown_task
+        await _finish_cleanup(shutdown_task)
 
     @app.get("/")
     async def health() -> dict[str, str]:
