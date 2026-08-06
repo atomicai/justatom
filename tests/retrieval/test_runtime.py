@@ -1,4 +1,6 @@
 import asyncio
+import math
+from collections.abc import Mapping
 
 import pytest
 
@@ -7,6 +9,7 @@ from justatom.retrieval.contracts import SearchMode
 from justatom.retrieval.errors import ConfigurationError
 from justatom.retrieval.indexer import Indexer
 from justatom.retrieval.retriever import HybridRetriever, KeywordRetriever, VectorRetriever
+from justatom.retrieval import runtime as runtime_module
 from justatom.retrieval.runtime import RetrievalRuntime
 
 
@@ -61,6 +64,15 @@ class DualProtocolCloseable(CloseableStore):
 
     async def embed_documents(self, texts):
         return [[float(index), 1.0] for index, _ in enumerate(texts)]
+
+
+def _patch_store_connect(monkeypatch, connect):
+    store_class = getattr(runtime_module, "WeaviateDocumentStore", None)
+    if store_class is None:
+        store_class = type("WeaviateDocumentStore", (), {"connect": staticmethod(connect)})
+        monkeypatch.setattr(runtime_module, "WeaviateDocumentStore", store_class, raising=False)
+    else:
+        monkeypatch.setattr(store_class, "connect", connect)
 
 
 def test_runtime_selects_mode_and_closes_resources_once():
@@ -288,5 +300,412 @@ def test_runtime_context_manager_raises_close_failure_over_body_exception():
                 raise ValueError("body failed")
 
         assert isinstance(exc_info.value.__context__, ValueError)
+
+    asyncio.run(exercise())
+
+
+def test_builder_rejects_unknown_keys_before_opening_resources(monkeypatch):
+    opened = []
+
+    async def fake_connect(*args, **kwargs):
+        opened.append((args, kwargs))
+
+    _patch_store_connect(monkeypatch, fake_connect)
+
+    with pytest.raises(ConfigurationError, match="unknown retrieval keys"):
+        asyncio.run(
+            runtime_module.build_runtime({"mode": "keyword", "unknown": True, "store": {"collection": "Docs"}})
+        )
+
+    assert opened == []
+
+
+def test_keyword_builder_never_constructs_an_embedder(monkeypatch):
+    store = CloseableStore()
+
+    async def fake_connect(*args, **kwargs):
+        return store
+
+    _patch_store_connect(monkeypatch, fake_connect)
+    monkeypatch.setattr(
+        runtime_module,
+        "HuggingFaceEmbedder",
+        lambda **kwargs: pytest.fail("local embedder constructed"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "OpenAICompatibleEmbedder",
+        lambda **kwargs: pytest.fail("remote embedder constructed"),
+        raising=False,
+    )
+
+    runtime = asyncio.run(runtime_module.build_runtime({"mode": "keyword", "store": {"collection": "Docs"}}))
+
+    assert runtime.embedder is None
+    asyncio.run(runtime.close())
+
+
+def test_builder_closes_embedder_when_store_connection_fails(monkeypatch):
+    embedder = CloseableEmbedder()
+    monkeypatch.setattr(runtime_module, "HuggingFaceEmbedder", lambda **kwargs: embedder, raising=False)
+
+    async def failed_connect(*args, **kwargs):
+        raise RuntimeError("weaviate unavailable")
+
+    _patch_store_connect(monkeypatch, failed_connect)
+    config = {
+        "mode": "vector",
+        "embedding": {"backend": "local", "model": "local-model"},
+        "store": {"collection": "Docs"},
+    }
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        asyncio.run(runtime_module.build_runtime(config))
+
+    assert embedder.closed == 1
+
+
+def test_builder_maps_local_and_remote_embedding_config(monkeypatch):
+    captures = []
+
+    def fake_local(**kwargs):
+        captures.append(("local", kwargs))
+        return CloseableEmbedder()
+
+    def fake_remote(**kwargs):
+        captures.append(("remote", kwargs))
+        return CloseableEmbedder()
+
+    async def fake_connect(*args, **kwargs):
+        return CloseableStore()
+
+    monkeypatch.setattr(runtime_module, "HuggingFaceEmbedder", fake_local, raising=False)
+    monkeypatch.setattr(runtime_module, "OpenAICompatibleEmbedder", fake_remote, raising=False)
+    _patch_store_connect(monkeypatch, fake_connect)
+
+    local = asyncio.run(
+        runtime_module.build_runtime(
+            {
+                "mode": "vector",
+                "embedding": {
+                    "backend": "local",
+                    "model": "local-model",
+                    "device": "mps",
+                    "query_prefix": "q: ",
+                    "document_prefix": "d: ",
+                },
+                "store": {"collection": "LocalDocs"},
+            }
+        )
+    )
+    remote = asyncio.run(
+        runtime_module.build_runtime(
+            {
+                "mode": "hybrid",
+                "alpha": 0.3,
+                "embedding": {
+                    "backend": "openai-compatible",
+                    "base_url": "http://encoder/v1",
+                    "model": "remote-model",
+                    "api_key": "key",
+                    "timeout": 12,
+                    "encoding_format": "float",
+                    "extra_body": {"pooling": "mean"},
+                },
+                "store": {"collection": "RemoteDocs"},
+            }
+        )
+    )
+
+    assert captures[0][0] == "local"
+    assert captures[0][1]["model"] == "local-model"
+    assert captures[0][1]["device"] == "mps"
+    assert captures[0][1]["profile"].query_prefix == "q: "
+    assert captures[1][0] == "remote"
+    assert captures[1][1]["base_url"] == "http://encoder/v1"
+    assert captures[1][1]["extra_body"] == {"pooling": "mean"}
+    asyncio.run(local.close())
+    asyncio.run(remote.close())
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ([], "retrieval must be a mapping"),
+        ({"mode": "keyword", "store": {"collection": "Docs", "unknown": True}}, "unknown store keys"),
+        (
+            {
+                "mode": "vector",
+                "embedding": {"backend": "local", "model": "model", "base_url": "http://encoder"},
+                "store": {"collection": "Docs"},
+            },
+            "unknown local embedding keys",
+        ),
+        (
+            {
+                "mode": "vector",
+                "embedding": {"backend": "openai-compatible", "base_url": "http://encoder", "model": "model", "device": "cpu"},
+                "store": {"collection": "Docs"},
+            },
+            "unknown openai-compatible embedding keys",
+        ),
+        ({"mode": "keyword", "store": []}, "store must be a mapping"),
+        ({"mode": "vector", "embedding": [], "store": {"collection": "Docs"}}, "embedding must be a mapping"),
+        ({"mode": "keyword", "store": {"collection": ""}}, "collection must be a non-empty string"),
+        ({"mode": "vector", "store": {"collection": "Docs"}}, "embedding is required"),
+        (
+            {"mode": "vector", "embedding": {"backend": "local", "model": ""}, "store": {"collection": "Docs"}},
+            "model must be a non-empty string",
+        ),
+        (
+            {
+                "mode": "vector",
+                "embedding": {"backend": "openai-compatible", "model": "model"},
+                "store": {"collection": "Docs"},
+            },
+            "base_url is required",
+        ),
+        (
+            {"mode": "vector", "embedding": {"backend": "remote", "model": "model"}, "store": {"collection": "Docs"}},
+            "backend must be 'local' or 'openai-compatible'",
+        ),
+    ],
+)
+def test_builder_validates_exact_config_shape_before_opening_resources(monkeypatch, config, message):
+    async def unexpected_connect(*args, **kwargs):
+        pytest.fail("store connected before configuration validation")
+
+    _patch_store_connect(monkeypatch, unexpected_connect)
+
+    with pytest.raises(ConfigurationError, match=message):
+        asyncio.run(runtime_module.build_runtime(config))
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({"mode": True, "store": {"collection": "Docs"}}, "mode must be a non-empty string"),
+        ({"mode": "invalid", "store": {"collection": "Docs"}}, "Unsupported retrieval mode"),
+        ({"mode": "keyword", "alpha": True, "store": {"collection": "Docs"}}, "alpha must be a finite numeric value"),
+        ({"mode": "keyword", "alpha": math.inf, "store": {"collection": "Docs"}}, "alpha must be a finite numeric value"),
+        ({"mode": "keyword", "alpha": -0.1, "store": {"collection": "Docs"}}, "alpha must be a finite numeric value"),
+        ({"mode": "keyword", "store": {"collection": "Docs", "grpc_port": True}}, "grpc_port must be an integer"),
+        ({"mode": "keyword", "store": {"collection": "Docs", "grpc_port": 0}}, "grpc_port must be in"),
+        ({"mode": "keyword", "store": {"collection": "Docs", "grpc_secure": 1}}, "grpc_secure must be a boolean"),
+        (
+            {
+                "mode": "vector",
+                "embedding": {"backend": "local", "model": "model", "batch_size": True},
+                "store": {"collection": "Docs"},
+            },
+            "batch_size must be a positive integer",
+        ),
+        (
+            {
+                "mode": "vector",
+                "embedding": {"backend": "local", "model": "model", "max_length": 0},
+                "store": {"collection": "Docs"},
+            },
+            "max_length must be a positive integer",
+        ),
+        (
+            {
+                "mode": "vector",
+                "embedding": {
+                    "backend": "openai-compatible",
+                    "base_url": "http://encoder",
+                    "model": "model",
+                    "timeout": True,
+                },
+                "store": {"collection": "Docs"},
+            },
+            "timeout must be a positive finite number",
+        ),
+        (
+            {
+                "mode": "vector",
+                "embedding": {
+                    "backend": "openai-compatible",
+                    "base_url": "http://encoder",
+                    "model": "model",
+                    "extra_body": [],
+                },
+                "store": {"collection": "Docs"},
+            },
+            "extra_body must be a mapping",
+        ),
+    ],
+)
+def test_builder_rejects_invalid_scalar_config_before_opening_resources(monkeypatch, config, message):
+    async def unexpected_connect(*args, **kwargs):
+        pytest.fail("store connected before scalar validation")
+
+    _patch_store_connect(monkeypatch, unexpected_connect)
+
+    with pytest.raises(ConfigurationError, match=message):
+        asyncio.run(runtime_module.build_runtime(config))
+
+
+def test_keyword_builder_validates_supplied_embedding_without_constructing_it(monkeypatch):
+    async def unexpected_connect(*args, **kwargs):
+        pytest.fail("store connected before embedding validation")
+
+    _patch_store_connect(monkeypatch, unexpected_connect)
+    monkeypatch.setattr(
+        runtime_module,
+        "HuggingFaceEmbedder",
+        lambda **kwargs: pytest.fail("embedder constructed"),
+        raising=False,
+    )
+
+    with pytest.raises(ConfigurationError, match="backend must be 'local' or 'openai-compatible'"):
+        asyncio.run(
+            runtime_module.build_runtime(
+                {
+                    "mode": "keyword",
+                    "embedding": {"backend": "invalid", "model": "model"},
+                    "store": {"collection": "Docs"},
+                }
+            )
+        )
+
+
+def test_builder_passes_typed_store_values_and_copies_extra_body(monkeypatch):
+    store = CloseableStore()
+    captured = {}
+    extra_body = {"pooling": "mean"}
+
+    def fake_remote(**kwargs):
+        captured["embedder"] = kwargs
+        return CloseableEmbedder()
+
+    async def fake_connect(*args, **kwargs):
+        captured["store"] = (args, kwargs)
+        return store
+
+    monkeypatch.setattr(runtime_module, "OpenAICompatibleEmbedder", fake_remote, raising=False)
+    _patch_store_connect(monkeypatch, fake_connect)
+    runtime = asyncio.run(
+        runtime_module.build_runtime(
+            {
+                "mode": "vector",
+                "embedding": {
+                    "backend": "openai-compatible",
+                    "base_url": "http://encoder/v1",
+                    "model": "model",
+                    "extra_body": extra_body,
+                },
+                "store": {"collection": "Docs", "grpc_port": 7443, "grpc_secure": True},
+            }
+        )
+    )
+
+    assert captured["store"] == (("Docs",), {"url": None, "grpc_port": 7443, "grpc_secure": True})
+    assert captured["embedder"]["extra_body"] == extra_body
+    assert captured["embedder"]["extra_body"] is not extra_body
+    extra_body["pooling"] = "max"
+    assert captured["embedder"]["extra_body"] == {"pooling": "mean"}
+    assert runtime.store is store
+    asyncio.run(runtime.close())
+
+
+def test_builder_closes_store_and_embedder_when_runtime_construction_fails(monkeypatch):
+    store = CloseableStore()
+    embedder = CloseableEmbedder()
+
+    def failed_runtime(*args, **kwargs):
+        raise RuntimeError("runtime construction failed")
+
+    async def fake_connect(*args, **kwargs):
+        return store
+
+    monkeypatch.setattr(runtime_module, "HuggingFaceEmbedder", lambda **kwargs: embedder, raising=False)
+    _patch_store_connect(monkeypatch, fake_connect)
+    monkeypatch.setattr(runtime_module, "RetrievalRuntime", failed_runtime)
+
+    with pytest.raises(RuntimeError, match="runtime construction failed"):
+        asyncio.run(
+            runtime_module.build_runtime(
+                {
+                    "mode": "vector",
+                    "embedding": {"backend": "local", "model": "model"},
+                    "store": {"collection": "Docs"},
+                }
+            )
+        )
+
+    assert embedder.closed == 1
+    assert store.closed == 1
+
+
+def test_builder_preserves_connection_failure_when_embedder_cleanup_fails(monkeypatch):
+    class FailingCloseEmbedder(CloseableEmbedder):
+        async def close(self):
+            await super().close()
+            raise RuntimeError("embedder cleanup failed")
+
+    embedder = FailingCloseEmbedder()
+
+    async def failed_connect(*args, **kwargs):
+        raise RuntimeError("weaviate unavailable")
+
+    monkeypatch.setattr(runtime_module, "HuggingFaceEmbedder", lambda **kwargs: embedder, raising=False)
+    _patch_store_connect(monkeypatch, failed_connect)
+
+    with pytest.raises(RuntimeError, match="weaviate unavailable") as exc_info:
+        asyncio.run(
+            runtime_module.build_runtime(
+                {
+                    "mode": "vector",
+                    "embedding": {"backend": "local", "model": "model"},
+                    "store": {"collection": "Docs"},
+                }
+            )
+        )
+
+    assert embedder.closed == 1
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "embedder cleanup failed"
+
+
+def test_builder_finishes_failure_cleanup_when_cancelled(monkeypatch):
+    class BlockingCloseEmbedder(CloseableEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.close_started = asyncio.Event()
+            self.release_close = asyncio.Event()
+
+        async def close(self):
+            self.closed += 1
+            self.close_started.set()
+            await self.release_close.wait()
+
+    async def exercise():
+        embedder = BlockingCloseEmbedder()
+
+        async def failed_connect(*args, **kwargs):
+            raise RuntimeError("weaviate unavailable")
+
+        monkeypatch.setattr(runtime_module, "HuggingFaceEmbedder", lambda **kwargs: embedder, raising=False)
+        _patch_store_connect(monkeypatch, failed_connect)
+        task = asyncio.create_task(
+            runtime_module.build_runtime(
+                {
+                    "mode": "vector",
+                    "embedding": {"backend": "local", "model": "model"},
+                    "store": {"collection": "Docs"},
+                }
+            )
+        )
+        await asyncio.wait_for(embedder.close_started.wait(), timeout=1)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+
+        embedder.release_close.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert embedder.closed == 1
 
     asyncio.run(exercise())

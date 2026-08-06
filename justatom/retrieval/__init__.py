@@ -16,7 +16,7 @@ from justatom.retrieval.errors import (
 )
 from justatom.retrieval.indexer import Indexer
 from justatom.retrieval.retriever import HybridRetriever, KeywordRetriever, VectorRetriever
-from justatom.retrieval.runtime import RetrievalRuntime
+from justatom.retrieval.runtime import RetrievalRuntime, build_runtime
 
 __all__ = [
     "ConfigurationError",
@@ -34,6 +34,7 @@ __all__ = [
     "RetrievalRuntime",
     "SearchMode",
     "apply_prefix",
+    "build_runtime",
     "validate_embeddings",
     "VectorRetriever",
 ]
