@@ -77,7 +77,7 @@ class OpenAICompatibleEmbedder:
             vectors.extend(self._parse_response(payload, expected_count=len(chunk)))
         try:
             return validate_embeddings(vectors, expected_count=len(texts))
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             raise EmbeddingResponseError("Embedding response contains invalid embeddings") from exc
 
     @staticmethod

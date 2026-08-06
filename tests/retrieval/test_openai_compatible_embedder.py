@@ -132,3 +132,20 @@ def test_remote_embedder_rejects_non_numeric_embedding_values():
     with pytest.raises(EmbeddingResponseError, match="embeddings"):
         asyncio.run(embedder.embed_documents(["text"]))
     asyncio.run(embedder.close())
+
+
+def test_remote_embedder_rejects_oversized_integer_embedding_values():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [10**400]}]})
+
+    embedder = OpenAICompatibleEmbedder(
+        base_url="http://embedding.test/v1",
+        model="test-model",
+        api_key="top-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(EmbeddingResponseError, match="invalid embeddings") as exc_info:
+        asyncio.run(embedder.embed_documents(["private input text"]))
+    assert "top-secret" not in str(exc_info.value)
+    assert "private input text" not in str(exc_info.value)
+    asyncio.run(embedder.close())
