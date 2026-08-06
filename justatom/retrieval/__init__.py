@@ -14,6 +14,7 @@ from justatom.retrieval.errors import (
     EmbeddingResponseError,
     RetrievalError,
 )
+from justatom.retrieval.indexer import Indexer
 
 __all__ = [
     "ConfigurationError",
@@ -23,6 +24,7 @@ __all__ = [
     "EmbeddingError",
     "EmbeddingProfile",
     "EmbeddingResponseError",
+    "Indexer",
     "Retriever",
     "RetrievalError",
     "SearchMode",
