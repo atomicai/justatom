@@ -1,6 +1,9 @@
 import asyncio
 import math
+import subprocess
+import sys
 from collections.abc import Mapping
+from pathlib import Path
 
 import pytest
 
@@ -346,6 +349,35 @@ def test_keyword_builder_never_constructs_an_embedder(monkeypatch):
     asyncio.run(runtime.close())
 
 
+def test_keyword_builder_with_fake_weaviate_connect_does_not_import_torch():
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import asyncio
+import sys
+
+from justatom.retrieval import runtime as runtime_module
+from justatom.storing.weaviate import WeaviateDocumentStore
+
+class Store:
+    async def close(self):
+        pass
+
+class FakeWeaviateDocumentStore:
+    @classmethod
+    async def connect(cls, *args, **kwargs):
+        return Store()
+
+runtime_module.WeaviateDocumentStore = FakeWeaviateDocumentStore
+runtime = asyncio.run(runtime_module.build_runtime({"mode": "keyword", "store": {"collection": "Docs"}}))
+asyncio.run(runtime.close())
+assert "torch" not in sys.modules
+"""
+
+    completed = subprocess.run([sys.executable, "-c", script], cwd=root, check=False, capture_output=True, text=True)
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_builder_closes_embedder_when_store_connection_fails(monkeypatch):
     embedder = CloseableEmbedder()
     monkeypatch.setattr(runtime_module, "HuggingFaceEmbedder", lambda **kwargs: embedder, raising=False)
@@ -574,7 +606,7 @@ def test_keyword_builder_validates_supplied_embedding_without_constructing_it(mo
 def test_builder_passes_typed_store_values_and_copies_extra_body(monkeypatch):
     store = CloseableStore()
     captured = {}
-    extra_body = {"pooling": "mean"}
+    extra_body = {"options": {"pooling": "mean"}}
 
     def fake_remote(**kwargs):
         captured["embedder"] = kwargs
@@ -604,8 +636,8 @@ def test_builder_passes_typed_store_values_and_copies_extra_body(monkeypatch):
     assert captured["store"] == (("Docs",), {"url": None, "grpc_port": 7443, "grpc_secure": True})
     assert captured["embedder"]["extra_body"] == extra_body
     assert captured["embedder"]["extra_body"] is not extra_body
-    extra_body["pooling"] = "max"
-    assert captured["embedder"]["extra_body"] == {"pooling": "mean"}
+    extra_body["options"]["pooling"] = "max"
+    assert captured["embedder"]["extra_body"] == {"options": {"pooling": "mean"}}
     assert runtime.store is store
     asyncio.run(runtime.close())
 
@@ -637,6 +669,33 @@ def test_builder_closes_store_and_embedder_when_runtime_construction_fails(monke
 
     assert embedder.closed == 1
     assert store.closed == 1
+
+
+def test_builder_closes_shared_store_and_embedder_once_when_runtime_construction_fails(monkeypatch):
+    dependency = DualProtocolCloseable()
+
+    def failed_runtime(*args, **kwargs):
+        raise RuntimeError("runtime construction failed")
+
+    async def fake_connect(*args, **kwargs):
+        return dependency
+
+    monkeypatch.setattr(runtime_module, "HuggingFaceEmbedder", lambda **kwargs: dependency, raising=False)
+    _patch_store_connect(monkeypatch, fake_connect)
+    monkeypatch.setattr(runtime_module, "RetrievalRuntime", failed_runtime)
+
+    with pytest.raises(RuntimeError, match="runtime construction failed"):
+        asyncio.run(
+            runtime_module.build_runtime(
+                {
+                    "mode": "vector",
+                    "embedding": {"backend": "local", "model": "model"},
+                    "store": {"collection": "Docs"},
+                }
+            )
+        )
+
+    assert dependency.closed == 1
 
 
 def test_builder_preserves_connection_failure_when_embedder_cleanup_fails(monkeypatch):
@@ -680,6 +739,7 @@ def test_builder_finishes_failure_cleanup_when_cancelled(monkeypatch):
             self.closed += 1
             self.close_started.set()
             await self.release_close.wait()
+            raise RuntimeError("embedder cleanup failed")
 
     async def exercise():
         embedder = BlockingCloseEmbedder()
@@ -704,8 +764,10 @@ def test_builder_finishes_failure_cleanup_when_cancelled(monkeypatch):
         assert not task.done()
 
         embedder.release_close.set()
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError) as exc_info:
             await task
         assert embedder.closed == 1
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert str(exc_info.value.__cause__) == "embedder cleanup failed"
 
     asyncio.run(exercise())

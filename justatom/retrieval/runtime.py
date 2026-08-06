@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 from justatom.etc.schema import Document
@@ -152,7 +153,10 @@ def _validate_embedding(values: Mapping[str, Any]) -> dict[str, Any]:
 
     normalized = dict(values)
     if "extra_body" in normalized:
-        normalized["extra_body"] = dict(normalized["extra_body"])
+        try:
+            normalized["extra_body"] = deepcopy(normalized["extra_body"])
+        except Exception as error:
+            raise ConfigurationError("extra_body must be safely copyable") from error
     return normalized
 
 
@@ -212,8 +216,9 @@ def _build_embedder(embedding: Mapping[str, Any]) -> Embedder:
 
 async def _close_resources_after_failure(store: DocumentStore | None, embedder: Embedder | None) -> BaseException | None:
     cleanup_error: BaseException | None = None
-    for resource in (embedder, store):
-        if resource is None or resource is embedder and resource is store:
+    resources = (embedder,) if store is embedder else (embedder, store)
+    for resource in resources:
+        if resource is None:
             continue
         try:
             await resource.close()
@@ -227,8 +232,10 @@ async def _cleanup_after_failure(store: DocumentStore | None, embedder: Embedder
     cleanup_task = asyncio.create_task(_close_resources_after_failure(store, embedder))
     try:
         return await asyncio.shield(cleanup_task)
-    except asyncio.CancelledError:
-        await asyncio.shield(cleanup_task)
+    except asyncio.CancelledError as cancellation:
+        cleanup_error = await asyncio.shield(cleanup_task)
+        if cleanup_error is not None:
+            raise cancellation from cleanup_error
         raise
 
 

@@ -57,6 +57,26 @@ def test_remote_embedder_splits_requests_by_profile_batch_size():
     asyncio.run(embedder.close())
 
 
+def test_remote_embedder_owns_a_deep_copy_of_extra_body():
+    extra_body = {"options": {"pooling": "mean"}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["options"] == {"pooling": "mean"}
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    embedder = OpenAICompatibleEmbedder(
+        base_url="http://embedding.test/v1",
+        model="test-model",
+        extra_body=extra_body,
+        transport=httpx.MockTransport(handler),
+    )
+    extra_body["options"]["pooling"] = "max"
+
+    assert asyncio.run(embedder.embed_queries(["query"])) == [[1.0]]
+    asyncio.run(embedder.close())
+
+
 def test_remote_embedder_sanitizes_http_failures():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, text="provider failed: secret document body")

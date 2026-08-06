@@ -23,7 +23,6 @@ from justatom.etc.filters import convert_filters
 from justatom.etc.schema import Document
 from justatom.etc.serialization import default_from_dict, default_to_dict
 from justatom.etc.types import DuplicatePolicy
-from justatom.tooling.stl import AsyncConstructor
 
 DOCUMENT_COLLECTION_PROPERTIES = [
     {"name": "_original_id", "dataType": ["text"]},
@@ -67,7 +66,7 @@ def _to_documents_per_query(results: list[Any], converter) -> list[list[Document
     return response
 
 
-class WeaviateDocumentStore(AsyncConstructor):
+class WeaviateDocumentStore:
     """
     `WeaviateDocumentStore` is a Document Store for Weaviate.
     It can be used with Weaviate Cloud Services or self-hosted instances.
@@ -308,7 +307,8 @@ class WeaviateDocumentStore(AsyncConstructor):
         )
         logger.info("WEAVIATE | connecting collection=[{}]", collection)
         try:
-            store = await cls(
+            store = object.__new__(cls)
+            await store.__init__(
                 collection_schema_name=collection,
                 url=url,
                 grpc_port=normalized_grpc_port,

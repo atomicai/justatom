@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 import httpx
 
 from justatom.retrieval.contracts import EmbeddingProfile, apply_prefix, validate_embeddings
-from justatom.retrieval.errors import EmbeddingBackendError, EmbeddingResponseError
+from justatom.retrieval.errors import ConfigurationError, EmbeddingBackendError, EmbeddingResponseError
 
 
 class OpenAICompatibleEmbedder:
@@ -25,7 +26,10 @@ class OpenAICompatibleEmbedder:
         self.model = model
         self.profile = profile or EmbeddingProfile()
         self.encoding_format = encoding_format
-        self.extra_body = dict(extra_body or {})
+        try:
+            self.extra_body = deepcopy(dict(extra_body or {}))
+        except Exception as error:
+            raise ConfigurationError("extra_body must be safely copyable") from error
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
