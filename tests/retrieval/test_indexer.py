@@ -78,12 +78,71 @@ def test_indexer_preserves_write_failure_as_cause():
     assert str(exc_info.value.__cause__) == "write failed"
 
 
-@pytest.mark.parametrize("parameter,value", [("batch_size", 0), ("batch_size", True), ("max_parallel_writes", -1), ("max_parallel_writes", True)])
-def test_indexer_rejects_non_positive_or_boolean_batch_settings(parameter, value):
+@pytest.mark.parametrize(
+    "parameter,value",
+    [
+        ("batch_size", 0),
+        ("batch_size", -1),
+        ("batch_size", True),
+        ("batch_size", 1.5),
+        ("batch_size", "1"),
+        ("batch_size", None),
+        ("max_parallel_writes", 0),
+        ("max_parallel_writes", -1),
+        ("max_parallel_writes", True),
+        ("max_parallel_writes", 1.5),
+        ("max_parallel_writes", "1"),
+        ("max_parallel_writes", None),
+    ],
+)
+def test_indexer_rejects_non_positive_boolean_or_non_integer_batch_settings(parameter, value):
     kwargs = {parameter: value}
 
     with pytest.raises(ConfigurationError, match=parameter):
         asyncio.run(Indexer(FakeStore()).index([], **kwargs))
+
+
+def test_indexer_reports_later_failed_batch_index_and_preserves_its_cause():
+    class LaterFailingStore:
+        def __init__(self):
+            self.batch_zero_started = asyncio.Event()
+            self.batch_zero_may_complete = asyncio.Event()
+            self.batch_zero_completed = asyncio.Event()
+            self.batch_one_started = asyncio.Event()
+            self.batch_one_may_fail = asyncio.Event()
+
+        async def write_documents(self, documents):
+            if documents[0].content == "doc-0":
+                self.batch_zero_started.set()
+                await self.batch_zero_may_complete.wait()
+                self.batch_zero_completed.set()
+                return 1
+            if documents[0].content == "doc-1":
+                self.batch_one_started.set()
+                await self.batch_one_may_fail.wait()
+                raise DocumentStoreError("batch one failed")
+            raise AssertionError("Unexpected batch")
+
+    async def exercise():
+        store = LaterFailingStore()
+        index_task = asyncio.create_task(
+            Indexer(store).index(
+                [{"content": "doc-0"}, {"content": "doc-1"}],
+                batch_size=1,
+                max_parallel_writes=2,
+            )
+        )
+        await asyncio.wait_for(asyncio.gather(store.batch_zero_started.wait(), store.batch_one_started.wait()), timeout=1)
+        store.batch_zero_may_complete.set()
+        assert await asyncio.wait_for(store.batch_zero_completed.wait(), timeout=1)
+        store.batch_one_may_fail.set()
+
+        with pytest.raises(DocumentStoreError, match="batch 1") as exc_info:
+            await index_task
+        assert isinstance(exc_info.value.__cause__, DocumentStoreError)
+        assert str(exc_info.value.__cause__) == "batch one failed"
+
+    asyncio.run(exercise())
 
 
 def test_indexer_cancels_pending_writes_and_stops_stream_consumption_after_failure():
