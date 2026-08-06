@@ -135,10 +135,10 @@ class HuggingFaceEmbedder:
         self._lifecycle_lock = asyncio.Lock()
         self._idle = asyncio.Event()
         self._idle.set()
-        self._close_complete = asyncio.Event()
         self._active_encodes = 0
         self._closing = False
         self._closed = False
+        self._finalization_task: asyncio.Task[None] | None = None
 
     async def embed_queries(self, texts: Sequence[str]) -> list[list[float]]:
         return await self._embed(texts, prefix=self.profile.query_prefix)
@@ -150,16 +150,14 @@ class HuggingFaceEmbedder:
         async with self._lifecycle_lock:
             if self._closed:
                 return
-            if self._closing:
-                wait_for_close = True
-            else:
+            if self._finalization_task is None:
                 self._closing = True
-                wait_for_close = False
+                self._finalization_task = asyncio.create_task(self._finalize_close())
+            finalization_task = self._finalization_task
 
-        if wait_for_close:
-            await self._close_complete.wait()
-            return
+        await asyncio.shield(finalization_task)
 
+    async def _finalize_close(self) -> None:
         await self._idle.wait()
         async with self._lifecycle_lock:
             encoder = self._encoder
@@ -171,7 +169,6 @@ class HuggingFaceEmbedder:
         finally:
             async with self._lifecycle_lock:
                 self._closed = True
-                self._close_complete.set()
 
     async def _acquire_encoder(self) -> _LocalEncoder:
         async with self._lifecycle_lock:

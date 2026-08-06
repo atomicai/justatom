@@ -104,3 +104,32 @@ def test_close_waits_for_active_encode_and_only_closes_once(monkeypatch):
         assert encoder.closed == 1
 
     asyncio.run(exercise())
+
+
+def test_cancelled_close_cannot_abandon_shutdown(monkeypatch):
+    encoder = BlockingEncoder()
+    monkeypatch.setattr(module, "_build_local_encoder", lambda *args: encoder)
+
+    async def exercise():
+        embedder = module.HuggingFaceEmbedder(model="local-model", device="cpu")
+        embed_task = asyncio.create_task(embedder.embed_documents(["one"]))
+        assert await asyncio.to_thread(encoder.started.wait, 1)
+        close_task = asyncio.create_task(embedder.close())
+
+        try:
+            await asyncio.sleep(0)
+            assert not close_task.done()
+            close_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await close_task
+
+            encoder.release.set()
+            assert await embed_task == [[3.0, 1.0]]
+            await asyncio.wait_for(embedder.close(), timeout=1)
+            assert encoder.closed == 1
+            with pytest.raises(RuntimeError, match="closed"):
+                await embedder.embed_documents(["two"])
+        finally:
+            encoder.release.set()
+
+    asyncio.run(exercise())
