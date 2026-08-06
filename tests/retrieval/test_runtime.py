@@ -55,6 +55,14 @@ class CloseableEmbedder:
         return [[float(index), 1.0] for index, _ in enumerate(texts)]
 
 
+class DualProtocolCloseable(CloseableStore):
+    async def embed_queries(self, texts):
+        return [[float(index), 1.0] for index, _ in enumerate(texts)]
+
+    async def embed_documents(self, texts):
+        return [[float(index), 1.0] for index, _ in enumerate(texts)]
+
+
 def test_runtime_selects_mode_and_closes_resources_once():
     store = CloseableStore()
     embedder = CloseableEmbedder()
@@ -148,6 +156,30 @@ def test_runtime_closes_store_when_embedder_close_fails_and_retains_later_failur
     assert store.closed == 1
     assert isinstance(exc_info.value.__cause__, RuntimeError)
     assert str(exc_info.value.__cause__) == "store close failed"
+
+
+def test_runtime_closes_shared_store_and_embedder_once():
+    dependency = DualProtocolCloseable()
+    runtime = RetrievalRuntime(store=dependency, embedder=dependency, mode="vector")
+
+    asyncio.run(runtime.close())
+
+    assert dependency.closed == 1
+
+
+def test_runtime_reraises_shared_dependency_close_failure_without_retrying_close():
+    class FailingDualProtocolCloseable(DualProtocolCloseable):
+        async def close(self):
+            self.closed += 1
+            raise RuntimeError("shared close failed")
+
+    dependency = FailingDualProtocolCloseable()
+    runtime = RetrievalRuntime(store=dependency, embedder=dependency, mode="vector")
+
+    with pytest.raises(RuntimeError, match="shared close failed"):
+        asyncio.run(runtime.close())
+
+    assert dependency.closed == 1
 
 
 def test_runtime_rejects_operations_after_close():

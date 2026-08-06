@@ -118,13 +118,14 @@ class RetrievalRuntime:
                     await self.embedder.close()
                 except BaseException as error:
                     first_error = error
-            try:
-                await self.store.close()
-            except BaseException as error:
-                if first_error is None:
-                    first_error = error
-                else:
-                    later_error = error
+            if self.store is not self.embedder:
+                try:
+                    await self.store.close()
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+                    else:
+                        later_error = error
         finally:
             async with self._lifecycle_lock:
                 self._closed = True
