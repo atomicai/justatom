@@ -475,6 +475,8 @@ Migrate these call sites:
 
 - `justatom/api/eval.py` builds one runtime, evaluates through its retriever, and
   closes the runtime in `finally`/`async with`;
+- `justatom/running/evaluator.py` depends on the new `Retriever` protocol and
+  calls `retrieve_many` for each evaluation batch;
 - `justatom/api/run.py` creates exactly one configured runtime during application
   startup, stores it in application state, and closes it during application
   shutdown. Requests no longer choose model, backend, or collection; deploying
@@ -487,7 +489,8 @@ Migrate these call sites:
 
 `WeaviateDocStore` is renamed to `WeaviateDocumentStore`. Its async construction
 is exposed directly as `await WeaviateDocumentStore.connect(...)`; the `Finder`
-singleton is deleted.
+singleton is deleted. The store retains only the async Weaviate client; the sync
+client and `search_by_keywords_sync` are removed.
 
 Old/new migration example:
 
