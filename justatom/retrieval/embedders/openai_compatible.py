@@ -53,9 +53,7 @@ class OpenAICompatibleEmbedder:
     async def _embed(self, texts: Sequence[str], *, prefix: str) -> list[list[float]]:
         if not texts:
             return []
-        normalized = [
-            apply_prefix(text, prefix, skip_if_present=self.profile.skip_prefix_if_present) for text in texts
-        ]
+        normalized = [apply_prefix(text, prefix, skip_if_present=self.profile.skip_prefix_if_present) for text in texts]
         vectors: list[list[float]] = []
         for start in range(0, len(normalized), self.profile.batch_size):
             chunk = normalized[start : start + self.profile.batch_size]
@@ -67,8 +65,7 @@ class OpenAICompatibleEmbedder:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 raise EmbeddingBackendError(
-                    f"Embedding endpoint {self.base_url!r} failed for model {self.model!r} "
-                    f"with HTTP {exc.response.status_code}"
+                    f"Embedding endpoint {self.base_url!r} failed for model {self.model!r} " f"with HTTP {exc.response.status_code}"
                 ) from exc
             except httpx.HTTPError as exc:
                 raise EmbeddingBackendError(

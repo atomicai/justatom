@@ -136,9 +136,7 @@ class WeaviateDocumentStore:
         client_options.setdefault("skip_init_checks", False)
         if auth_client_secret is not None:
             client_options["auth_client_secret"] = (
-                auth_client_secret.resolve_value()
-                if isinstance(auth_client_secret, AuthCredentials)
-                else auth_client_secret
+                auth_client_secret.resolve_value() if isinstance(auth_client_secret, AuthCredentials) else auth_client_secret
             )
         if additional_config is not None:
             client_options["additional_config"] = additional_config
@@ -643,13 +641,9 @@ class WeaviateDocumentStore:
         """
         await self._ensure_async_connection()
         weaviate_ids = [generate_uuid5(doc_id) for doc_id in document_ids]
-        result = await self.__collection.data.delete_many(
-            where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids)
-        )
+        result = await self.__collection.data.delete_many(where=weaviate.classes.query.Filter.by_id().contains_any(weaviate_ids))
         if result.failed > 0:
-            raise DocumentStoreError(
-                f"Weaviate failed to delete {result.failed} of {result.matches} matched documents"
-            )
+            raise DocumentStoreError(f"Weaviate failed to delete {result.failed} of {result.matches} matched documents")
 
     async def clear(self) -> None:
         collection_name = self.collection_settings.get("class")

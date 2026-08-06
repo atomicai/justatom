@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 from justatom.etc.schema import Document
+from justatom.retrieval import runtime as runtime_module
 from justatom.retrieval.contracts import SearchMode
 from justatom.retrieval.errors import ConfigurationError
 from justatom.retrieval.indexer import Indexer
 from justatom.retrieval.retriever import HybridRetriever, KeywordRetriever, VectorRetriever
-from justatom.retrieval import runtime as runtime_module
 from justatom.retrieval.runtime import RetrievalRuntime
 
 
@@ -142,9 +142,7 @@ def test_hybrid_runtime_selects_hybrid_retriever_and_forwards_alpha():
     assert isinstance(runtime.retriever, HybridRetriever)
     assert [document.content for document in asyncio.run(runtime.retrieve("q", top_k=4))] == ["hybrid:q"]
 
-    assert store.calls == [
-        ("hybrid", ["q"], [[0.0, 1.0]], {"alpha": 0.3, "top_k": 4, "filters": None, "include_vectors": False})
-    ]
+    assert store.calls == [("hybrid", ["q"], [[0.0, 1.0]], {"alpha": 0.3, "top_k": 4, "filters": None, "include_vectors": False})]
 
 
 class FailingCloseEmbedder(CloseableEmbedder):
@@ -316,9 +314,7 @@ def test_builder_rejects_unknown_keys_before_opening_resources(monkeypatch):
     _patch_store_connect(monkeypatch, fake_connect)
 
     with pytest.raises(ConfigurationError, match="unknown retrieval keys"):
-        asyncio.run(
-            runtime_module.build_runtime({"mode": "keyword", "unknown": True, "store": {"collection": "Docs"}})
-        )
+        asyncio.run(runtime_module.build_runtime({"mode": "keyword", "unknown": True, "store": {"collection": "Docs"}}))
 
     assert opened == []
 

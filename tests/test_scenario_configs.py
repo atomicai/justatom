@@ -136,7 +136,7 @@ class ScenarioConfigTest(unittest.TestCase):
             kwargs["retrieval_config"]["store"]["collection"],
             "ModelE5SmallSEPCollectionJustAtom",
         )
-        self.assertIsNone(kwargs["collection_tag"])
+        self.assertNotIn("collection_tag", kwargs)
 
     def test_eval_consumes_collection_tag_before_runtime_builder(self):
         kwargs = resolve_eval_kwargs(
@@ -158,7 +158,7 @@ class ScenarioConfigTest(unittest.TestCase):
 
         store = kwargs["retrieval_config"]["store"]
         self.assertEqual(store["collection"], "ModelE5SmallSEPCollectionJustAtomSEPTagAblationLr1e5")
-        self.assertEqual(kwargs["collection_tag"], "AblationLr1e5")
+        self.assertNotIn("collection_tag", kwargs)
         self.assertNotIn("tag", store)
 
     def test_eval_reuses_prebuilt_training_run_name_from_local_checkpoint_path(self):
@@ -177,7 +177,7 @@ class ScenarioConfigTest(unittest.TestCase):
             kwargs["retrieval_config"]["store"]["collection"],
             "ModelE5SmallSEPCollectionJustAtom",
         )
-        self.assertIsNone(kwargs["collection_tag"])
+        self.assertNotIn("collection_tag", kwargs)
 
     def test_eval_explicit_collection_name_beats_auto_name(self):
         kwargs = resolve_eval_kwargs(

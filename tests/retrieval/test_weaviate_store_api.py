@@ -412,9 +412,7 @@ def test_filter_documents_consumes_async_iterator_without_awaiting_it():
 def test_filter_documents_wraps_weaviate_query_failure_with_cause():
     store = object.__new__(WeaviateDocumentStore)
     failure = weaviate_module.weaviate.exceptions.WeaviateQueryError("offline", "GRPC search")
-    store._WeaviateDocumentStore__collection = SimpleNamespace(
-        iterator=lambda **kwargs: AsyncObjectIterator(error=failure)
-    )
+    store._WeaviateDocumentStore__collection = SimpleNamespace(iterator=lambda **kwargs: AsyncObjectIterator(error=failure))
 
     with pytest.raises(DocumentStoreError, match="Failed to query") as exc_info:
         asyncio.run(store.filter_documents())

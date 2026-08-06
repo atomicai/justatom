@@ -42,9 +42,9 @@ def test_remote_embedder_splits_requests_by_profile_batch_size():
     def handler(request: httpx.Request) -> httpx.Response:
         inputs = json.loads(request.content)["input"]
         batches.append(inputs)
-        return httpx.Response(200, json={
-            "data": [{"index": index, "embedding": [float(len(text))]} for index, text in enumerate(inputs)]
-        })
+        return httpx.Response(
+            200, json={"data": [{"index": index, "embedding": [float(len(text))]} for index, text in enumerate(inputs)]}
+        )
 
     embedder = OpenAICompatibleEmbedder(
         base_url="http://embedding.test/v1",

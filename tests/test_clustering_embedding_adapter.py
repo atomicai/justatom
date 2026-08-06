@@ -178,12 +178,7 @@ def test_openai_compatible_embedder_reuses_loop_sensitive_transport_without_netw
             texts = json.loads(request.content)["input"]
             return httpx.Response(
                 200,
-                json={
-                    "data": [
-                        {"index": index, "embedding": [float(len(text)), 1.0]}
-                        for index, text in enumerate(texts)
-                    ]
-                },
+                json={"data": [{"index": index, "embedding": [float(len(text)), 1.0]} for index, text in enumerate(texts)]},
             )
 
         async def aclose(self):

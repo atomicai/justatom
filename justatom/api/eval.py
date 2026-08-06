@@ -235,7 +235,6 @@ def _cfg_to_main_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
         "limit": dataset.get("limit"),
         "chunk_id_col": dataset.get("chunk_id_col"),
         "keywords_or_phrases_field": dataset.get("keywords_col"),
-        "collection_tag": collection_tag,
         "keywords_nested_col": dataset.get("keywords_nested_col"),
         "explanation_nested_col": dataset.get("explanation_nested_col"),
         "drop_columns": dataset.get("drop_columns"),
