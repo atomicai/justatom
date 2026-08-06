@@ -15,6 +15,7 @@ from justatom.retrieval.errors import (
     RetrievalError,
 )
 from justatom.retrieval.indexer import Indexer
+from justatom.retrieval.retriever import HybridRetriever, KeywordRetriever, VectorRetriever
 
 __all__ = [
     "ConfigurationError",
@@ -25,9 +26,12 @@ __all__ = [
     "EmbeddingProfile",
     "EmbeddingResponseError",
     "Indexer",
+    "HybridRetriever",
+    "KeywordRetriever",
     "Retriever",
     "RetrievalError",
     "SearchMode",
     "apply_prefix",
     "validate_embeddings",
+    "VectorRetriever",
 ]

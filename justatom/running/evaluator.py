@@ -6,7 +6,7 @@ from torchmetrics.retrieval import RetrievalHitRate, RetrievalMAP, RetrievalMRR,
 from tqdm.asyncio import tqdm_asyncio
 
 from justatom.modeling.metrics import IAdditiveMetric
-from justatom.running.mask import IEvaluatorRunner, IRetrieverRunner
+from justatom.retrieval.contracts import Retriever
 
 
 def _normalize_metric_name(metric_name: str) -> str:
@@ -36,9 +36,9 @@ def _build_metric(metric_name: str, top_k: int):
     raise ValueError(f"Unknown retrieval metric '{metric_name}'")
 
 
-class EvaluatorRunner(IEvaluatorRunner):
-    def __init__(self, ir: IRetrieverRunner):
-        super().__init__(ir=ir)
+class EvaluatorRunner:
+    def __init__(self, ir: Retriever):
+        self.ir = ir
         self.metrics = dict()
 
     @torch.no_grad()
@@ -78,7 +78,7 @@ class EvaluatorRunner(IEvaluatorRunner):
         retrieval_top_k = max([top_k, *eval_top_k])
         async for batch_queries in tqdm_asyncio(chunked(queries, n=batch_size)):
             js_batch_queries = [qi for qi in batch_queries if qi is not None]
-            res_topk = await self.ir.retrieve_topk(queries=js_batch_queries, batch_size=batch_size, top_k=retrieval_top_k)
+            res_topk = await self.ir.retrieve_many(js_batch_queries, top_k=retrieval_top_k)
             for question, docs_topk in zip(js_batch_queries, res_topk, strict=False):
                 target = []
                 preds = []

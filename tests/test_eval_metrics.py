@@ -1,25 +1,10 @@
 import asyncio
 import math
-import sys
-import types
 import unittest
 
-# Provide lightweight stub for optional dependency required by justatom.running.mask
-if "bertopic" not in sys.modules:
-    bertopic_mod = types.ModuleType("bertopic")
-    backend_mod = types.ModuleType("bertopic.backend")
-
-    class _BaseEmbedder:  # pragma: no cover
-        pass
-
-    backend_mod.BaseEmbedder = _BaseEmbedder
-    bertopic_mod.backend = backend_mod
-    sys.modules["bertopic"] = bertopic_mod
-    sys.modules["bertopic.backend"] = backend_mod
-
 from justatom.etc.schema import Document
+from justatom.retrieval.retriever import KeywordRetriever
 from justatom.running.evaluator import EvaluatorRunner
-from justatom.running.retriever import KeywordsRetriever
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 
@@ -61,14 +46,14 @@ class _DummyKeywordsStore:
             ],
         }
 
-    async def search_by_keywords(
+    async def search_keywords(
         self,
         queries: list[str],
-        top_k: int = 5,
+        *,
+        top_k: int,
         filters: dict | None = None,
-        keywords: list[str] | None = None,
     ):
-        del filters, keywords
+        del filters
         return [self._rankings[q][:top_k] for q in queries]
 
 
@@ -99,7 +84,7 @@ class EvalMetricsTest(unittest.TestCase):
         queries = DatasetRecordAdapter.extract_labels(docs)
         self.assertEqual(queries, ["cat diet", "dog training", "planet facts"])
 
-        retriever = KeywordsRetriever(store=_DummyKeywordsStore())
+        retriever = KeywordRetriever(store=_DummyKeywordsStore())
         evaluator = EvaluatorRunner(ir=retriever)
         metrics = asyncio.run(
             evaluator.evaluate_topk(
