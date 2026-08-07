@@ -66,19 +66,41 @@ def test_launcher_forwards_config_with_exact_selected_profile(tmp_path, mode):
 
 
 @pytest.mark.parametrize(
-    "args",
-    [
-        ["cpu,cuda", "config"],
-        ["cpu", "cuda", "config"],
-    ],
+    "mode",
+    ["cpu,cuda", "external,cpu"],
 )
-def test_launcher_rejects_multiple_backend_modes_before_docker(tmp_path, args):
+def test_launcher_rejects_comma_separated_backend_modes_before_docker(tmp_path, mode):
     env, docker_log = _launcher_env(tmp_path)
 
-    result = _run_launcher(args, env)
+    result = _run_launcher([mode, "config"], env)
 
     assert result.returncode != 0
     assert "exactly one embedding mode" in result.stderr
+    assert not docker_log.exists()
+
+
+@pytest.mark.parametrize("mode", ["external", "cuda"])
+def test_launcher_rejects_global_option_in_command_position_before_docker(tmp_path, mode):
+    env, docker_log = _launcher_env(tmp_path)
+
+    result = _run_launcher([mode, "--ansi", "never", "up"], env)
+
+    assert result.returncode != 0
+    assert "unsupported compose command" in result.stderr
+    assert not docker_log.exists()
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["create", "start", "restart", "scale", "run", "exec", "watch"],
+)
+def test_launcher_rejects_unsupported_runtime_commands_before_docker(tmp_path, command):
+    env, docker_log = _launcher_env(tmp_path)
+
+    result = _run_launcher(["cpu", command, "api"], env)
+
+    assert result.returncode != 0
+    assert "unsupported compose command" in result.stderr
     assert not docker_log.exists()
 
 
@@ -97,6 +119,63 @@ def test_launcher_rejects_manual_profile_arguments_before_docker(tmp_path, args)
     assert result.returncode != 0
     assert "--profile is not supported" in result.stderr
     assert not docker_log.exists()
+
+
+@pytest.mark.parametrize(
+    ("command", "command_args"),
+    [
+        ("up", ["-d"]),
+        ("down", ["--remove-orphans"]),
+        ("config", ["--quiet"]),
+        ("build", ["--pull"]),
+        ("ps", ["--all"]),
+        ("logs", ["--tail", "10", "api"]),
+    ],
+)
+def test_launcher_forwards_supported_commands(tmp_path, command, command_args):
+    env, docker_log = _launcher_env(tmp_path)
+
+    result = _run_launcher(["cpu", command, *command_args], env)
+
+    assert result.returncode == 0, result.stderr
+    assert docker_log.read_text(encoding="utf-8").splitlines() == [
+        "COMPOSE_PROFILES=cpu",
+        "arg=compose",
+        f"arg={command}",
+        *(f"arg={arg}" for arg in command_args),
+    ]
+
+
+def test_launcher_does_not_treat_post_command_mode_value_as_another_selection(tmp_path):
+    env, docker_log = _launcher_env(tmp_path)
+
+    result = _run_launcher(["cpu", "logs", "cuda"], env)
+
+    assert result.returncode == 0, result.stderr
+    assert "arg=cuda" in docker_log.read_text(encoding="utf-8").splitlines()
+
+
+@pytest.mark.parametrize("command", ["down", "config", "build", "ps", "logs"])
+def test_external_non_runtime_commands_do_not_require_embedding_url(tmp_path, command):
+    env, docker_log = _launcher_env(tmp_path)
+
+    result = _run_launcher(["external", command], env)
+
+    assert result.returncode == 0, result.stderr
+    assert docker_log.exists()
+
+
+@pytest.mark.parametrize("command", ["down", "config", "build", "ps", "logs"])
+def test_cuda_non_runtime_commands_do_not_require_runtime_host(tmp_path, command):
+    env, docker_log = _launcher_env(tmp_path)
+    bin_dir = Path(env["PATH"].split(os.pathsep)[0])
+    _write_executable(bin_dir / "uname", "#!/bin/sh\necho Darwin\n")
+    _write_executable(bin_dir / "nvidia-smi", "#!/bin/sh\nexit 1\n")
+
+    result = _run_launcher(["cuda", command], env)
+
+    assert result.returncode == 0, result.stderr
+    assert docker_log.exists()
 
 
 def test_external_up_requires_embedding_base_url_before_docker(tmp_path):

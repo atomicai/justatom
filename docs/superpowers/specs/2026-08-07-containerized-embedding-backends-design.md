@@ -135,14 +135,16 @@ Managed profiles require Docker Compose 2.20 or newer because the API uses optio
 Compose always supports `api` and `weaviate`. The supported operational entrypoint is:
 
 ```text
-scripts/services.sh <external|cpu|cuda> <compose-command> [compose args...]
+scripts/services.sh <external|cpu|cuda> <up|down|config|build|ps|logs> [compose args...]
 ```
 
-The launcher overwrites `COMPOSE_PROFILES` with exactly the selected mode before invoking Compose. It rejects comma-separated or repeated modes and rejects passthrough `--profile`/`--profile=...` arguments so Compose service selection and API startup validation receive the same value. Direct raw `docker compose` profile selection is a low-level, unsupported interface. The in-API profile validator remains as defense in depth.
+The launcher is deliberately bounded. The command must be the token immediately after the single `external`, `cpu`, or `cuda` mode; leading/global Compose options and commands outside `up`, `down`, `config`, `build`, `ps`, and `logs` are rejected before Docker is invoked. Options and argument values after a supported command are forwarded unchanged except that `--profile` and `--profile=...` are rejected anywhere. The launcher overwrites inherited `COMPOSE_PROFILES` with exactly the selected mode so Compose service selection and API startup validation receive the same value.
+
+`up` is the only supported command that starts workloads and is idempotent for initial startup and subsequent reconciliation. Operators use `up` instead of `create`, `start`, `restart`, `scale`, or `watch`. `run`, `exec`, global Compose options, and direct raw `docker compose` remain low-level/unsupported interfaces. The in-API profile validator remains as defense in depth.
 
 ### External or native backend
 
-Set `EMBEDDING_BASE_URL` to an existing OpenAI-compatible server. On Docker Desktop for macOS, a native MPS server is reached through `host.docker.internal`. The launcher requires a non-empty URL for commands that start or use the API; config-only validation remains available without starting services.
+Set `EMBEDDING_BASE_URL` to an existing OpenAI-compatible server. On Docker Desktop for macOS, a native MPS server is reached through `host.docker.internal`. The launcher requires a non-empty URL for external `up`; `down`, `config`, `build`, `ps`, and `logs` do not start workloads and do not require the URL.
 
 ```bash
 EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1 \

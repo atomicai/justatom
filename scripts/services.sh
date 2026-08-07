@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/services.sh <external|cpu|cuda> <compose-command> [compose args...]
+Usage: scripts/services.sh <external|cpu|cuda> <up|down|config|build|ps|logs> [compose args...]
 
 Examples:
   scripts/services.sh cpu up -d --build
@@ -34,25 +34,23 @@ for arg in "$@"; do
       echo "--profile is not supported; select the embedding mode with the first argument" >&2
       exit 2
       ;;
-    external|cpu|cuda)
-      echo "expected exactly one embedding mode; select it only with the first argument" >&2
-      exit 2
-      ;;
   esac
 done
 
 compose_command="$1"
+case "$compose_command" in
+  up|down|config|build|ps|logs) ;;
+  *)
+    echo "unsupported compose command '$compose_command'; expected up, down, config, build, ps, or logs" >&2
+    exit 2
+    ;;
+esac
+
 export COMPOSE_PROFILES="$mode"
 
-if [[ "$mode" == "external" ]]; then
-  case "$compose_command" in
-    up|create|start|restart|run|exec|watch)
-      if [[ -z "${EMBEDDING_BASE_URL:-}" ]]; then
-        echo "EMBEDDING_BASE_URL is required for external mode with '$compose_command'" >&2
-        exit 2
-      fi
-      ;;
-  esac
+if [[ "$mode" == "external" && "$compose_command" == "up" && -z "${EMBEDDING_BASE_URL:-}" ]]; then
+  echo "EMBEDDING_BASE_URL is required for external mode with 'up'" >&2
+  exit 2
 fi
 
 if [[ "$mode" == "cuda" && "$compose_command" == "up" ]]; then
