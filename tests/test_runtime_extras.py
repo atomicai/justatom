@@ -1,10 +1,10 @@
 import sys
-import tomllib
 from pathlib import Path
 
+import pytest
+import tomllib
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
-import pytest
 
 
 def _extras():

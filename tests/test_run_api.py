@@ -274,10 +274,7 @@ def test_delete_delegates_to_runtime_store():
 def test_create_app_loads_explicit_config_path(monkeypatch, tmp_path):
     path = tmp_path / "serve.yaml"
     path.write_text(
-        "retrieval:\n"
-        "  mode: keyword\n"
-        "  store:\n"
-        "    collection: ExplicitConfig\n",
+        "retrieval:\n" "  mode: keyword\n" "  store:\n" "    collection: ExplicitConfig\n",
         encoding="utf-8",
     )
     app = create_app(config_path=path, runtime=FakeRuntime(), start_mq=False)
@@ -309,9 +306,7 @@ def test_create_app_sanitizes_embedding_backend_failures():
     async def scenario():
         app = create_app(runtime=FailingRuntime(), start_mq=False)
         async with app.test_app() as test_app:
-            response = await test_app.test_client().post(
-                "/searching", json={"text": "private query"}
-            )
+            response = await test_app.test_client().post("/searching", json={"text": "private query"})
             body = await response.get_data()
             assert response.status_code == 502
             assert await response.get_json() == {"error": "embedding backend unavailable"}

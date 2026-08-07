@@ -126,10 +126,7 @@ def create_embedding_app(
         return {
             "object": "list",
             "model": resolved.model,
-            "data": [
-                {"object": "embedding", "index": index, "embedding": vector}
-                for index, vector in enumerate(vectors)
-            ],
+            "data": [{"object": "embedding", "index": index, "embedding": vector} for index, vector in enumerate(vectors)],
         }
 
     return app

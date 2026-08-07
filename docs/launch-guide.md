@@ -112,6 +112,8 @@ Starting it elsewhere fails before any workload starts. On non-CUDA hosts, use
 the launcher’s CUDA configuration and platform-build validation only; neither
 establishes CUDA inference.
 
+CUDA mode never falls back to CPU.
+
 ```bash
 scripts/services.sh cuda up -d --build
 ```

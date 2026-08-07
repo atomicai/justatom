@@ -8,7 +8,6 @@ from quart import Quart, request
 
 from justatom.api.hypercorn_server import serve_app
 
-
 MODEL = os.getenv("FAKE_EMBEDDING_MODEL", "fixture-embedding-model")
 PORT = int(os.getenv("FAKE_EMBEDDING_PORT", "18001"))
 app = Quart(__name__, static_folder=None)
@@ -49,10 +48,7 @@ async def embeddings():
     return {
         "object": "list",
         "model": MODEL,
-        "data": [
-            {"object": "embedding", "index": index, "embedding": _vector(text)}
-            for index, text in enumerate(texts)
-        ],
+        "data": [{"object": "embedding", "index": index, "embedding": _vector(text)} for index, text in enumerate(texts)],
     }
 
 

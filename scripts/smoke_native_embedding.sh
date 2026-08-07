@@ -104,9 +104,13 @@ first_response="$(
     -d "$first_request" \
     "http://127.0.0.1:${EMBEDDING_PORT}/v1/embeddings"
 )" || fail "first MPS embedding request failed"
-printf '%s' "$first_response" | jq -e \
-  '.data as $data | ($data | length) == 2 and $data[0].index == 0 and $data[1].index == 1 and ($data[0].embedding | length) > 0 and (($data[0].embedding | length) == ($data[1].embedding | length))' \
-  >/dev/null || fail "first MPS response lacks ordered, non-empty equal dimensions"
+if printf '%s' "$first_response" | grep -Eq '\\u[0-9a-fA-F]{4}'; then
+  fail "first response escaped readable UTF-8 output"
+fi
+first_dimension="$(
+  printf '%s' "$first_response" | jq -er --arg model "$EMBEDDING_MODEL" \
+    'select(.model == $model) | .data as $data | select(($data | length) == 2 and $data[0].index == 0 and $data[1].index == 1 and ($data[0].embedding | length) > 0 and (($data[0].embedding | length) == ($data[1].embedding | length))) | ($data[0].embedding | length)'
+)" || fail "first MPS response lacks model identity, ordered non-empty equal dimensions"
 
 second_request="{\"model\":\"${EMBEDDING_MODEL}\",\"input\":\"повторный русский запрос\",\"encoding_format\":\"float\"}"
 if printf '%s' "$second_request" | grep -Eq '\\u[0-9a-fA-F]{4}'; then
@@ -118,9 +122,14 @@ second_response="$(
     -d "$second_request" \
     "http://127.0.0.1:${EMBEDDING_PORT}/v1/embeddings"
 )" || fail "second MPS embedding request failed"
+if printf '%s' "$second_response" | grep -Eq '\\u[0-9a-fA-F]{4}'; then
+  fail "second response escaped readable UTF-8 output"
+fi
 printf '%s' "$second_response" | jq -e \
-  '.data | length == 1 and .[0].index == 0 and (.[0].embedding | length) > 0' \
-  >/dev/null || fail "second MPS response lacks ordered non-empty dimensions"
+  --arg model "$EMBEDDING_MODEL" \
+  --argjson dimension "$first_dimension" \
+  'select(.model == $model) | .data as $data | select(($data | length) == 1 and $data[0].index == 0 and ($data[0].embedding | length) > 0 and (($data[0].embedding | length) == $dimension))' \
+  >/dev/null || fail "second MPS response lacks model identity, ordered non-empty dimensions, or first-call dimension"
 
 model_loads="$(grep -E -c 'Loading from huggingface hub via|Model found locally at' "$LOG_FILE" || true)"
 [[ "$model_loads" == "1" ]] || fail "expected one model load, observed $model_loads"

@@ -251,9 +251,7 @@ def test_embedding_endpoint_sanitizes_backend_failure():
         app = module.create_embedding_app(settings=settings, embedder=FakeEmbedder(RuntimeError(secret)))
         app.config["PROPAGATE_EXCEPTIONS"] = False
         async with app.test_app() as test_app:
-            response = await test_app.test_client().post(
-                "/v1/embeddings", json={"model": "model", "input": ["русский"]}
-            )
+            response = await test_app.test_client().post("/v1/embeddings", json={"model": "model", "input": ["русский"]})
             body = await response.get_data()
             assert response.status_code == 500
             assert secret.encode() not in body
@@ -288,8 +286,6 @@ def test_embedding_endpoint_rejects_invalid_backend_vectors(texts, vectors):
         async with app.test_app() as test_app:
             response = await test_app.test_client().post("/v1/embeddings", json={"model": "model", "input": texts})
             assert response.status_code == 500
-            assert await response.get_json() == {
-                "error": {"message": "embedding backend failed", "type": "server_error"}
-            }
+            assert await response.get_json() == {"error": {"message": "embedding backend failed", "type": "server_error"}}
 
     asyncio.run(scenario())

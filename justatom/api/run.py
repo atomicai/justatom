@@ -14,7 +14,6 @@ from justatom.configuring.scenarios import load_scenario_config
 from justatom.retrieval.errors import ConfigurationError, EmbeddingBackendError, EmbeddingResponseError
 from justatom.retrieval.runtime import RetrievalRuntime, build_runtime
 
-
 _ENV_PLACEHOLDER = re.compile(r"\$\{([A-Z0-9_]+)\}")
 
 
