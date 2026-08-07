@@ -82,3 +82,12 @@ def test_cpu_smoke_script_uses_launcher_cleanup_and_utf8_assertions():
     assert "WEAVIATE_GRPC_PORT" in script
     assert "Loading from huggingface hub via" in script
     assert "\\\\u" in script
+    assert '.docs[0].meta.topic == "storage"' in script
+
+
+def test_cpu_smoke_script_bounds_readiness_and_inference_requests():
+    script = _read("scripts/smoke_containerized_retrieval.sh")
+    assert "curl --connect-timeout 2 --max-time 5 --fail --silent --show-error" in script
+    assert script.count("curl --connect-timeout 5 --max-time 300 --fail --silent --show-error") == 3
+    assert script.count("--connect-timeout") == 4
+    assert script.count("--max-time") == 4

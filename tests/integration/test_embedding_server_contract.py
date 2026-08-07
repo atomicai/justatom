@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from justatom.api.embedding_server import EmbeddingServerSettings, create_embedding_app
+from justatom.retrieval.contracts import EmbeddingProfile
 from justatom.retrieval.embedders.openai_compatible import OpenAICompatibleEmbedder
 
 
@@ -39,17 +40,26 @@ def test_builtin_server_satisfies_openai_compatible_embedder_contract():
             client = OpenAICompatibleEmbedder(
                 base_url="http://embedder.test/v1",
                 model="model",
+                profile=EmbeddingProfile(
+                    document_prefix="doc: ",
+                    query_prefix="query: ",
+                    batch_size=2,
+                ),
                 transport=transport,
             )
             try:
-                first = await client.embed_documents(["one", "two"])
-                second = await client.embed_queries(["three"])
+                documents = await client.embed_documents(["a", "bbb", "ccccc"])
+                queries = await client.embed_queries(["zz"])
             finally:
                 await client.close()
 
-        assert first == [[3.0, 1.0], [3.0, 1.0]]
-        assert second == [[5.0, 1.0]]
-        assert backend.calls == [["one", "two"], ["three"]]
+        assert documents == [[6.0, 1.0], [8.0, 1.0], [10.0, 1.0]]
+        assert queries == [[9.0, 1.0]]
+        assert backend.calls == [
+            ["doc: a", "doc: bbb"],
+            ["doc: ccccc"],
+            ["query: zz"],
+        ]
         assert backend.closed == 1
 
     asyncio.run(scenario())

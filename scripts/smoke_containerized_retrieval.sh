@@ -26,7 +26,7 @@ wait_http() {
   local url="$2"
   local attempt
   for attempt in $(seq 1 300); do
-    if curl --fail --silent --show-error "$url" >/dev/null 2>&1; then
+    if curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "$url" >/dev/null 2>&1; then
       return 0
     fi
     sleep 2
@@ -49,7 +49,7 @@ wait_http "embedding models" "http://127.0.0.1:${EMBEDDING_PORT}/v1/models"
 wait_http "retrieval API" "http://127.0.0.1:${JUSTATOM_API_PORT}/"
 
 index_response="$(
-  curl --fail --silent --show-error \
+  curl --connect-timeout 5 --max-time 300 --fail --silent --show-error \
     -H 'Content-Type: application/json' \
     -d '{"dataset_name_or_docs":[{"content":"банк негативов расширяет множество негативных примеров при контрастном обучении информационного поиска.","meta":{"topic":"retrieval"}},{"content":"Qwen3 Embedding преобразует запросы и документы в плотные векторные представления.","meta":{"topic":"embeddings"}},{"content":"Weaviate хранит векторы документов и выполняет поиск ближайших соседей.","meta":{"topic":"storage"}}]}' \
     "http://127.0.0.1:${JUSTATOM_API_PORT}/indexing"
@@ -58,7 +58,7 @@ printf '%s' "$index_response" | jq -e '.total_docs == 3' >/dev/null \
   || fail "expected three indexed documents"
 
 search_response="$(
-  curl --fail --silent --show-error \
+  curl --connect-timeout 5 --max-time 300 --fail --silent --show-error \
     -H 'Content-Type: application/json' \
     -d '{"text":"Что даёт банк негативов при обучении поиска?","top_k":2}' \
     "http://127.0.0.1:${JUSTATOM_API_PORT}/searching"
@@ -72,13 +72,13 @@ printf '%s' "$search_response" | grep -Fq 'банк негативов' \
   || fail "Russian result text is missing"
 
 second_response="$(
-  curl --fail --silent --show-error \
+  curl --connect-timeout 5 --max-time 300 --fail --silent --show-error \
     -H 'Content-Type: application/json' \
     -d '{"text":"Где хранятся векторы документов?","top_k":2}' \
     "http://127.0.0.1:${JUSTATOM_API_PORT}/searching"
 )" || fail "second search request failed"
-printf '%s' "$second_response" | jq -e '.docs | length > 0' >/dev/null \
-  || fail "second search returned no documents"
+printf '%s' "$second_response" | jq -e '.docs[0].meta.topic == "storage"' >/dev/null \
+  || fail "storage document was not ranked first"
 
 model_loads="$(
   scripts/services.sh cpu logs --no-color embedder-cpu \
