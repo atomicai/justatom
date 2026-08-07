@@ -60,6 +60,19 @@ def test_app_reuses_one_runtime_for_search_index_and_shutdown():
     asyncio.run(scenario())
 
 
+def test_search_response_serializes_unicode_as_utf8():
+    async def scenario():
+        app = create_app(runtime=FakeRuntime(), start_mq=False)
+        async with app.test_app() as test_app:
+            response = await test_app.test_client().post("/searching", json={"text": "привет"})
+            body = await response.get_data()
+
+        assert "result:привет".encode() in body
+        assert b"\\u043f" not in body
+
+    asyncio.run(scenario())
+
+
 def test_app_builds_runtime_during_lifecycle_only(monkeypatch):
     async def scenario():
         runtime = FakeRuntime()

@@ -127,6 +127,7 @@ def create_app(
     scenario_config = load_scenario_config("serve", config=config)
     retrieval_config = scenario_config["retrieval"]
     app = Quart(__name__, static_folder=None)
+    app.json.ensure_ascii = False
     app.config.setdefault("PROVIDE_AUTOMATIC_OPTIONS", True)
     app.extensions["retrieval_config"] = retrieval_config
     if runtime is not None:
