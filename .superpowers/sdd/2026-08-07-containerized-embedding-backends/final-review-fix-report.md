@@ -5,6 +5,7 @@ Branch: `feature/retrieval-runtime`
 Worktree: `/Users/thebat/IProject/justatom/.worktrees/retrieval-api-qwen`
 Initial fix commit: `98b896e fix: close retrieval final review`
 Re-review fix commit: `22ac4f5 fix: close final re-review blockers`
+Final lifecycle fix commit: `b91a2ad fix: make embed lifecycle cancellation-safe`
 
 ## Delivered
 
@@ -190,3 +191,54 @@ loopback bind. `docker compose ls --all` still matched the earlier snapshot:
 - ShellCheck remains unavailable, and Docker Scout remains unauthenticated.
   Bash parsing/subprocess behavior and all requested local Docker contracts
   passed.
+
+## Accepted-Encode Lifecycle Fix Round
+
+### Delivered
+
+After `_acquire_encoder` returns, `_embed` now creates an independently owned
+operation task without crossing another await. That task owns inference-permit
+acquisition, every batch, validation, inference-permit release, and
+`_release_encoder` in its own `finally`. The caller repeatedly awaits the task
+through `asyncio.shield`, records any finite sequence of caller cancellations,
+consumes operation completion or failure, and only then re-raises the original
+caller cancellation.
+
+Queued cancellation remains supported without transferring lifecycle release
+back to the caller. The caller signals cancellation to the owned operation; if
+inference has not started, the operation withdraws its own pending lock acquire
+and releases its lifecycle count. Once inference has started, the operation
+drains all work and releases both locks before caller cancellation is observed.
+
+The deterministic regression holds `_lifecycle_lock`, cancels during active
+worker execution, releases the worker, observes the owned operation enter
+`_release_encoder`, then cancels the caller again while release is blocked.
+It proves the active count remains owned and `_idle` remains clear until the
+lock is released; afterward the count reaches zero, `_idle` is set, the caller
+raises `CancelledError`, `close()` completes exactly once, and the encoder is
+never closed while active.
+
+### TDD Evidence
+
+- RED: the new focused regression failed `1 failed in 0.48s` (`real 1.67`,
+  `user 1.37`, `sys 0.27`) because the second cancellation completed the caller
+  while `_active_encodes` remained `1` and lifecycle release was blocked.
+- Initial owned-operation GREEN: the new regression passed `1 passed in 0.44s`
+  (`real 1.65`), then the full embedder file correctly exposed a queued-request
+  compatibility regression: `1 failed, 9 passed in 4.52s`.
+- Final GREEN: cancellation signaling lets the owned operation withdraw only
+  its pending inference-lock acquisition. The focused regression passed
+  `1 passed in 0.59s` (`real 1.84`), and the complete embedder file passed
+  `10 passed in 0.47s` (`real 1.70`, `user 1.38`, `sys 0.27`).
+
+### Verification
+
+| Command | Result | Timing / evidence |
+| --- | --- | --- |
+| `pytest tests/retrieval/test_huggingface_embedder.py -q` | pass | `10 passed in 0.47s`; `real 1.70`, `user 1.38`, `sys 0.27` |
+| Final fresh `pytest tests -q` | pass | `525 passed, 9 warnings in 35.60s`; `real 37.77`, `user 13.60`, `sys 4.24` |
+| `make format-check` | pass | `173 files would be left unchanged`; `real 1.57`, `user 4.41`, `sys 1.15` |
+| Working and staged `git diff --check` | pass | no output before implementation commit |
+
+No Docker or model smoke was run in this round, per instruction. The remaining
+environment gaps are unchanged from the preceding sections.
