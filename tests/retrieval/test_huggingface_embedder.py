@@ -309,3 +309,71 @@ def test_repeated_cancellation_drains_started_worker_before_close(monkeypatch):
             await asyncio.gather(*pending, return_exceptions=True)
 
     asyncio.run(exercise())
+
+
+def test_post_drain_cancellation_cannot_abandon_lifecycle_release(monkeypatch):
+    encoder = SequencedBlockingEncoder()
+    monkeypatch.setattr(module, "_build_local_encoder", lambda *args: encoder)
+
+    async def exercise():
+        embedder = module.HuggingFaceEmbedder(model="local-model", device="cpu")
+        release_started = asyncio.Event()
+        original_release = embedder._release_encoder
+
+        async def observed_release():
+            release_started.set()
+            await original_release()
+
+        embedder._release_encoder = observed_release
+        embed_task = asyncio.create_task(embedder.embed_documents(["one"]))
+        close_task = None
+        lifecycle_lock_held = False
+        try:
+            assert await asyncio.to_thread(encoder.entered[0].wait, 1)
+            await embedder._lifecycle_lock.acquire()
+            lifecycle_lock_held = True
+
+            embed_task.cancel()
+            await asyncio.sleep(0)
+            assert not embed_task.done()
+
+            encoder.release[0].set()
+            await asyncio.wait_for(release_started.wait(), timeout=1)
+            assert encoder.active == 0
+            assert embedder._active_encodes == 1
+            assert not embedder._idle.is_set()
+
+            close_task = asyncio.create_task(embedder.close())
+            await asyncio.sleep(0)
+            embed_task.cancel()
+            await asyncio.sleep(0)
+
+            assert not embed_task.done()
+            assert embedder._active_encodes == 1
+            assert not embedder._idle.is_set()
+            assert not close_task.done()
+            assert encoder.closed == 0
+
+            embedder._lifecycle_lock.release()
+            lifecycle_lock_held = False
+
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(embed_task, timeout=1)
+            await asyncio.wait_for(close_task, timeout=1)
+
+            assert embedder._active_encodes == 0
+            assert embedder._idle.is_set()
+            assert encoder.closed == 1
+            assert not encoder.closed_while_active
+        finally:
+            encoder.release[0].set()
+            if lifecycle_lock_held:
+                embedder._lifecycle_lock.release()
+            await asyncio.gather(embed_task, return_exceptions=True)
+            if embedder._active_encodes:
+                await original_release()
+            if close_task is None:
+                close_task = asyncio.create_task(embedder.close())
+            await asyncio.gather(close_task, return_exceptions=True)
+
+    asyncio.run(exercise())

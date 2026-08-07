@@ -205,17 +205,74 @@ class HuggingFaceEmbedder:
                 raise cancellation
             return vectors
 
-    async def _embed(self, texts: Sequence[str], *, prefix: str) -> list[list[float]]:
-        if not texts:
-            return []
-        encoder = await self._acquire_encoder()
+    async def _run_embed_operation(
+        self,
+        encoder: _LocalEncoder,
+        texts: Sequence[str],
+        cancellation_requested: asyncio.Event,
+        *,
+        prefix: str,
+    ) -> list[list[float]] | None:
         try:
             normalized = [apply_prefix(text, prefix, skip_if_present=self.profile.skip_prefix_if_present) for text in texts]
-            async with self._inference_lock:
+            if not await self._acquire_inference_permit(cancellation_requested):
+                return None
+            try:
                 vectors: list[list[float]] = []
                 for start in range(0, len(normalized), self.profile.batch_size):
                     batch = normalized[start : start + self.profile.batch_size]
                     vectors.extend(await self._encode_batch(encoder, batch))
-            return validate_embeddings(vectors, expected_count=len(texts))
+                return validate_embeddings(vectors, expected_count=len(texts))
+            finally:
+                self._inference_lock.release()
         finally:
             await self._release_encoder()
+
+    async def _acquire_inference_permit(self, cancellation_requested: asyncio.Event) -> bool:
+        acquire_task = asyncio.create_task(self._inference_lock.acquire())
+        cancellation_task = asyncio.create_task(cancellation_requested.wait())
+        acquired = False
+        retain_permit = False
+        try:
+            await asyncio.wait((acquire_task, cancellation_task), return_when=asyncio.FIRST_COMPLETED)
+            if cancellation_requested.is_set():
+                return False
+            acquired = await acquire_task
+            retain_permit = True
+            return True
+        finally:
+            if not cancellation_task.done():
+                cancellation_task.cancel()
+            await asyncio.gather(cancellation_task, return_exceptions=True)
+            if not acquire_task.done():
+                acquire_task.cancel()
+            await asyncio.gather(acquire_task, return_exceptions=True)
+            if acquire_task.done() and not acquire_task.cancelled():
+                acquired = acquire_task.result()
+            if acquired and not retain_permit:
+                self._inference_lock.release()
+
+    async def _embed(self, texts: Sequence[str], *, prefix: str) -> list[list[float]]:
+        if not texts:
+            return []
+        encoder = await self._acquire_encoder()
+        cancellation_requested = asyncio.Event()
+        operation = asyncio.create_task(self._run_embed_operation(encoder, texts, cancellation_requested, prefix=prefix))
+        cancellation: asyncio.CancelledError | None = None
+        while True:
+            try:
+                vectors = await asyncio.shield(operation)
+            except asyncio.CancelledError as exc:
+                if cancellation is None:
+                    cancellation = exc
+                cancellation_requested.set()
+                continue
+            except BaseException:
+                if cancellation is not None:
+                    raise cancellation
+                raise
+            if cancellation is not None:
+                raise cancellation
+            if vectors is None:
+                raise RuntimeError("embed operation stopped without caller cancellation")
+            return vectors
