@@ -130,6 +130,8 @@ Invalid device/model configuration fails startup before the readiness endpoint b
 
 ## Docker Compose Modes
 
+Managed profiles require Docker Compose 2.20 or newer because the API uses optional health-checked dependencies for profile-owned embedding services.
+
 Compose always supports `api` and `weaviate`. The embedding backend is selected operationally:
 
 ### External or native backend
@@ -143,7 +145,7 @@ EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1
 ### CPU profile
 
 ```bash
-docker compose --profile cpu up --build
+COMPOSE_PROFILES=cpu docker compose up --build
 ```
 
 The `embedder-cpu` service receives the shared network alias `embedder`, and the API uses `http://embedder:8000/v1`.
@@ -151,7 +153,7 @@ The `embedder-cpu` service receives the shared network alias `embedder`, and the
 ### CUDA profile
 
 ```bash
-docker compose --profile cuda up --build
+COMPOSE_PROFILES=cuda docker compose up --build
 ```
 
 The `embedder-cuda` service receives the same network alias and reserves an NVIDIA GPU through the Compose device specification. CPU and CUDA profiles are mutually exclusive; startup validation rejects enabling both.
