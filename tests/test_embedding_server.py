@@ -25,6 +25,18 @@ class FakeEmbedder:
         self.closed += 1
 
 
+class BlockingCloseEmbedder(FakeEmbedder):
+    def __init__(self):
+        super().__init__()
+        self.close_started = asyncio.Event()
+        self.close_release = asyncio.Event()
+
+    async def close(self):
+        self.closed += 1
+        self.close_started.set()
+        await self.close_release.wait()
+
+
 def test_settings_use_qwen_defaults():
     settings = module.EmbeddingServerSettings.from_env({})
     assert settings.model == "Qwen/Qwen3-Embedding-0.6B"
@@ -91,6 +103,46 @@ def test_embedding_endpoint_returns_ordered_openai_response_and_utf8():
         assert [item["index"] for item in payload["data"]] == [0, 1]
         assert [item["embedding"] for item in payload["data"]] == [[0.0, 6.0], [1.0, 6.0]]
         assert embedder.calls == [["первый", "second"]]
+        assert embedder.closed == 1
+
+    asyncio.run(scenario())
+
+
+def test_embedding_app_builds_model_once_and_closes_once(monkeypatch):
+    async def scenario():
+        built = []
+        embedder = FakeEmbedder()
+
+        def build(settings):
+            built.append(settings)
+            return embedder
+
+        settings = module.EmbeddingServerSettings("model", "cpu", 8, 512)
+        app = module.create_embedding_app(settings=settings, embedder_factory=build)
+        async with app.test_app() as test_app:
+            client = test_app.test_client()
+            await client.post("/v1/embeddings", json={"model": "model", "input": ["one"]})
+            await client.post("/v1/embeddings", json={"model": "model", "input": ["two"]})
+        assert built == [settings]
+        assert embedder.calls == [["one"], ["two"]]
+        assert embedder.closed == 1
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_embedding_shutdown_finishes_one_close():
+    async def scenario():
+        embedder = BlockingCloseEmbedder()
+        settings = module.EmbeddingServerSettings("model", "cpu", 8, 512)
+        app = module.create_embedding_app(settings=settings, embedder=embedder)
+        stop = app.after_serving_funcs[0]
+        stop_task = asyncio.create_task(stop())
+        await embedder.close_started.wait()
+        stop_task.cancel()
+        embedder.close_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await stop_task
+        await stop()
         assert embedder.closed == 1
 
     asyncio.run(scenario())

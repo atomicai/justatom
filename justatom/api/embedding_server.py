@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 from quart import Quart, request
@@ -55,9 +56,28 @@ def build_local_embedder(settings: EmbeddingServerSettings) -> Embedder:
     )
 
 
+EmbedderFactory = Callable[[EmbeddingServerSettings], Embedder]
+
+
+async def _finish_close(app: Quart) -> None:
+    close_task = app.extensions.get("embedding_close_task")
+    if close_task is None:
+        embedder = app.extensions.pop("embedder", None)
+        if embedder is None:
+            return
+        close_task = asyncio.create_task(embedder.close())
+        app.extensions["embedding_close_task"] = close_task
+    try:
+        await asyncio.shield(close_task)
+    except asyncio.CancelledError:
+        await asyncio.shield(close_task)
+        raise
+
+
 def create_embedding_app(
     settings: EmbeddingServerSettings | None = None,
     embedder: Embedder | None = None,
+    embedder_factory: EmbedderFactory = build_local_embedder,
 ) -> Quart:
     resolved = settings or EmbeddingServerSettings.from_env()
     app = Quart(__name__, static_folder=None)
@@ -75,13 +95,11 @@ def create_embedding_app(
     @app.before_serving
     async def start() -> None:
         if "embedder" not in app.extensions:
-            app.extensions["embedder"] = build_local_embedder(resolved)
+            app.extensions["embedder"] = embedder_factory(resolved)
 
     @app.after_serving
     async def stop() -> None:
-        owned = app.extensions.pop("embedder", None)
-        if owned is not None:
-            await owned.close()
+        await _finish_close(app)
 
     @app.get("/health")
     async def health():
