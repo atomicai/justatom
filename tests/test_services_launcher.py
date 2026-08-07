@@ -14,6 +14,19 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def _write_uname(path: Path, *, system: str, machine: str) -> None:
+    _write_executable(
+        path,
+        f"""#!/bin/sh
+case "$1" in
+  -s) echo {system} ;;
+  -m) echo {machine} ;;
+  *) exit 2 ;;
+esac
+""",
+    )
+
+
 def _launcher_env(tmp_path: Path, **overrides: str) -> tuple[dict[str, str], Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -214,7 +227,7 @@ def test_cuda_up_rejects_non_linux_host_before_docker(tmp_path):
 def test_cuda_up_requires_working_nvidia_smi_before_docker(tmp_path):
     env, docker_log = _launcher_env(tmp_path)
     bin_dir = Path(env["PATH"].split(os.pathsep)[0])
-    _write_executable(bin_dir / "uname", "#!/bin/sh\necho Linux\n")
+    _write_uname(bin_dir / "uname", system="Linux", machine="x86_64")
     _write_executable(bin_dir / "nvidia-smi", "#!/bin/sh\nexit 1\n")
 
     result = _run_launcher(["cuda", "up", "-d"], env)
@@ -224,10 +237,24 @@ def test_cuda_up_requires_working_nvidia_smi_before_docker(tmp_path):
     assert not docker_log.exists()
 
 
-def test_cuda_up_runs_after_linux_nvidia_preflight_succeeds(tmp_path):
+def test_cuda_up_rejects_linux_arm64_before_docker(tmp_path):
     env, docker_log = _launcher_env(tmp_path)
     bin_dir = Path(env["PATH"].split(os.pathsep)[0])
-    _write_executable(bin_dir / "uname", "#!/bin/sh\necho Linux\n")
+    _write_uname(bin_dir / "uname", system="Linux", machine="arm64")
+    _write_executable(bin_dir / "nvidia-smi", "#!/bin/sh\nexit 0\n")
+
+    result = _run_launcher(["cuda", "up", "-d"], env)
+
+    assert result.returncode != 0
+    assert "x86_64/amd64" in result.stderr
+    assert not docker_log.exists()
+
+
+@pytest.mark.parametrize("machine", ["x86_64", "amd64"])
+def test_cuda_up_runs_after_linux_amd64_nvidia_preflight_succeeds(tmp_path, machine):
+    env, docker_log = _launcher_env(tmp_path)
+    bin_dir = Path(env["PATH"].split(os.pathsep)[0])
+    _write_uname(bin_dir / "uname", system="Linux", machine=machine)
     _write_executable(bin_dir / "nvidia-smi", "#!/bin/sh\nexit 0\n")
 
     result = _run_launcher(["cuda", "up", "-d"], env)

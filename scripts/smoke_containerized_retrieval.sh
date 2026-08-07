@@ -10,9 +10,93 @@ export JUSTATOM_API_PORT="${JUSTATOM_API_PORT:-15555}"
 export EMBEDDING_PORT="${EMBEDDING_PORT:-18000}"
 export WEAVIATE_HTTP_PORT="${WEAVIATE_HTTP_PORT:-13211}"
 export WEAVIATE_GRPC_PORT="${WEAVIATE_GRPC_PORT:-15051}"
+before_projects=""
+before_projects_ready=false
+
+list_compose_projects() {
+  {
+    docker ps -a --format '{{.Label "com.docker.compose.project"}}'
+    docker volume ls -q --filter label=com.docker.compose.project | while read -r volume; do
+      docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' "$volume"
+    done
+    docker network ls -q --filter label=com.docker.compose.project | while read -r network; do
+      docker network inspect --format '{{index .Labels "com.docker.compose.project"}}' "$network"
+    done
+  } | sed '/^$/d' | sort -u
+}
+
+list_preexisting_compose_projects() {
+  list_compose_projects | awk -v project="$PROJECT" '$0 != project'
+}
+
+project_resources() {
+  docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}"
+  docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}"
+  docker network ls -q --filter "label=com.docker.compose.project=${PROJECT}"
+}
+
+check_ports_are_free() {
+  python - "$JUSTATOM_API_PORT" "$EMBEDDING_PORT" "$WEAVIATE_HTTP_PORT" "$WEAVIATE_GRPC_PORT" <<'PY'
+import socket
+import sys
+
+for value in sys.argv[1:]:
+    port = int(value)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", port))
+PY
+}
 
 cleanup() {
-  scripts/services.sh cpu down -v --remove-orphans >/dev/null 2>&1 || true
+  local main_status=$?
+  local cleanup_failed=0
+  local remaining
+  local after_projects
+
+  trap - EXIT INT TERM
+
+  if ! scripts/services.sh cpu down -v --remove-orphans >/dev/null 2>&1; then
+    printf 'cleanup failure: launcher teardown failed\n' >&2
+    cleanup_failed=1
+  fi
+
+  if ! remaining="$(project_resources)"; then
+    printf 'cleanup failure: could not audit smoke project resources\n' >&2
+    cleanup_failed=1
+  elif [[ -n "$remaining" ]]; then
+    printf 'cleanup failure: smoke project resources remain: %s\n' "$remaining" >&2
+    cleanup_failed=1
+  else
+    printf 'cleanup evidence: project=%s containers/volumes/networks=none\n' "$PROJECT"
+  fi
+
+  if ! check_ports_are_free; then
+    printf 'cleanup failure: one or more smoke ports remain occupied\n' >&2
+    cleanup_failed=1
+  else
+    printf 'cleanup evidence: ports free=%s,%s,%s,%s\n' \
+      "$JUSTATOM_API_PORT" "$EMBEDDING_PORT" "$WEAVIATE_HTTP_PORT" "$WEAVIATE_GRPC_PORT"
+  fi
+
+  if [[ "$before_projects_ready" != true ]]; then
+    printf 'cleanup failure: pre-existing Compose project snapshot is unavailable\n' >&2
+    cleanup_failed=1
+  elif ! after_projects="$(list_preexisting_compose_projects)"; then
+    printf 'cleanup failure: could not audit pre-existing Compose projects\n' >&2
+    cleanup_failed=1
+  elif [[ "$after_projects" != "$before_projects" ]]; then
+    printf 'cleanup failure: pre-existing Compose projects changed\n' >&2
+    printf 'before:\n%s\nafter:\n%s\n' "$before_projects" "$after_projects" >&2
+    cleanup_failed=1
+  else
+    printf 'cleanup evidence: pre-existing Compose projects unchanged\n'
+  fi
+
+  if (( main_status == 0 && cleanup_failed )); then
+    exit 1
+  fi
+  exit "$main_status"
 }
 
 fail() {
@@ -41,6 +125,24 @@ trap 'exit 143' TERM
 command -v docker >/dev/null || fail "docker is required"
 command -v curl >/dev/null || fail "curl is required"
 command -v jq >/dev/null || fail "jq is required"
+command -v python >/dev/null || fail "python is required"
+
+if ! preexisting_project_resources="$(project_resources)"; then
+  fail "could not audit the unique smoke project before startup"
+fi
+if [[ -n "$preexisting_project_resources" ]]; then
+  fail "unique smoke project already owns resources: $PROJECT"
+fi
+if ! before_projects="$(list_preexisting_compose_projects)"; then
+  fail "could not snapshot pre-existing Compose projects"
+fi
+before_projects_ready=true
+printf 'isolation evidence before: compose projects=%s\n' "${before_projects:-none}"
+if ! check_ports_are_free; then
+  fail "smoke ports must be free: ${JUSTATOM_API_PORT},${EMBEDDING_PORT},${WEAVIATE_HTTP_PORT},${WEAVIATE_GRPC_PORT}"
+fi
+printf 'isolation evidence before: ports free=%s,%s,%s,%s\n' \
+  "$JUSTATOM_API_PORT" "$EMBEDDING_PORT" "$WEAVIATE_HTTP_PORT" "$WEAVIATE_GRPC_PORT"
 
 scripts/services.sh cpu up -d --build weaviate embedder-cpu api \
   || fail "CPU services failed to start"

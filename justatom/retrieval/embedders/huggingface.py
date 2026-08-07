@@ -134,6 +134,7 @@ class HuggingFaceEmbedder:
         self.device = resolve_device(device)
         self._encoder: _LocalEncoder | None = _build_local_encoder(model, self.device, self.profile.max_length)
         self._lifecycle_lock = asyncio.Lock()
+        self._inference_lock = asyncio.Lock()
         self._idle = asyncio.Event()
         self._idle.set()
         self._active_encodes = 0
@@ -200,10 +201,11 @@ class HuggingFaceEmbedder:
         encoder = await self._acquire_encoder()
         try:
             normalized = [apply_prefix(text, prefix, skip_if_present=self.profile.skip_prefix_if_present) for text in texts]
-            vectors: list[list[float]] = []
-            for start in range(0, len(normalized), self.profile.batch_size):
-                batch = normalized[start : start + self.profile.batch_size]
-                vectors.extend(await self._encode_batch(encoder, batch))
+            async with self._inference_lock:
+                vectors: list[list[float]] = []
+                for start in range(0, len(normalized), self.profile.batch_size):
+                    batch = normalized[start : start + self.profile.batch_size]
+                    vectors.extend(await self._encode_batch(encoder, batch))
             return validate_embeddings(vectors, expected_count=len(texts))
         finally:
             await self._release_encoder()

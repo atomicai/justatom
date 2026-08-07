@@ -1,4 +1,9 @@
+import copy
+import json
+import os
 import re
+import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -7,6 +12,123 @@ import yaml
 
 def _read(path):
     return Path(path).read_text(encoding="utf-8")
+
+
+def _launcher_json(mode, command, *args):
+    result = subprocess.run(
+        ["bash", "scripts/services.sh", mode, command, *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def _compose_profile_json(profile):
+    env = os.environ.copy()
+    env["COMPOSE_PROFILES"] = profile
+    result = subprocess.run(
+        ["docker", "compose", "config", "--format", "json"],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def _dockerfile_instructions(dockerfile):
+    instructions = []
+    logical_line = ""
+    for raw_line in dockerfile.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        logical_line += line
+        if logical_line.endswith("\\"):
+            logical_line = f"{logical_line[:-1].rstrip()} "
+            continue
+        instruction, value = logical_line.split(maxsplit=1)
+        instructions.append((instruction.upper(), value))
+        logical_line = ""
+    assert not logical_line
+    return instructions
+
+
+def _assert_dockerfile_contract(path, dockerfile):
+    instructions = _dockerfile_instructions(dockerfile)
+    values = lambda name: [value for instruction, value in instructions if instruction == name]
+    environment = {}
+    for value in values("ENV"):
+        for assignment in shlex.split(value):
+            key, setting = assignment.split("=", maxsplit=1)
+            environment[key] = setting
+
+    assert [tuple(shlex.split(value)) for value in values("COPY")] == [
+        ("pyproject.toml", "README.md", "./"),
+        ("justatom", "./justatom"),
+    ]
+    assert (".", ".") not in [tuple(shlex.split(value)) for value in values("COPY")]
+    assert values("USER") == ["10001:10001"]
+
+    if path == "Dockerfile.api":
+        assert ".[serve]" in dockerfile
+        assert environment == {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONUNBUFFERED": "1",
+            "JUSTATOM_CONFIG": "/etc/justatom/serve.yaml",
+            "JUSTATOM_START_MQ": "false",
+        }
+        assert values("EXPOSE") == ["5555"]
+        assert values("HEALTHCHECK") == [
+            "--interval=10s --timeout=3s --start-period=10s --retries=6 "
+            'CMD ["python", "-c", "import urllib.request; '
+            "urllib.request.urlopen('http://127.0.0.1:5555/', timeout=2)\"]"
+        ]
+        assert values("CMD") == ['["python", "-m", "justatom.api.serve"]']
+    else:
+        assert ".[embedder]" in dockerfile
+        device = "cpu" if path == "Dockerfile.embedder.cpu" else "cuda:0"
+        assert environment == {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONUNBUFFERED": "1",
+            "HF_HOME": "/cache/huggingface",
+            "EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-0.6B",
+            "EMBEDDING_DEVICE": device,
+            "EMBEDDING_BATCH_SIZE": "8",
+            "EMBEDDING_MAX_LENGTH": "512",
+        }
+        assert values("EXPOSE") == ["8000"]
+        assert values("HEALTHCHECK") == [
+            "--interval=10s --timeout=3s --start-period=120s --retries=30 "
+            'CMD ["python", "-c", "import urllib.request; '
+            "urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)\"]"
+        ]
+        assert values("CMD") == ['["python", "-m", "justatom.api.serve_embeddings"]']
+
+
+@pytest.mark.parametrize(
+    ("path", "mutation"),
+    [
+        ("Dockerfile.embedder.cpu", lambda value: value.replace("Qwen/Qwen3-Embedding-0.6B", "other/model", 1)),
+        ("Dockerfile.embedder.cpu", lambda value: value.replace("EMBEDDING_BATCH_SIZE=8", "EMBEDDING_BATCH_SIZE=16", 1)),
+        ("Dockerfile.embedder.cpu", lambda value: value.replace("HF_HOME=/cache/huggingface", "HF_HOME=/tmp/cache", 1)),
+        ("Dockerfile.api", lambda value: value.replace("USER 10001:10001", "USER root", 1)),
+        ("Dockerfile.embedder.cuda", lambda value: value.replace("EXPOSE 8000", "EXPOSE 9000", 1)),
+        ("Dockerfile.api", lambda value: value.replace("http://127.0.0.1:5555/", "http://127.0.0.1:9999/", 1)),
+        ("Dockerfile.embedder.cpu", lambda value: value.replace("COPY justatom ./justatom", "COPY . .", 1)),
+    ],
+)
+def test_dockerfile_contract_rejects_default_and_copy_mutations(path, mutation):
+    dockerfile = _read(path)
+    _assert_dockerfile_contract(path, dockerfile)
+
+    with pytest.raises(AssertionError):
+        _assert_dockerfile_contract(path, mutation(dockerfile))
 
 
 def test_api_image_is_model_free_and_runs_production_entrypoint():
@@ -59,6 +181,133 @@ def test_compose_defines_api_and_mutually_exclusive_embedding_profiles():
     assert "huggingface-cache" in compose["volumes"]
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected_services"),
+    [
+        ("external", ["api", "weaviate"]),
+        ("cpu", ["api", "embedder-cpu", "weaviate"]),
+        ("cuda", ["api", "embedder-cuda", "weaviate"]),
+    ],
+)
+def test_launcher_modes_render_exact_retrieval_services_without_redis(mode, expected_services):
+    compose = _launcher_json(mode, "config", "--format", "json")
+
+    assert sorted(compose["services"]) == expected_services
+    assert "redis" not in compose["services"]
+
+
+def test_cuda_compose_and_bake_pin_linux_amd64_platform():
+    compose = _launcher_json("cuda", "config", "--format", "json")
+    bake = _launcher_json("cuda", "build", "--print", "embedder-cuda")
+
+    assert compose["services"]["embedder-cuda"]["platform"] == "linux/amd64"
+    assert bake["target"]["embedder-cuda"]["platforms"] == ["linux/amd64"]
+
+
+def _rendered_compose_contract():
+    return {
+        "external": _launcher_json("external", "config", "--format", "json"),
+        "cpu": _launcher_json("cpu", "config", "--format", "json"),
+        "cuda": _launcher_json("cuda", "config", "--format", "json"),
+        "legacy": _compose_profile_json("legacy"),
+    }
+
+
+def _assert_rendered_compose_contract(rendered):
+    assert sorted(rendered["external"]["services"]) == ["api", "weaviate"]
+    assert sorted(rendered["cpu"]["services"]) == ["api", "embedder-cpu", "weaviate"]
+    assert sorted(rendered["cuda"]["services"]) == ["api", "embedder-cuda", "weaviate"]
+    assert rendered["cuda"]["services"]["embedder-cuda"]["platform"] == "linux/amd64"
+    assert sorted(rendered["legacy"]["services"]) == ["api", "redis", "weaviate"]
+
+    for mode, config in rendered.items():
+        api = config["services"]["api"]
+        weaviate = config["services"]["weaviate"]
+        assert api["environment"]["JUSTATOM_START_MQ"] == "false"
+        assert api.get("restart") == "unless-stopped"
+        assert len(api["volumes"]) == 1
+        api_config = api["volumes"][0]
+        assert api_config == {
+            "type": "bind",
+            "source": api_config["source"],
+            "target": "/etc/justatom/serve.yaml",
+            "read_only": True,
+            "bind": {},
+        }
+        assert Path(api_config["source"]).resolve() == Path("configs/serve.docker.yaml").resolve()
+        assert weaviate["restart"] == "on-failure:0"
+        assert weaviate["volumes"] == [
+            {
+                "type": "volume",
+                "source": "weaviatedb",
+                "target": "/var/lib/weaviate",
+                "volume": {},
+            }
+        ]
+        expected_volumes = {"weaviatedb"} if mode in {"external", "legacy"} else {"huggingface-cache", "weaviatedb"}
+        assert set(config["volumes"]) == expected_volumes
+        for volume_name, volume in config["volumes"].items():
+            assert volume["name"].endswith(f"_{volume_name}")
+
+    expected_embedders = {"cpu": "embedder-cpu", "cuda": "embedder-cuda"}
+    for mode, service_name in expected_embedders.items():
+        embedder = rendered[mode]["services"][service_name]
+        assert embedder["networks"] == {"default": {"aliases": ["embedder"]}}
+        assert embedder["volumes"] == [
+            {
+                "type": "volume",
+                "source": "huggingface-cache",
+                "target": "/cache/huggingface",
+                "volume": {},
+            }
+        ]
+        assert embedder["restart"] == "unless-stopped"
+
+    cuda_device = rendered["cuda"]["services"]["embedder-cuda"]["deploy"]["resources"]["reservations"]["devices"]
+    assert cuda_device == [{"capabilities": ["gpu"], "driver": "nvidia", "count": 1}]
+
+    redis = rendered["legacy"]["services"]["redis"]
+    assert redis["profiles"] == ["legacy"]
+    assert redis["image"] == "redis:latest"
+    assert redis["command"] == ["redis-server", "/redis.conf"]
+    assert redis["ports"] == [{"mode": "ingress", "target": 6379, "published": "6379", "protocol": "tcp"}]
+    assert len(redis["volumes"]) == 1
+    redis_config = redis["volumes"][0]
+    assert redis_config == {
+        "type": "bind",
+        "source": redis_config["source"],
+        "target": "/redis.conf",
+        "bind": {},
+    }
+    assert Path(redis_config["source"]).resolve() == Path("redis.conf").resolve()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value["cpu"]["services"]["embedder-cpu"]["networks"]["default"].update(aliases=[]),
+        lambda value: value["cuda"]["services"]["embedder-cuda"].update(volumes=[]),
+        lambda value: value["external"]["services"]["api"]["volumes"][0].update(read_only=False),
+        lambda value: value["cpu"]["services"]["api"]["environment"].update(JUSTATOM_START_MQ="true"),
+        lambda value: value["cuda"]["services"]["embedder-cuda"]["deploy"]["resources"]["reservations"]["devices"][0].update(
+            driver="other", count=2, capabilities=["compute"]
+        ),
+        lambda value: value["external"]["services"]["api"].pop("restart"),
+        lambda value: value["legacy"]["services"]["redis"].update(profiles=[]),
+        lambda value: value["legacy"]["services"]["redis"].update(command=["redis-server"]),
+        lambda value: value["cpu"].update(volumes={}),
+    ],
+)
+def test_rendered_compose_contract_rejects_topology_mutations(mutation):
+    rendered = _rendered_compose_contract()
+    _assert_rendered_compose_contract(rendered)
+    mutated = copy.deepcopy(rendered)
+    mutation(mutated)
+
+    with pytest.raises(AssertionError):
+        _assert_rendered_compose_contract(mutated)
+
+
 def test_docker_serve_config_uses_internal_weaviate_and_embedding_alias():
     config = yaml.safe_load(_read("configs/serve.docker.yaml"))
     retrieval = config["retrieval"]
@@ -91,6 +340,84 @@ def test_cpu_smoke_script_bounds_readiness_and_inference_requests():
     assert script.count("curl --connect-timeout 5 --max-time 300 --fail --silent --show-error") == 3
     assert script.count("--connect-timeout") == 4
     assert script.count("--max-time") == 4
+
+
+def _assert_cpu_smoke_cleanup_contract(script):
+    assert 'PROJECT="justatom-smoke-$(date +%s)-$$"' in script
+    assert 'export COMPOSE_PROJECT_NAME="$PROJECT"' in script
+    assert "list_preexisting_compose_projects()" in script
+    assert "project_resources()" in script
+    assert "check_ports_are_free()" in script
+    assert 'before_projects=""' in script
+    assert "before_projects_ready=false" in script
+    assert 'preexisting_project_resources="$(project_resources)"' in script
+    assert '[[ -n "$preexisting_project_resources" ]]' in script
+    assert 'before_projects="$(list_preexisting_compose_projects)"' in script
+    assert "before_projects_ready=true" in script
+    assert script.count("check_ports_are_free") == 3
+
+    cleanup = re.search(r"cleanup\(\) \{(?P<body>.*?)^\}", script, flags=re.MULTILINE | re.DOTALL)
+    assert cleanup is not None
+    body = cleanup.group("body")
+    assert "local main_status=$?" in body
+    assert "local cleanup_failed=0" in body
+    assert "trap - EXIT INT TERM" in body
+    assert "|| true" not in body
+    for condition, failure in [
+        (
+            r"if ! scripts/services\.sh cpu down -v --remove-orphans[^;]*; then",
+            "launcher teardown failed",
+        ),
+        (r'elif \[\[ -n "\$remaining" \]\]; then', "smoke project resources remain"),
+        (r"if ! check_ports_are_free; then", "one or more smoke ports remain occupied"),
+        (
+            r'elif \[\[ "\$after_projects" != "\$before_projects" \]\]; then',
+            "pre-existing Compose projects changed",
+        ),
+    ]:
+        branch = re.search(
+            rf"{condition}(?P<body>.*?{re.escape(failure)}.*?cleanup_failed=1)",
+            body,
+            flags=re.DOTALL,
+        )
+        assert branch is not None
+    assert "if (( main_status == 0 && cleanup_failed )); then" in body
+    assert re.search(r"if \(\( main_status == 0 && cleanup_failed \)\); then\n    exit 1\n  fi", body)
+    assert 'exit "$main_status"' in body
+    assert "trap cleanup EXIT" in script
+    assert "trap 'exit 130' INT" in script
+    assert "trap 'exit 143' TERM" in script
+
+
+def test_cpu_smoke_cleanup_is_fatal_and_audits_isolation():
+    _assert_cpu_smoke_cleanup_contract(_read("scripts/smoke_containerized_retrieval.sh"))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda script: script.replace("local main_status=$?", "local main_status=0", 1),
+        lambda script: script.replace(
+            "if ! scripts/services.sh cpu down -v --remove-orphans >/dev/null 2>&1; then",
+            "scripts/services.sh cpu down -v --remove-orphans >/dev/null 2>&1 || true\n  if false; then",
+            1,
+        ),
+        lambda script: script.replace('elif [[ -n "$remaining" ]]; then', "elif false; then", 1),
+        lambda script: script.replace("if ! check_ports_are_free; then", "if false; then", 1),
+        lambda script: script.replace('elif [[ "$after_projects" != "$before_projects" ]]; then', "elif false; then", 1),
+        lambda script: script.replace(
+            "if (( main_status == 0 && cleanup_failed )); then\n    exit 1\n  fi",
+            "if (( main_status == 0 && cleanup_failed )); then\n    exit 0\n  fi",
+            1,
+        ),
+        lambda script: script.replace("trap 'exit 143' TERM", "trap 'exit 0' TERM", 1),
+    ],
+)
+def test_cpu_smoke_cleanup_contract_rejects_mutations(mutation):
+    script = _read("scripts/smoke_containerized_retrieval.sh")
+    _assert_cpu_smoke_cleanup_contract(script)
+    with pytest.raises(AssertionError):
+        _assert_cpu_smoke_cleanup_contract(mutation(script))
 
 
 def test_external_backend_smoke_uses_real_api_image_without_torch():
@@ -232,6 +559,7 @@ def _assert_deployment_docs_contract(documents):
     assert "no Torch or model" in guide
     assert "portable CPU" in guide
     assert "Linux/NVIDIA only" in guide
+    assert "Linux x86_64/amd64" in guide
     assert "cannot expose MPS to containers" in guide
     assert "vLLM" in guide
     assert "Triton" in guide
@@ -289,15 +617,18 @@ def _assert_native_mps_smoke_contract(script):
     assert 'serve_app(build_embedding_app(), host="127.0.0.1"' in script
     assert "docker compose" not in script
     assert "scripts/services.sh" not in script
-    port_preflight = re.search(
-        r'if ! "\$EMBEDDING_PYTHON" - "\$EMBEDDING_PORT" <<\'PY\'\n'
-        r"(?P<body>.*?)^PY\nthen\n"
-        r'  fail "port \$\{EMBEDDING_PORT\} is already in use"\nfi',
+    port_check = re.search(
+        r"check_embedding_port_is_free\(\) \{(?P<body>.*?)^\}",
         script,
         flags=re.MULTILINE | re.DOTALL,
     )
-    assert port_preflight is not None
-    assert 'listener.bind(("127.0.0.1", int(sys.argv[1])))' in port_preflight.group("body")
+    assert port_check is not None
+    assert 'listener.bind(("127.0.0.1", int(sys.argv[1])))' in port_check.group("body")
+    assert script.count("check_embedding_port_is_free") == 3
+    assert re.search(
+        r"if ! check_embedding_port_is_free; then\n" r'  fail "port \$\{EMBEDDING_PORT\} is already in use"\nfi',
+        script,
+    )
     assert re.search(
         r"for attempt in \$\(seq 1 360\); do\n"
         r'    if curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "\$url" >/dev/null 2>&1; then\n'
@@ -308,12 +639,35 @@ def _assert_native_mps_smoke_contract(script):
     cleanup = re.search(r"cleanup\(\) \{(?P<body>.*?)^\}", script, flags=re.MULTILINE | re.DOTALL)
     assert cleanup is not None
     cleanup_body = cleanup.group("body")
-    assert "local status=$?" in cleanup_body
+    assert "local main_status=$?" in cleanup_body
+    assert "local cleanup_failed=0" in cleanup_body
     assert "trap - EXIT INT TERM" in cleanup_body
-    assert 'kill "$SERVER_PID"' in cleanup_body
-    assert 'wait "$SERVER_PID"' in cleanup_body
-    assert 'rm -f "$LOG_FILE"' in cleanup_body
-    assert 'exit "$status"' in cleanup_body
+    assert "|| true" not in cleanup_body
+    for condition, failure in [
+        (r"if ! terminate_server; then", "embedding server could not be terminated and reaped"),
+        (r'if \[\[ -n "\$SERVER_PID" \]\] && kill -0', "embedding server remains alive"),
+        (r"if ! check_embedding_port_is_free; then", "embedding port remains occupied"),
+        (r'if ! rm -f "\$LOG_FILE"; then', "embedding log could not be removed"),
+    ]:
+        branch = re.search(
+            rf"{condition}(?P<body>.*?{re.escape(failure)}.*?cleanup_failed=1)",
+            cleanup_body,
+            flags=re.DOTALL,
+        )
+        assert branch is not None
+    assert re.search(
+        r"if \(\( main_status == 0 && cleanup_failed \)\); then\n    exit 1\n  fi",
+        cleanup_body,
+    )
+    assert 'exit "$main_status"' in cleanup_body
+    termination = re.search(r"terminate_server\(\) \{(?P<body>.*?)^\}", script, flags=re.MULTILINE | re.DOTALL)
+    assert termination is not None
+    termination_body = termination.group("body")
+    assert 'kill -TERM "$SERVER_PID"' in termination_body
+    assert "for attempt in $(seq 1 10); do" in termination_body
+    assert 'kill -KILL "$SERVER_PID"' in termination_body
+    assert 'wait "$SERVER_PID"' in termination_body
+    assert "0|137|143" in termination_body
     assert "trap cleanup EXIT" in script
     assert "trap 'exit 130' INT" in script
     assert "trap 'exit 143' TERM" in script
@@ -331,6 +685,7 @@ def _assert_native_mps_smoke_contract(script):
     assert "== $dimension" in script
     assert "Loading from huggingface hub via" in script
     assert '[[ "$model_loads" == "1" ]]' in script
+    assert "ensure_server_is_alive\nprintf 'native MPS embedding smoke passed" in script
     for value in ("first_request", "second_request", "first_response", "second_response"):
         assert f"printf '%s' \"${value}\" | grep -Eq" in script
     assert script.count("escaped readable UTF-8") == 4
@@ -343,14 +698,12 @@ def test_native_mps_smoke_has_a_bounded_host_only_lifecycle_and_contract_checks(
 @pytest.mark.parametrize(
     "mutation",
     [
-        lambda script: script.replace(
-            'if ! "$EMBEDDING_PYTHON" - "$EMBEDDING_PORT" <<\'PY\'', '"$EMBEDDING_PYTHON" - "$EMBEDDING_PORT" <<\'PY\'', 1
-        ),
+        lambda script: script.replace("if ! check_embedding_port_is_free; then", "if false; then", 1),
         lambda script: script.replace(
             'listener.bind(("127.0.0.1", int(sys.argv[1])))', 'listener.bind(("0.0.0.0", int(sys.argv[1])))', 1
         ),
         lambda script: script.replace("for attempt in $(seq 1 360); do", "while true; do", 1),
-        lambda script: script.replace('exit "$status"', "exit 0", 1),
+        lambda script: script.replace('exit "$main_status"', "exit 0", 1),
         lambda script: re.sub(
             r'if printf \'%s\' "\$(?:first|second)_(?:request|response)".*?^fi\n', "", script, flags=re.MULTILINE | re.DOTALL
         ),
@@ -360,5 +713,34 @@ def test_native_mps_smoke_has_a_bounded_host_only_lifecycle_and_contract_checks(
     ],
 )
 def test_native_mps_smoke_contract_rejects_safety_mutations(mutation):
+    script = _read("scripts/smoke_native_embedding.sh")
+    _assert_native_mps_smoke_contract(script)
     with pytest.raises(AssertionError):
-        _assert_native_mps_smoke_contract(mutation(_read("scripts/smoke_native_embedding.sh")))
+        _assert_native_mps_smoke_contract(mutation(script))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda script: script.replace('kill -TERM "$SERVER_PID"', ":", 1),
+        lambda script: script.replace("for attempt in $(seq 1 10); do", "while true; do", 1),
+        lambda script: script.replace('kill -KILL "$SERVER_PID"', ":", 1),
+        lambda script: script.replace('wait "$SERVER_PID"', "wait_status=0", 1),
+        lambda script: script.replace('if [[ -n "$SERVER_PID" ]] && kill -0', 'if [[ -n "$SERVER_PID" ]] && false && kill -0', 1),
+        lambda script: script.replace(
+            "if (( main_status == 0 && cleanup_failed )); then\n    exit 1\n  fi",
+            "if (( main_status == 0 && cleanup_failed )); then\n    exit 0\n  fi",
+            1,
+        ),
+        lambda script: script.replace(
+            "ensure_server_is_alive\nprintf 'native MPS embedding smoke passed",
+            "printf 'native MPS embedding smoke passed",
+            1,
+        ),
+    ],
+)
+def test_native_mps_smoke_cleanup_contract_rejects_mutations(mutation):
+    script = _read("scripts/smoke_native_embedding.sh")
+    _assert_native_mps_smoke_contract(script)
+    with pytest.raises(AssertionError):
+        _assert_native_mps_smoke_contract(mutation(script))

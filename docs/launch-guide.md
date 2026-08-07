@@ -107,10 +107,10 @@ scripts/services.sh cpu up -d --build
 
 ### Managed CUDA Service
 
-The CUDA backend requires a Linux/NVIDIA host with a working `nvidia-smi`.
-Starting it elsewhere fails before any workload starts. On non-CUDA hosts, use
-the launcher’s CUDA configuration and platform-build validation only; neither
-establishes CUDA inference.
+The CUDA backend requires a Linux x86_64/amd64 NVIDIA host with a working
+`nvidia-smi`. Starting it elsewhere fails before any workload starts. On
+non-CUDA hosts, use the launcher’s CUDA configuration and platform-build
+validation only; neither establishes CUDA inference.
 
 CUDA mode never falls back to CPU.
 

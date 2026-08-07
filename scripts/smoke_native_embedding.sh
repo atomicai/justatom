@@ -16,21 +16,98 @@ LOG_FILE="${TMPDIR:-/tmp}/justatom-native-mps-embedding-$$.log"
 SERVER_PID=""
 EMBEDDING_PYTHON=""
 
-cleanup() {
-  local status=$?
-  trap - EXIT INT TERM
-  if [[ -n "$SERVER_PID" ]]; then
-    kill "$SERVER_PID" >/dev/null 2>&1 || true
-    wait "$SERVER_PID" >/dev/null 2>&1 || true
+check_embedding_port_is_free() {
+  [[ -n "$EMBEDDING_PYTHON" ]] || return 1
+  "$EMBEDDING_PYTHON" - "$EMBEDDING_PORT" <<'PY'
+import socket
+import sys
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", int(sys.argv[1])))
+PY
+}
+
+terminate_server() {
+  local attempt
+  local wait_status
+
+  if [[ -z "$SERVER_PID" ]]; then
+    return 0
   fi
-  rm -f "$LOG_FILE"
-  exit "$status"
+  if kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+    if ! kill -TERM "$SERVER_PID" >/dev/null 2>&1 && kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+      return 1
+    fi
+    for attempt in $(seq 1 10); do
+      if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
+    if kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+      if ! kill -KILL "$SERVER_PID" >/dev/null 2>&1 && kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+        return 1
+      fi
+    fi
+  fi
+
+  if wait "$SERVER_PID" >/dev/null 2>&1; then
+    wait_status=0
+  else
+    wait_status=$?
+  fi
+  case "$wait_status" in
+    0|137|143) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cleanup() {
+  local main_status=$?
+  local cleanup_failed=0
+
+  trap - EXIT INT TERM
+
+  if ! terminate_server; then
+    printf 'cleanup failure: embedding server could not be terminated and reaped\n' >&2
+    cleanup_failed=1
+  fi
+  if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+    printf 'cleanup failure: embedding server remains alive\n' >&2
+    cleanup_failed=1
+  else
+    printf 'cleanup evidence: embedding server stopped and reaped\n'
+  fi
+  if ! check_embedding_port_is_free; then
+    printf 'cleanup failure: embedding port remains occupied: %s\n' "$EMBEDDING_PORT" >&2
+    cleanup_failed=1
+  else
+    printf 'cleanup evidence: port free=%s\n' "$EMBEDDING_PORT"
+  fi
+  if ! rm -f "$LOG_FILE"; then
+    printf 'cleanup failure: embedding log could not be removed\n' >&2
+    cleanup_failed=1
+  else
+    printf 'cleanup evidence: embedding log removed=%s\n' "$LOG_FILE"
+  fi
+
+  if (( main_status == 0 && cleanup_failed )); then
+    exit 1
+  fi
+  exit "$main_status"
 }
 
 fail() {
   printf 'native MPS smoke failure: %s\n' "$1" >&2
   [[ ! -f "$LOG_FILE" ]] || cat "$LOG_FILE" >&2
   exit 1
+}
+
+ensure_server_is_alive() {
+  if [[ -z "$SERVER_PID" ]] || ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
+    fail "embedding server exited before smoke completion"
+  fi
 }
 
 wait_http() {
@@ -58,15 +135,7 @@ EMBEDDING_PYTHON="$(conda run -n justatom python -c 'import sys; print(sys.execu
   || fail "the justatom Python environment is required"
 "$EMBEDDING_PYTHON" -c 'import torch; assert torch.backends.mps.is_available()' \
   || fail "PyTorch MPS is unavailable"
-if ! "$EMBEDDING_PYTHON" - "$EMBEDDING_PORT" <<'PY'
-import socket
-import sys
-
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", int(sys.argv[1])))
-PY
-then
+if ! check_embedding_port_is_free; then
   fail "port ${EMBEDDING_PORT} is already in use"
 fi
 
@@ -134,5 +203,6 @@ printf '%s' "$second_response" | jq -e \
 model_loads="$(grep -E -c 'Loading from huggingface hub via|Model found locally at' "$LOG_FILE" || true)"
 [[ "$model_loads" == "1" ]] || fail "expected one model load, observed $model_loads"
 
+ensure_server_is_alive
 printf 'native MPS embedding smoke passed: model=%s port=%s model_loads=%s\n' \
   "$EMBEDDING_MODEL" "$EMBEDDING_PORT" "$model_loads"

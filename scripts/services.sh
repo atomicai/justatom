@@ -58,6 +58,13 @@ if [[ "$mode" == "cuda" && "$compose_command" == "up" ]]; then
     echo "CUDA mode requires a Linux host; use 'cuda config' or 'cuda build' for validation only" >&2
     exit 2
   fi
+  case "$(uname -m)" in
+    x86_64|amd64) ;;
+    *)
+      echo "CUDA mode requires a Linux x86_64/amd64 host; use 'cuda config' or 'cuda build' for validation only" >&2
+      exit 2
+      ;;
+  esac
   if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
     echo "nvidia-smi must be available and succeed before CUDA services can start" >&2
     exit 2

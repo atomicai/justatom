@@ -88,9 +88,10 @@ server remains on its supported host.
 The production retrieval API and model inference are separate processes. The
 `Dockerfile.api` image contains no Torch or model weights; it calls an
 OpenAI-compatible embedding endpoint. `Dockerfile.embedder.cpu` provides a
-portable CPU service, while `Dockerfile.embedder.cuda` is for Linux/NVIDIA
-hosts. Docker Desktop on macOS cannot expose MPS to containers, so Apple
-Silicon inference remains a native host process.
+portable CPU service, while `Dockerfile.embedder.cuda` is for Linux
+x86_64/amd64 NVIDIA hosts and never falls back to CPU. Docker Desktop on macOS
+cannot expose MPS to containers, so Apple Silicon inference remains a native
+host process.
 
 Use `scripts/services.sh` as the supported deployment launcher. It selects one
 of the external, CPU, or CUDA modes and keeps the API, embedder, and Weaviate
