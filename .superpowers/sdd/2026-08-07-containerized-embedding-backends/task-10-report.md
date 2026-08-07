@@ -65,8 +65,25 @@ conda run -n justatom python -m pytest \
 Result: `2 failed, 7 passed in 0.05s`, because the CUDA no-fallback statement
 and both response-model checks were absent.
 
-GREEN after the scoped changes: `9 passed in 0.01s` and
-`bash -n scripts/smoke_native_embedding.sh` passed.
+### Re-review Fix Round 2
+
+The documentation mutation test is parameterized for both `-p demo` and
+`-p=demo`. The native port-preflight contract now captures the Python heredoc
+and requires its loopback `listener.bind(("127.0.0.1", int(sys.argv[1])))`
+statement. Its mutation changes that actual bind to `0.0.0.0`, which the same
+helper rejects.
+
+Command:
+
+```bash
+conda run -n justatom python -m pytest \
+  tests/test_docker_assets.py::test_deployment_docs_use_the_launcher_and_describe_runtime_boundaries \
+  tests/test_docker_assets.py::test_deployment_docs_contract_rejects_manual_compose_project_selection \
+  tests/test_docker_assets.py::test_native_mps_smoke_has_a_bounded_host_only_lifecycle_and_contract_checks \
+  tests/test_docker_assets.py::test_native_mps_smoke_contract_rejects_safety_mutations -q
+```
+
+Result: `12 passed in 0.04s`.
 
 ## Verification Matrix
 

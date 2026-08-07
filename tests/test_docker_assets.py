@@ -252,7 +252,7 @@ def _assert_deployment_docs_contract(documents):
         assert "docker compose" not in document
         assert "COMPOSE_PROFILES" not in document
         assert "--profile" not in document
-        assert not re.search(r"(^|\s)-p(?:\s|$)", document)
+        assert not re.search(r"(^|\s)-p(?:\s|=)", document)
 
 
 def test_deployment_docs_use_the_launcher_and_describe_runtime_boundaries():
@@ -266,10 +266,11 @@ def test_deployment_docs_use_the_launcher_and_describe_runtime_boundaries():
     )
 
 
-def test_deployment_docs_contract_rejects_manual_compose_project_selection():
+@pytest.mark.parametrize("project_argument", ["-p demo", "-p=demo"])
+def test_deployment_docs_contract_rejects_manual_compose_project_selection(project_argument):
     documents = {
         "README.md": _read("README.md"),
-        "docs/launch-guide.md": _read("docs/launch-guide.md") + "\n-p demo\n",
+        "docs/launch-guide.md": _read("docs/launch-guide.md") + f"\n{project_argument}\n",
         "docs/architecture.md": _read("docs/architecture.md"),
         "docs/modules/runtime.md": _read("docs/modules/runtime.md"),
     }
@@ -288,13 +289,15 @@ def _assert_native_mps_smoke_contract(script):
     assert 'serve_app(build_embedding_app(), host="127.0.0.1"' in script
     assert "docker compose" not in script
     assert "scripts/services.sh" not in script
-    assert re.search(
+    port_preflight = re.search(
         r'if ! "\$EMBEDDING_PYTHON" - "\$EMBEDDING_PORT" <<\'PY\'\n'
         r"(?P<body>.*?)^PY\nthen\n"
         r'  fail "port \$\{EMBEDDING_PORT\} is already in use"\nfi',
         script,
         flags=re.MULTILINE | re.DOTALL,
     )
+    assert port_preflight is not None
+    assert 'listener.bind(("127.0.0.1", int(sys.argv[1])))' in port_preflight.group("body")
     assert re.search(
         r"for attempt in \$\(seq 1 360\); do\n"
         r'    if curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "\$url" >/dev/null 2>&1; then\n'
@@ -342,6 +345,9 @@ def test_native_mps_smoke_has_a_bounded_host_only_lifecycle_and_contract_checks(
     [
         lambda script: script.replace(
             'if ! "$EMBEDDING_PYTHON" - "$EMBEDDING_PORT" <<\'PY\'', '"$EMBEDDING_PYTHON" - "$EMBEDDING_PORT" <<\'PY\'', 1
+        ),
+        lambda script: script.replace(
+            'listener.bind(("127.0.0.1", int(sys.argv[1])))', 'listener.bind(("0.0.0.0", int(sys.argv[1])))', 1
         ),
         lambda script: script.replace("for attempt in $(seq 1 360); do", "while true; do", 1),
         lambda script: script.replace('exit "$status"', "exit 0", 1),
