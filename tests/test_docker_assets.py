@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 
 def _read(path):
     return Path(path).read_text(encoding="utf-8")
@@ -35,3 +37,31 @@ def test_dockerignore_excludes_credentials_weights_and_worktrees():
     assert ".worktrees/" in ignored
     assert ".tmp_runs/" in ignored
     assert "phd.paper/" in ignored
+
+
+def test_compose_defines_api_and_mutually_exclusive_embedding_profiles():
+    compose = yaml.safe_load(_read("docker-compose.yaml"))
+    services = compose["services"]
+    assert services["api"]["build"]["dockerfile"] == "Dockerfile.api"
+    assert services["api"]["ports"] == ["${JUSTATOM_API_PORT:-5555}:5555"]
+    assert services["api"]["extra_hosts"] == ["host.docker.internal:host-gateway"]
+    assert services["weaviate"]["ports"] == [
+        "${WEAVIATE_HTTP_PORT:-2211}:2211",
+        "${WEAVIATE_GRPC_PORT:-50051}:50051",
+    ]
+    assert services["embedder-cpu"]["profiles"] == ["cpu"]
+    assert services["embedder-cuda"]["profiles"] == ["cuda"]
+    assert services["api"]["depends_on"]["embedder-cpu"]["required"] is False
+    assert services["api"]["depends_on"]["embedder-cuda"]["required"] is False
+    assert services["embedder-cuda"]["deploy"]["resources"]["reservations"]["devices"][0][
+        "capabilities"
+    ] == ["gpu"]
+    assert "huggingface-cache" in compose["volumes"]
+
+
+def test_docker_serve_config_uses_internal_weaviate_and_embedding_alias():
+    config = yaml.safe_load(_read("configs/serve.docker.yaml"))
+    retrieval = config["retrieval"]
+    assert retrieval["embedding"]["backend"] == "openai-compatible"
+    assert retrieval["embedding"]["base_url"] == "${EMBEDDING_BASE_URL}"
+    assert retrieval["store"]["url"] == "http://weaviate:2211"

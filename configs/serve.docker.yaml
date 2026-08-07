@@ -1,0 +1,17 @@
+retrieval:
+  mode: vector
+  alpha: 0.5
+  embedding:
+    backend: openai-compatible
+    base_url: ${EMBEDDING_BASE_URL}
+    model: ${EMBEDDING_MODEL}
+    timeout: 60.0
+    batch_size: 8
+    max_length: 512
+    query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+    skip_prefix_if_present: true
+  store:
+    collection: Document
+    url: http://weaviate:2211
+    grpc_port: 50051
+    grpc_secure: false

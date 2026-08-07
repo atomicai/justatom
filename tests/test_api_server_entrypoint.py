@@ -1,4 +1,7 @@
+import pytest
+
 from justatom.api import serve as module
+from justatom.retrieval.errors import ConfigurationError
 
 
 def test_build_retrieval_app_uses_container_defaults(monkeypatch):
@@ -18,3 +21,13 @@ def test_build_retrieval_app_allows_explicit_mq_boolean(monkeypatch):
     monkeypatch.setattr(module, "create_app", lambda **kwargs: calls.append(kwargs) or "app")
     module.build_retrieval_app({"JUSTATOM_CONFIG": "/cfg/serve.yaml", "JUSTATOM_START_MQ": "true"})
     assert calls == [{"config_path": "/cfg/serve.yaml", "start_mq": True}]
+
+
+def test_retrieval_entrypoint_rejects_cpu_and_cuda_profiles_together(monkeypatch):
+    def unexpected_create_app(**kwargs):
+        pytest.fail(f"create_app called before profile validation: {kwargs}")
+
+    monkeypatch.setattr(module, "create_app", unexpected_create_app)
+
+    with pytest.raises(ConfigurationError, match="mutually exclusive"):
+        module.build_retrieval_app({"JUSTATOM_EMBEDDING_PROFILES": "cpu,cuda"})
