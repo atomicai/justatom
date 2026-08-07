@@ -189,11 +189,21 @@ class HuggingFaceEmbedder:
     @staticmethod
     async def _encode_batch(encoder: _LocalEncoder, batch: Sequence[str]) -> list[list[float]]:
         task = asyncio.create_task(asyncio.to_thread(encoder.encode, batch))
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            await asyncio.shield(task)
-            raise
+        cancellation: asyncio.CancelledError | None = None
+        while True:
+            try:
+                vectors = await asyncio.shield(task)
+            except asyncio.CancelledError as exc:
+                if cancellation is None:
+                    cancellation = exc
+                continue
+            except BaseException:
+                if cancellation is not None:
+                    raise cancellation
+                raise
+            if cancellation is not None:
+                raise cancellation
+            return vectors
 
     async def _embed(self, texts: Sequence[str], *, prefix: str) -> list[list[float]]:
         if not texts:

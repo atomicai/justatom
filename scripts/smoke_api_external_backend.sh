@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source scripts/smoke_docker_audit.sh
 
 PROJECT="justatom-api-smoke-$(date +%s)-$$"
 export COMPOSE_PROJECT_NAME="$PROJECT"
@@ -22,28 +23,6 @@ STORAGE_RESPONSE_FILE="${TMPDIR:-/tmp}/${PROJECT}-storage.json"
 API_CONTAINER_FILE="${TMPDIR:-/tmp}/${PROJECT}-api-container.txt"
 before_projects=""
 before_projects_ready=false
-
-list_compose_projects() {
-  {
-    docker ps -a --format '{{.Label "com.docker.compose.project"}}'
-    docker volume ls -q --filter label=com.docker.compose.project | while read -r volume; do
-      docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' "$volume"
-    done
-    docker network ls -q --filter label=com.docker.compose.project | while read -r network; do
-      docker network inspect --format '{{index .Labels "com.docker.compose.project"}}' "$network"
-    done
-  } | sed '/^$/d' | sort -u
-}
-
-list_preexisting_compose_projects() {
-  list_compose_projects | awk -v project="$PROJECT" '$0 != project'
-}
-
-project_resources() {
-  docker ps -aq --filter "label=com.docker.compose.project=${PROJECT}"
-  docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}"
-  docker network ls -q --filter "label=com.docker.compose.project=${PROJECT}"
-}
 
 check_ports_are_free() {
   python - "$JUSTATOM_API_PORT" "$WEAVIATE_HTTP_PORT" "$WEAVIATE_GRPC_PORT" "$FAKE_EMBEDDING_PORT" <<'PY'

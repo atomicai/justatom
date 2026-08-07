@@ -42,6 +42,7 @@ class SequencedBlockingEncoder(FakeEncoder):
         self.release = [threading.Event(), threading.Event()]
         self.active = 0
         self.max_active = 0
+        self.closed_while_active = False
 
     def encode(self, texts):
         with self._state_lock:
@@ -55,6 +56,11 @@ class SequencedBlockingEncoder(FakeEncoder):
         finally:
             with self._state_lock:
                 self.active -= 1
+
+    def close(self):
+        with self._state_lock:
+            self.closed_while_active = self.active > 0
+        super().close()
 
 
 async def wait_for_active_encodes(embedder, expected):
@@ -262,6 +268,44 @@ def test_cancelling_call_queued_for_encoder_releases_close_state(monkeypatch):
             for release in encoder.release:
                 release.set()
             pending = [task for task in (first, queued, close_task) if task is not None]
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
+def test_repeated_cancellation_drains_started_worker_before_close(monkeypatch):
+    encoder = SequencedBlockingEncoder()
+    monkeypatch.setattr(module, "_build_local_encoder", lambda *args: encoder)
+
+    async def exercise():
+        embedder = module.HuggingFaceEmbedder(model="local-model", device="cpu")
+        embed_task = asyncio.create_task(embedder.embed_documents(["one"]))
+        close_task = None
+        try:
+            assert await asyncio.to_thread(encoder.entered[0].wait, 1)
+            for _ in range(3):
+                embed_task.cancel()
+                await asyncio.sleep(0)
+                assert not embed_task.done()
+
+            close_task = asyncio.create_task(embedder.close())
+            await asyncio.sleep(0)
+            assert not close_task.done()
+            assert encoder.active == 1
+            assert encoder.closed == 0
+            assert not encoder.closed_while_active
+
+            encoder.release[0].set()
+            with pytest.raises(asyncio.CancelledError):
+                await embed_task
+            await asyncio.wait_for(close_task, timeout=1)
+            assert encoder.calls == [["one"]]
+            assert encoder.max_active == 1
+            assert encoder.closed == 1
+            assert not encoder.closed_while_active
+        finally:
+            encoder.release[0].set()
+            pending = [task for task in (embed_task, close_task) if task is not None]
             await asyncio.gather(*pending, return_exceptions=True)
 
     asyncio.run(exercise())

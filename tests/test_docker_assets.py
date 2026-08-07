@@ -181,6 +181,7 @@ def test_compose_defines_api_and_mutually_exclusive_embedding_profiles():
     assert "huggingface-cache" in compose["volumes"]
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("mode", "expected_services"),
     [
@@ -196,6 +197,7 @@ def test_launcher_modes_render_exact_retrieval_services_without_redis(mode, expe
     assert "redis" not in compose["services"]
 
 
+@pytest.mark.integration
 def test_cuda_compose_and_bake_pin_linux_amd64_platform():
     compose = _launcher_json("cuda", "config", "--format", "json")
     bake = _launcher_json("cuda", "build", "--print", "embedder-cuda")
@@ -282,6 +284,7 @@ def _assert_rendered_compose_contract(rendered):
     assert Path(redis_config["source"]).resolve() == Path("redis.conf").resolve()
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -345,8 +348,7 @@ def test_cpu_smoke_script_bounds_readiness_and_inference_requests():
 def _assert_cpu_smoke_cleanup_contract(script):
     assert 'PROJECT="justatom-smoke-$(date +%s)-$$"' in script
     assert 'export COMPOSE_PROJECT_NAME="$PROJECT"' in script
-    assert "list_preexisting_compose_projects()" in script
-    assert "project_resources()" in script
+    assert "source scripts/smoke_docker_audit.sh" in script
     assert "check_ports_are_free()" in script
     assert 'before_projects=""' in script
     assert "before_projects_ready=false" in script
@@ -453,6 +455,7 @@ def test_external_backend_smoke_uses_real_api_image_without_torch():
 def test_external_backend_smoke_cleanup_enforces_owned_resource_and_isolation_audits():
     script = _read("scripts/smoke_api_external_backend.sh")
 
+    assert "source scripts/smoke_docker_audit.sh" in script
     assert "local main_status=$?" in script
     assert "trap - EXIT INT TERM" in script
     assert "if ! scripts/services.sh external down -v --remove-orphans" in script
