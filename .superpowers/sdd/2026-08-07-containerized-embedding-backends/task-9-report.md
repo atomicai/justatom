@@ -398,3 +398,108 @@ sys 2.76
 `git diff --check` passed with no output. The nine warnings remain the
 pre-existing TensorFlow/ParametricUMAP, namespace deprecation,
 Weaviate-client deprecation, and Lightning environment/data-loader warnings.
+
+## Re-review Fix Round 2
+
+Date: 2026-08-07
+Review: updated `task-9-review.md` (two valid remaining findings)
+
+### Full smoke-lifetime fixture monitoring
+
+The API-container lookup now writes the watched `docker ps -q` result to a
+temporary file, and the running-container Torch probe also runs through
+`run_with_stub_watch`. Both operations poll the host fixture PID, terminate and
+reap their child command if the fixture exits, and reach the existing cleanup
+path. `ensure_fake_embedding_is_alive` is called immediately before the
+success message; cleanup removes the new temporary lookup file.
+
+Focused RED command:
+
+```bash
+conda run -n justatom python -m pytest \
+  tests/test_docker_assets.py::test_external_backend_smoke_watches_final_docker_checks_before_success -q
+```
+
+RED output: `1 failed in 0.03s`, because `API_CONTAINER_FILE` and the watched
+final Docker operations were absent. After implementation plus `bash -n`, the
+same test passed: `1 passed in 0.01s`.
+
+### Exact launcher and fatal-branch mutation coverage
+
+Added structured regex assertions requiring the complete startup statement:
+
+```bash
+if ! run_with_stub_watch scripts/services.sh external up -d --build weaviate api; then
+```
+
+The test rejects launcher invocations with `embedder-cpu` or `embedder-cuda`.
+It also extracts each cleanup branch and requires its own `cleanup_failed=1`
+assignment for remaining owned resources, occupied ports, and changed
+pre-existing Compose projects.
+
+The required mutations were proven independently:
+
+1. Temporarily appending `embedder-cpu` made the exact-launcher assertion fail:
+   `1 failed in 0.02s`.
+2. Temporarily replacing `cleanup_failed=1` in the owned-resource branch made
+   the coupled branch assertion fail: `1 failed in 0.02s`.
+
+Both correct source lines were restored. The complete round-two focused command
+then passed:
+
+```bash
+bash -n scripts/smoke_api_external_backend.sh
+conda run -n justatom python -m pytest \
+  tests/test_docker_assets.py::test_external_backend_smoke_uses_real_api_image_without_torch \
+  tests/test_docker_assets.py::test_external_backend_smoke_cleanup_enforces_owned_resource_and_isolation_audits \
+  tests/test_docker_assets.py::test_external_backend_smoke_monitors_and_reaps_the_host_stub_for_long_commands \
+  tests/test_docker_assets.py::test_external_backend_smoke_watches_final_docker_checks_before_success \
+  tests/test_docker_assets.py::test_external_backend_smoke_static_contract_rejects_isolation_and_timeout_mutations \
+  tests/test_docker_assets.py::test_external_backend_smoke_rejects_managed_embedders_and_couples_fatal_branches \
+  tests/test_openai_embedding_stub.py -q
+```
+
+Output: `7 passed in 0.31s`.
+
+### Required live rerun and final verification
+
+```bash
+/usr/bin/time -p conda run -n justatom bash scripts/smoke_api_external_backend.sh
+```
+
+Successful output:
+
+```text
+model-free API smoke passed: project=justatom-api-smoke-1786122429-82064
+cleanup evidence: project=justatom-api-smoke-1786122429-82064 containers/volumes/networks=none
+cleanup evidence: ports free=15556,13212,15052,18001
+cleanup evidence: pre-existing Compose projects unchanged
+real 25.29
+user 1.69
+sys 0.69
+```
+
+The successful run exercised watched startup, API requests, final container
+lookup, and Torch probe. It again indexed exactly three Russian documents,
+passed both deterministic rankings and readable UTF-8, and proved Torch absent
+without starting a managed embedder or downloading Qwen.
+
+Final commands:
+
+```bash
+/usr/bin/time -p conda run -n justatom python -m pytest -q
+git diff --check
+```
+
+Output:
+
+```text
+454 passed, 8 warnings in 27.56s
+real 29.72
+user 11.76
+sys 2.77
+```
+
+`git diff --check` passed with no output. The warning count was eight in this
+run; they remain the existing optional TensorFlow, dependency deprecation,
+Weaviate-client, and Lightning environment/data-loader warnings.

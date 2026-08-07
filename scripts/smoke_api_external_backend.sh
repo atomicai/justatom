@@ -19,6 +19,7 @@ CHILD_PID=""
 INDEX_RESPONSE_FILE="${TMPDIR:-/tmp}/${PROJECT}-index.json"
 SEARCH_RESPONSE_FILE="${TMPDIR:-/tmp}/${PROJECT}-search.json"
 STORAGE_RESPONSE_FILE="${TMPDIR:-/tmp}/${PROJECT}-storage.json"
+API_CONTAINER_FILE="${TMPDIR:-/tmp}/${PROJECT}-api-container.txt"
 before_projects=""
 before_projects_ready=false
 
@@ -91,7 +92,7 @@ cleanup() {
     fi
     wait "$FAKE_PID" >/dev/null 2>&1 || true
   fi
-  if ! rm -f "$FAKE_LOG" "$INDEX_RESPONSE_FILE" "$SEARCH_RESPONSE_FILE" "$STORAGE_RESPONSE_FILE"; then
+  if ! rm -f "$FAKE_LOG" "$INDEX_RESPONSE_FILE" "$SEARCH_RESPONSE_FILE" "$STORAGE_RESPONSE_FILE" "$API_CONTAINER_FILE"; then
     printf 'cleanup failure: smoke temporary files could not be removed\n' >&2
     cleanup_failed=1
   fi
@@ -261,14 +262,17 @@ storage_response="$(<"$STORAGE_RESPONSE_FILE")"
 printf '%s' "$storage_response" | jq -e '.docs[0].meta.topic == "storage"' >/dev/null \
   || fail "storage document was not ranked first"
 
-api_container="$(
-  docker ps -q \
+if ! run_with_stub_watch docker ps -q \
     --filter "label=com.docker.compose.project=${PROJECT}" \
-    --filter 'label=com.docker.compose.service=api'
-)"
+    --filter 'label=com.docker.compose.service=api' >"$API_CONTAINER_FILE"; then
+  fail "could not identify the smoke API container"
+fi
+api_container="$(<"$API_CONTAINER_FILE")"
 [[ -n "$api_container" ]] || fail "could not identify the smoke API container"
-docker exec "$api_container" python -c \
-  'import importlib.util; assert importlib.util.find_spec("torch") is None' \
-  || fail "Torch is installed in the model-free API image"
+if ! run_with_stub_watch docker exec "$api_container" python -c \
+    'import importlib.util; assert importlib.util.find_spec("torch") is None'; then
+  fail "Torch is installed in the model-free API image"
+fi
 
+ensure_fake_embedding_is_alive
 printf 'model-free API smoke passed: project=%s\n' "$PROJECT"

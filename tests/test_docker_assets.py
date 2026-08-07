@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -149,6 +150,15 @@ def test_external_backend_smoke_monitors_and_reaps_the_host_stub_for_long_comman
     assert script.count("run_with_stub_watch curl --connect-timeout 5 --max-time 60") == 3
 
 
+def test_external_backend_smoke_watches_final_docker_checks_before_success():
+    script = _read("scripts/smoke_api_external_backend.sh")
+
+    assert "API_CONTAINER_FILE" in script
+    assert 'run_with_stub_watch docker ps -q' in script
+    assert 'run_with_stub_watch docker exec "$api_container" python -c' in script
+    assert 'ensure_fake_embedding_is_alive\nprintf \'model-free API smoke passed' in script
+
+
 def test_external_backend_smoke_static_contract_rejects_isolation_and_timeout_mutations():
     script = _read("scripts/smoke_api_external_backend.sh")
 
@@ -172,3 +182,34 @@ def test_external_backend_smoke_static_contract_rejects_isolation_and_timeout_mu
     assert "cleanup failure: smoke project resources remain" in script
     assert "cleanup failure: one or more smoke ports remain occupied" in script
     assert "cleanup failure: pre-existing Compose projects changed" in script
+
+
+def test_external_backend_smoke_rejects_managed_embedders_and_couples_fatal_branches():
+    script = _read("scripts/smoke_api_external_backend.sh")
+    launcher = re.search(
+        r"^if ! run_with_stub_watch scripts/services\.sh external up -d --build weaviate api; then$",
+        script,
+        flags=re.MULTILINE,
+    )
+    cleanup = re.search(r"cleanup\(\) \{(?P<body>.*?)^\}", script, flags=re.MULTILINE | re.DOTALL)
+
+    assert launcher is not None
+    assert not re.search(
+        r"run_with_stub_watch scripts/services\.sh external up[^\n;]*(?:embedder-cpu|embedder-cuda)",
+        script,
+    )
+    assert cleanup is not None
+    body = cleanup.group("body")
+    for condition, failure in [
+        (r'elif \[\[ -n "\$remaining" \]\]; then', "smoke project resources remain"),
+        (r"if ! check_ports_are_free; then", "one or more smoke ports remain occupied"),
+        (r'elif \[\[ "\$after_projects" != "\$before_projects" \]\]; then', "pre-existing Compose projects changed"),
+    ]:
+        branch = re.search(
+            rf"{condition}(?P<branch>.*?)(?=^  (?:elif|else|fi)$)",
+            body,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert branch is not None
+        assert f"cleanup failure: {failure}" in branch.group("branch")
+        assert "cleanup_failed=1" in branch.group("branch")
