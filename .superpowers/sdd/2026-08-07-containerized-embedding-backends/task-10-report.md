@@ -89,7 +89,7 @@ Result: `12 passed in 0.04s`.
 
 | Command | Result | Timing / evidence |
 | --- | --- | --- |
-| `conda run -n justatom python -m pytest tests/test_docker_assets.py tests/test_services_launcher.py -q` | pass | `62 passed in 7.42s` (`real 8.57s`) |
+| `conda run -n justatom python -m pytest tests/test_docker_assets.py tests/test_services_launcher.py -q` | pass | `64 passed in 7.60s` (`real 8.70s`) |
 | `conda run -n justatom python -m pytest tests -q` | pass | `464 passed, 9 warnings in 26.11s` (`real 28.29s`) |
 | `conda run -n justatom make format-check` | pass | after `conda run -n justatom make fix-format` reformatted all seven branch-owned Python files with outstanding Black/isort changes |
 | `conda run -n justatom mkdocs build --strict` | pass | `real 1.33s` |
