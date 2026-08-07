@@ -132,20 +132,27 @@ Invalid device/model configuration fails startup before the readiness endpoint b
 
 Managed profiles require Docker Compose 2.20 or newer because the API uses optional health-checked dependencies for profile-owned embedding services.
 
-Compose always supports `api` and `weaviate`. The embedding backend is selected operationally:
+Compose always supports `api` and `weaviate`. The supported operational entrypoint is:
+
+```text
+scripts/services.sh <external|cpu|cuda> <compose-command> [compose args...]
+```
+
+The launcher overwrites `COMPOSE_PROFILES` with exactly the selected mode before invoking Compose. It rejects comma-separated or repeated modes and rejects passthrough `--profile`/`--profile=...` arguments so Compose service selection and API startup validation receive the same value. Direct raw `docker compose` profile selection is a low-level, unsupported interface. The in-API profile validator remains as defense in depth.
 
 ### External or native backend
 
-Set `EMBEDDING_BASE_URL` to an existing OpenAI-compatible server. On Docker Desktop for macOS, a native MPS server is reached through `host.docker.internal`.
+Set `EMBEDDING_BASE_URL` to an existing OpenAI-compatible server. On Docker Desktop for macOS, a native MPS server is reached through `host.docker.internal`. The launcher requires a non-empty URL for commands that start or use the API; config-only validation remains available without starting services.
 
-```text
-EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1
+```bash
+EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1 \
+  scripts/services.sh external up -d
 ```
 
 ### CPU profile
 
 ```bash
-COMPOSE_PROFILES=cpu docker compose up --build
+scripts/services.sh cpu up -d --build
 ```
 
 The `embedder-cpu` service receives the shared network alias `embedder`, and the API uses `http://embedder:8000/v1`.
@@ -153,10 +160,10 @@ The `embedder-cpu` service receives the shared network alias `embedder`, and the
 ### CUDA profile
 
 ```bash
-COMPOSE_PROFILES=cuda docker compose up --build
+scripts/services.sh cuda up -d --build
 ```
 
-The `embedder-cuda` service receives the same network alias and reserves an NVIDIA GPU through the Compose device specification. CPU and CUDA profiles are mutually exclusive; startup validation rejects enabling both.
+The `embedder-cuda` service receives the same network alias and reserves an NVIDIA GPU through the Compose device specification. Before `cuda up`, the launcher requires a Linux host and a successful `nvidia-smi` probe. It fails clearly without invoking Compose when either precondition is missing; CUDA never falls back to CPU. Artifact validation remains available on macOS with `scripts/services.sh cuda config` and `scripts/services.sh cuda build`, but those commands do not demonstrate CUDA inference. CPU and CUDA profiles are mutually exclusive; launcher validation rejects enabling both before Compose and API startup validation rejects both as defense in depth.
 
 Both model services mount a named Hugging Face cache volume. Rebuilding or recreating a container does not redownload an unchanged model, although each new process still loads weights from disk into RAM or accelerator memory.
 
@@ -169,7 +176,7 @@ Both model services mount a named Hugging Face cache volume. Rebuilding or recre
 | `justatom-embedder-cuda` | Linux with NVIDIA Container Toolkit | CUDA |
 | External OpenAI-compatible backend | Any reachable host | Backend-defined |
 
-The API image targets both amd64 and arm64. The CUDA image initially targets Linux amd64. No claim is made that MPS is available inside Docker Desktop containers.
+The API image targets both amd64 and arm64. The CUDA image initially targets Linux amd64. CUDA `config` and `build` validation on macOS do not establish runtime support. No claim is made that CUDA or MPS inference is available inside Docker Desktop containers.
 
 ## Runtime and Health
 
