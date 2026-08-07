@@ -1,14 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable
+from pathlib import Path
 from typing import Any
 
+from loguru import logger
 from quart import Quart, request
 
 from justatom.api.dataset_input import documents_from_input
 from justatom.configuring.scenarios import load_scenario_config
+from justatom.retrieval.errors import ConfigurationError, EmbeddingBackendError, EmbeddingResponseError
 from justatom.retrieval.runtime import RetrievalRuntime, build_runtime
+
+
+_ENV_PLACEHOLDER = re.compile(r"\$\{([A-Z0-9_]+)\}")
+
+
+def _unresolved_environment(node: object) -> set[str]:
+    if isinstance(node, dict):
+        return set().union(*(_unresolved_environment(value) for value in node.values()), set())
+    if isinstance(node, list):
+        return set().union(*(_unresolved_environment(value) for value in node), set())
+    if isinstance(node, str):
+        return set(_ENV_PLACEHOLDER.findall(node))
+    return set()
 
 
 def _reject_unknown_fields(payload: dict[str, Any], allowed: set[str]):
@@ -120,11 +137,15 @@ async def _shutdown(app: Quart) -> None:
 
 
 def create_app(
+    config_path: str | Path | None = None,
     config: dict[str, Any] | None = None,
     runtime: RetrievalRuntime | None = None,
     start_mq: bool = True,
 ) -> Quart:
-    scenario_config = load_scenario_config("serve", config=config)
+    scenario_config = load_scenario_config("serve", config_path=config_path, config=config)
+    unresolved = sorted(_unresolved_environment(scenario_config))
+    if unresolved:
+        raise ConfigurationError(f"unresolved environment variables: {', '.join(unresolved)}")
     retrieval_config = scenario_config["retrieval"]
     app = Quart(__name__, static_folder=None)
     app.json.ensure_ascii = False
@@ -132,6 +153,12 @@ def create_app(
     app.extensions["retrieval_config"] = retrieval_config
     if runtime is not None:
         app.extensions["retrieval_runtime"] = runtime
+
+    @app.errorhandler(EmbeddingBackendError)
+    @app.errorhandler(EmbeddingResponseError)
+    async def embedding_failure(error):
+        logger.error("embedding request failed [{}]", type(error).__name__)
+        return {"error": "embedding backend unavailable"}, 502
 
     def _runtime() -> RetrievalRuntime:
         return app.extensions["retrieval_runtime"]

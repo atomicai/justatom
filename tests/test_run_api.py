@@ -6,6 +6,7 @@ import pytest
 
 from justatom.api.run import create_app
 from justatom.etc.schema import Document
+from justatom.retrieval.errors import ConfigurationError, EmbeddingBackendError
 
 
 class FakeStore:
@@ -266,5 +267,55 @@ def test_delete_delegates_to_runtime_store():
             response = await test_app.test_client().post("/delete", json={})
             assert await response.get_json() == {"deleted_docs": 7}
         assert runtime.store.cleared == 1
+
+    asyncio.run(scenario())
+
+
+def test_create_app_loads_explicit_config_path(monkeypatch, tmp_path):
+    path = tmp_path / "serve.yaml"
+    path.write_text(
+        "retrieval:\n"
+        "  mode: keyword\n"
+        "  store:\n"
+        "    collection: ExplicitConfig\n",
+        encoding="utf-8",
+    )
+    app = create_app(config_path=path, runtime=FakeRuntime(), start_mq=False)
+    assert app.extensions["retrieval_config"]["store"]["collection"] == "ExplicitConfig"
+
+
+def test_create_app_rejects_unresolved_environment_placeholders(tmp_path):
+    path = tmp_path / "serve.yaml"
+    path.write_text(
+        "retrieval:\n"
+        "  mode: vector\n"
+        "  embedding:\n"
+        "    backend: openai-compatible\n"
+        "    base_url: ${EMBEDDING_BASE_URL}\n"
+        "    model: model\n"
+        "  store:\n"
+        "    collection: Docs\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError, match="EMBEDDING_BASE_URL"):
+        create_app(config_path=path, runtime=FakeRuntime(), start_mq=False)
+
+
+def test_create_app_sanitizes_embedding_backend_failures():
+    class FailingRuntime(FakeRuntime):
+        async def retrieve(self, query, **kwargs):
+            raise EmbeddingBackendError(f"upstream secret for {query}")
+
+    async def scenario():
+        app = create_app(runtime=FailingRuntime(), start_mq=False)
+        async with app.test_app() as test_app:
+            response = await test_app.test_client().post(
+                "/searching", json={"text": "private query"}
+            )
+            body = await response.get_data()
+            assert response.status_code == 502
+            assert await response.get_json() == {"error": "embedding backend unavailable"}
+            assert b"upstream secret" not in body
+            assert b"private query" not in body
 
     asyncio.run(scenario())
