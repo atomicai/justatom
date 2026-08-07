@@ -3,8 +3,12 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
-from justatom.retrieval.contracts import Embedder, EmbeddingProfile
+from loguru import logger
+from quart import Quart, request
+
+from justatom.retrieval.contracts import Embedder, EmbeddingProfile, validate_embeddings
 from justatom.retrieval.embedders.huggingface import HuggingFaceEmbedder
 from justatom.retrieval.errors import ConfigurationError
 
@@ -49,3 +53,95 @@ def build_local_embedder(settings: EmbeddingServerSettings) -> Embedder:
         device=settings.device,
         profile=EmbeddingProfile(batch_size=settings.batch_size, max_length=settings.max_length),
     )
+
+
+def create_embedding_app(
+    settings: EmbeddingServerSettings | None = None,
+    embedder: Embedder | None = None,
+) -> Quart:
+    resolved = settings or EmbeddingServerSettings.from_env()
+    app = Quart(__name__, static_folder=None)
+    app.json.ensure_ascii = False
+    app.config.setdefault("PROVIDE_AUTOMATIC_OPTIONS", True)
+    app.extensions["embedding_settings"] = resolved
+    if embedder is not None:
+        app.extensions["embedder"] = embedder
+
+    @app.errorhandler(500)
+    async def internal_error(error):
+        logger.error("unhandled embedding server error [{}]", type(error).__name__)
+        return _error("embedding backend failed", 500, "server_error")
+
+    @app.before_serving
+    async def start() -> None:
+        if "embedder" not in app.extensions:
+            app.extensions["embedder"] = build_local_embedder(resolved)
+
+    @app.after_serving
+    async def stop() -> None:
+        owned = app.extensions.pop("embedder", None)
+        if owned is not None:
+            await owned.close()
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok", "model": resolved.model}
+
+    @app.get("/v1/models")
+    async def models():
+        return {"object": "list", "data": [{"id": resolved.model, "object": "model", "owned_by": "justatom"}]}
+
+    @app.post("/v1/embeddings")
+    async def embeddings():
+        payload: Any = await request.get_json(silent=True)
+        error, texts = _validate_embedding_request(payload, resolved)
+        if error is not None:
+            return error
+        try:
+            vectors = validate_embeddings(
+                await app.extensions["embedder"].embed_documents(texts),
+                expected_count=len(texts),
+            )
+        except Exception as error:
+            logger.error("embedding backend failed [{}]", type(error).__name__)
+            return _error("embedding backend failed", 500, "server_error")
+        return {
+            "object": "list",
+            "model": resolved.model,
+            "data": [
+                {"object": "embedding", "index": index, "embedding": vector}
+                for index, vector in enumerate(vectors)
+            ],
+        }
+
+    return app
+
+
+def _error(message: str, status: int, error_type: str):
+    return {"error": {"message": message, "type": error_type}}, status
+
+
+def _validate_embedding_request(payload: Any, settings: EmbeddingServerSettings):
+    if not isinstance(payload, dict):
+        return (_error("request body must be a JSON object", 400, "invalid_request_error"), None)
+    unknown = sorted(set(payload) - {"model", "input", "encoding_format"})
+    if unknown:
+        return (_error(f"unsupported fields: {', '.join(unknown)}", 400, "invalid_request_error"), None)
+    if payload.get("model") != settings.model:
+        return (_error("requested model is not available", 404, "model_not_found"), None)
+    encoding = payload.get("encoding_format", "float")
+    if encoding != "float":
+        return (_error("encoding_format must be 'float'", 400, "invalid_request_error"), None)
+
+    source = payload.get("input")
+    if isinstance(source, str):
+        texts = [source]
+    elif isinstance(source, list):
+        texts = source
+    else:
+        return (_error("input must be a string or list of strings", 400, "invalid_request_error"), None)
+    if not texts or any(not isinstance(text, str) or not text.strip() for text in texts):
+        return (_error("input strings must be non-empty", 400, "invalid_request_error"), None)
+    if len(texts) > settings.batch_size:
+        return (_error("input exceeds configured batch size", 413, "request_too_large"), None)
+    return None, texts
