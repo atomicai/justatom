@@ -2,6 +2,7 @@ import asyncio
 import threading
 
 import pytest
+import torch
 
 from justatom.retrieval.contracts import EmbeddingProfile
 from justatom.retrieval.embedders import huggingface as module
@@ -31,6 +32,24 @@ class BlockingEncoder(FakeEncoder):
         self.started.set()
         assert self.release.wait(timeout=1)
         return super().encode(texts)
+
+
+def test_local_encoder_converts_bfloat16_outputs_to_python_floats():
+    class BFloat16Runner:
+        def __call__(self, *, batch):
+            assert set(batch) == {"input_ids"}
+            return [torch.tensor([[1.5, -2.0]], dtype=torch.bfloat16)]
+
+    encoder = module._LocalEncoder(
+        torch=torch,
+        processor=object(),
+        runner=BFloat16Runner(),
+        igniset=lambda **kwargs: (object(), ["input_ids"]),
+        data_loader=lambda **kwargs: [{"input_ids": torch.tensor([[1]])}],
+        device="cpu",
+    )
+
+    assert encoder.encode(["one"]) == [[1.5, -2.0]]
 
 
 def test_local_embedder_builds_once_and_reuses_one_encoder(monkeypatch):

@@ -65,3 +65,20 @@ def test_docker_serve_config_uses_internal_weaviate_and_embedding_alias():
     assert retrieval["embedding"]["backend"] == "openai-compatible"
     assert retrieval["embedding"]["base_url"] == "${EMBEDDING_BASE_URL}"
     assert retrieval["store"]["url"] == "http://weaviate:2211"
+
+
+def test_cpu_smoke_script_uses_launcher_cleanup_and_utf8_assertions():
+    script = _read("scripts/smoke_containerized_retrieval.sh")
+    assert "set -euo pipefail" in script
+    assert 'export COMPOSE_PROJECT_NAME="$PROJECT"' in script
+    assert "scripts/services.sh cpu up -d --build weaviate embedder-cpu api" in script
+    assert "scripts/services.sh cpu logs --no-color" in script
+    assert "scripts/services.sh cpu down -v --remove-orphans" in script
+    assert "docker compose -p" not in script
+    assert "COMPOSE_PROFILES=cpu" not in script
+    assert "JUSTATOM_API_PORT" in script
+    assert "EMBEDDING_PORT" in script
+    assert "WEAVIATE_HTTP_PORT" in script
+    assert "WEAVIATE_GRPC_PORT" in script
+    assert "Loading from huggingface hub via" in script
+    assert "\\\\u" in script

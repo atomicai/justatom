@@ -81,7 +81,8 @@ class _LocalEncoder:
         with self._torch.inference_mode():
             for batch in loader:
                 batches = {name: value.to(self._device) for name, value in batch.items()}
-                vectors.extend(self._runner(batch=batches)[0].cpu().numpy().tolist())
+                embeddings = self._runner(batch=batches)[0].detach().float().cpu()
+                vectors.extend(embeddings.tolist())
         return vectors
 
     def close(self) -> None:
