@@ -35,7 +35,12 @@ def test_build_local_embedder_uses_one_empty_prefix_profile(monkeypatch):
 
     monkeypatch.setattr(module, "HuggingFaceEmbedder", FakeEmbedder)
     settings = module.EmbeddingServerSettings.from_env(
-        {"EMBEDDING_MODEL": "model", "EMBEDDING_DEVICE": "mps", "EMBEDDING_BATCH_SIZE": "4"}
+        {
+            "EMBEDDING_MODEL": "model",
+            "EMBEDDING_DEVICE": "mps",
+            "EMBEDDING_BATCH_SIZE": "4",
+            "EMBEDDING_MAX_LENGTH": "256",
+        }
     )
     embedder = module.build_local_embedder(settings)
     assert isinstance(embedder, FakeEmbedder)
@@ -44,3 +49,4 @@ def test_build_local_embedder_uses_one_empty_prefix_profile(monkeypatch):
     assert calls[0]["profile"].query_prefix == ""
     assert calls[0]["profile"].document_prefix == ""
     assert calls[0]["profile"].batch_size == 4
+    assert calls[0]["profile"].max_length == 256

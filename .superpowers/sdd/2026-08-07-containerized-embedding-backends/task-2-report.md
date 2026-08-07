@@ -55,3 +55,15 @@ Result: `372 passed, 9 warnings in 18.35s`.
 ## Concerns
 
 The full suite retains the 9 pre-existing dependency warnings documented by the task context. No new warnings or test failures were observed.
+
+## Fix Round 1
+
+Updated the existing factory test to pass the explicit non-default `EMBEDDING_MAX_LENGTH=256` and assert that the constructed profile has `max_length == 256`. Production code was unchanged because it already forwards `settings.max_length`.
+
+Command:
+
+```text
+conda run -n justatom python -m pytest tests/test_embedding_server.py -q
+```
+
+Result: `6 passed in 0.31s`.
