@@ -121,3 +121,54 @@ def test_external_backend_smoke_uses_real_api_image_without_torch():
     assert '"/v1/models"' in fixture
     assert "fixture-embedding-model" in fixture
     assert 'app.config.setdefault("PROVIDE_AUTOMATIC_OPTIONS", True)' in fixture
+
+
+def test_external_backend_smoke_cleanup_enforces_owned_resource_and_isolation_audits():
+    script = _read("scripts/smoke_api_external_backend.sh")
+
+    assert "local main_status=$?" in script
+    assert "trap - EXIT INT TERM" in script
+    assert "if ! scripts/services.sh external down -v --remove-orphans" in script
+    assert "cleanup_failed=1" in script
+    assert "after_projects" in script
+    assert "before_projects" in script
+    assert '[[ "$after_projects" != "$before_projects" ]]' in script
+    assert "if (( main_status == 0 && cleanup_failed )); then" in script
+    assert 'exit "$main_status"' in script
+
+
+def test_external_backend_smoke_monitors_and_reaps_the_host_stub_for_long_commands():
+    script = _read("scripts/smoke_api_external_backend.sh")
+
+    assert 'CHILD_PID=""' in script
+    assert "run_with_stub_watch()" in script
+    assert 'kill -0 "$CHILD_PID"' in script
+    assert 'kill "$CHILD_PID"' in script
+    assert 'wait "$CHILD_PID"' in script
+    assert "run_with_stub_watch scripts/services.sh external up -d --build weaviate api" in script
+    assert script.count("run_with_stub_watch curl --connect-timeout 5 --max-time 60") == 3
+
+
+def test_external_backend_smoke_static_contract_rejects_isolation_and_timeout_mutations():
+    script = _read("scripts/smoke_api_external_backend.sh")
+
+    assert 'PROJECT="justatom-api-smoke-$(date +%s)-$$"' in script
+    assert 'JUSTATOM_API_PORT="${JUSTATOM_API_PORT:-15556}"' in script
+    assert 'WEAVIATE_HTTP_PORT="${WEAVIATE_HTTP_PORT:-13212}"' in script
+    assert 'WEAVIATE_GRPC_PORT="${WEAVIATE_GRPC_PORT:-15052}"' in script
+    assert 'FAKE_EMBEDDING_PORT="${FAKE_EMBEDDING_PORT:-18001}"' in script
+    assert 'trap cleanup EXIT' in script
+    assert "trap 'exit 130' INT" in script
+    assert "trap 'exit 143' TERM" in script
+    assert script.count("scripts/services.sh external up -d --build weaviate api") == 1
+    assert "docker compose" not in script
+    assert "COMPOSE_PROFILES" not in script
+    assert " -p " not in script
+    assert "--project-name" not in script
+    assert script.count("curl --connect-timeout 2 --max-time 5 --fail --silent --show-error") == 2
+    assert script.count("run_with_stub_watch curl --connect-timeout 5 --max-time 60") == 3
+    assert script.count('"content":') == 3
+    assert "cleanup warning" not in script
+    assert "cleanup failure: smoke project resources remain" in script
+    assert "cleanup failure: one or more smoke ports remain occupied" in script
+    assert "cleanup failure: pre-existing Compose projects changed" in script

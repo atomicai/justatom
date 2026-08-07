@@ -251,3 +251,150 @@ or data-loader warnings.
   verified invocation is `conda run -n justatom bash ...`.
 - Docker Compose emits its existing warning that the top-level `version`
   attribute is obsolete. Task 9 did not modify Compose.
+
+## Review Fix Round
+
+Date: 2026-08-07
+Review: `task-9-review.md` (three valid findings)
+
+### Self-enforcing teardown and isolation
+
+The `EXIT` cleanup now captures `main_status`, disables `EXIT`/`INT`/`TERM`
+traps before performing cleanup, and records cleanup failures rather than
+turning them into warnings. It attempts launcher-scoped external teardown,
+reaps an active watched child, terminates/reaps the fake server, removes all
+temporary response/log files, and audits project-labelled containers, volumes,
+networks, and smoke ports. It also compares the post-teardown pre-existing
+Compose-project snapshot with the snapshot captured before startup.
+
+When the main path succeeds, any teardown or audit failure exits `1`. When the
+main path already failed, cleanup issues are printed but its original nonzero
+status is preserved. Removing traps inside cleanup prevents recursive `EXIT`
+handling.
+
+Focused RED command:
+
+```bash
+conda run -n justatom python -m pytest \
+  tests/test_docker_assets.py::test_external_backend_smoke_cleanup_enforces_owned_resource_and_isolation_audits -q
+```
+
+RED output: `1 failed in 0.03s`, because `local main_status=$?` was absent.
+
+After implementation, the same focused test and `bash -n` passed:
+
+```text
+1 passed in 0.01s
+```
+
+### Full-lifetime host-stub monitoring
+
+`run_with_stub_watch` now starts a command as a tracked child, checks the fake
+embedding PID once per second while that child is running, waits/reaps the
+child, and validates fixture liveness again after it exits. The wrapper is
+used for the potentially long launcher command and every bounded indexing or
+search request. API readiness also checks fixture liveness around every
+bounded curl attempt. Cleanup terminates/reaps an interrupted watched child
+before launcher teardown.
+
+Focused RED command:
+
+```bash
+conda run -n justatom python -m pytest \
+  tests/test_docker_assets.py::test_external_backend_smoke_monitors_and_reaps_the_host_stub_for_long_commands -q
+```
+
+RED output: `1 failed in 0.03s`, because `CHILD_PID` was absent. GREEN output
+after the wrapper: `1 passed in 0.01s` with `bash -n` passing.
+
+### Mutation-sensitive static and fixture coverage
+
+Added static assertions for the exact timestamp/PID project construction, all
+four high overridable default ports, `EXIT`/`INT`/`TERM` traps, the one exact
+external launcher startup command, prohibited raw Compose/profile/project
+selectors, two readiness curl bounds, three watched request bounds, exactly
+three indexed documents, and fatal cleanup audit text.
+
+`tests/test_openai_embedding_stub.py` directly imports the fixture and asserts
+the stable three-dimensional topic basis vectors:
+
+```text
+банк негативов -> [1.0, 0.0, 0.0]
+Qwen эмбеддинги -> [0.0, 1.0, 0.0]
+Weaviate хранит векторы -> [0.0, 0.0, 1.0]
+```
+
+The direct-vector test was proven mutation-sensitive by temporarily replacing
+the second coordinate with `0.0`. It failed as intended:
+
+```text
+assert [0.0, 0.0, 0.0] == [0.0, 1.0, 0.0]
+1 failed in 0.32s
+```
+
+The correct predicate was restored. The complete review-focused command then
+passed:
+
+```bash
+bash -n scripts/smoke_api_external_backend.sh
+conda run -n justatom python -m pytest \
+  tests/test_docker_assets.py::test_external_backend_smoke_uses_real_api_image_without_torch \
+  tests/test_docker_assets.py::test_external_backend_smoke_cleanup_enforces_owned_resource_and_isolation_audits \
+  tests/test_docker_assets.py::test_external_backend_smoke_monitors_and_reaps_the_host_stub_for_long_commands \
+  tests/test_docker_assets.py::test_external_backend_smoke_static_contract_rejects_isolation_and_timeout_mutations \
+  tests/test_openai_embedding_stub.py -q
+```
+
+Output: `5 passed in 0.31s`.
+
+### Required live rerun
+
+The first rerun exercised the new cleanup code when Docker BuildKit received
+an external registry error while resolving `python:3.12-slim` metadata:
+
+```text
+failed to do request: Head "https://registry-1.docker.io/...": EOF
+```
+
+It exited nonzero in `8.78s`; cleanup nevertheless reported no smoke project
+resources, all smoke ports free, and an unchanged pre-existing-project
+snapshot. The unchanged smoke was retried once and passed:
+
+```bash
+/usr/bin/time -p conda run -n justatom bash scripts/smoke_api_external_backend.sh
+```
+
+```text
+model-free API smoke passed: project=justatom-api-smoke-1786121820-79981
+cleanup evidence: project=justatom-api-smoke-1786121820-79981 containers/volumes/networks=none
+cleanup evidence: ports free=15556,13212,15052,18001
+cleanup evidence: pre-existing Compose projects unchanged
+real 23.27
+user 1.68
+sys 0.68
+```
+
+The successful run again indexed exactly three documents through the host
+fixture, passed both deterministic Russian rankings and readable UTF-8, and
+proved `torch` absent in the running API image. No Qwen model or embedder
+service was started.
+
+### Final verification
+
+```bash
+/usr/bin/time -p conda run -n justatom python -m pytest -q
+git diff --check
+```
+
+Output:
+
+```text
+452 passed, 9 warnings in 25.40s
+real 27.80
+user 11.99
+sys 2.76
+```
+
+`git diff --check` passed with no output. The nine warnings remain the
+pre-existing TensorFlow/ParametricUMAP, namespace deprecation,
+Weaviate-client deprecation, and Lightning environment/data-loader warnings.

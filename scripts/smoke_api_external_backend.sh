@@ -15,6 +15,12 @@ export EMBEDDING_BASE_URL="http://host.docker.internal:${FAKE_EMBEDDING_PORT}/v1
 
 FAKE_LOG="${TMPDIR:-/tmp}/${PROJECT}-embedder.log"
 FAKE_PID=""
+CHILD_PID=""
+INDEX_RESPONSE_FILE="${TMPDIR:-/tmp}/${PROJECT}-index.json"
+SEARCH_RESPONSE_FILE="${TMPDIR:-/tmp}/${PROJECT}-search.json"
+STORAGE_RESPONSE_FILE="${TMPDIR:-/tmp}/${PROJECT}-storage.json"
+before_projects=""
+before_projects_ready=false
 
 list_compose_projects() {
   {
@@ -26,6 +32,10 @@ list_compose_projects() {
       docker network inspect --format '{{index .Labels "com.docker.compose.project"}}' "$network"
     done
   } | sed '/^$/d' | sort -u
+}
+
+list_preexisting_compose_projects() {
+  list_compose_projects | awk -v project="$PROJECT" '$0 != project'
 }
 
 project_resources() {
@@ -47,27 +57,81 @@ for value in sys.argv[1:]:
 PY
 }
 
+stop_active_child() {
+  if [[ -z "$CHILD_PID" ]]; then
+    return 0
+  fi
+  if kill -0 "$CHILD_PID" >/dev/null 2>&1 && ! kill "$CHILD_PID" >/dev/null 2>&1; then
+    return 1
+  fi
+  wait "$CHILD_PID" >/dev/null 2>&1 || true
+  CHILD_PID=""
+}
+
 cleanup() {
-  scripts/services.sh external down -v --remove-orphans >/dev/null 2>&1 || true
+  local main_status=$?
+  local cleanup_failed=0
+  local remaining
+  local after_projects
+
+  trap - EXIT INT TERM
+
+  if ! stop_active_child; then
+    printf 'cleanup failure: active smoke command could not be terminated\n' >&2
+    cleanup_failed=1
+  fi
+  if ! scripts/services.sh external down -v --remove-orphans >/dev/null 2>&1; then
+    printf 'cleanup failure: launcher teardown failed\n' >&2
+    cleanup_failed=1
+  fi
   if [[ -n "$FAKE_PID" ]]; then
-    kill "$FAKE_PID" >/dev/null 2>&1 || true
+    if kill -0 "$FAKE_PID" >/dev/null 2>&1 && ! kill "$FAKE_PID" >/dev/null 2>&1; then
+      printf 'cleanup failure: fake embedding process could not be terminated\n' >&2
+      cleanup_failed=1
+    fi
     wait "$FAKE_PID" >/dev/null 2>&1 || true
   fi
-  rm -f "$FAKE_LOG"
+  if ! rm -f "$FAKE_LOG" "$INDEX_RESPONSE_FILE" "$SEARCH_RESPONSE_FILE" "$STORAGE_RESPONSE_FILE"; then
+    printf 'cleanup failure: smoke temporary files could not be removed\n' >&2
+    cleanup_failed=1
+  fi
 
-  local remaining
-  remaining="$(project_resources)"
-  if [[ -n "$remaining" ]]; then
-    printf 'cleanup warning: smoke project resources remain: %s\n' "$remaining" >&2
+  if ! remaining="$(project_resources)"; then
+    printf 'cleanup failure: could not audit smoke project resources\n' >&2
+    cleanup_failed=1
+  elif [[ -n "$remaining" ]]; then
+    printf 'cleanup failure: smoke project resources remain: %s\n' "$remaining" >&2
+    cleanup_failed=1
   else
     printf 'cleanup evidence: project=%s containers/volumes/networks=none\n' "$PROJECT"
   fi
-  if check_ports_are_free; then
+
+  if ! check_ports_are_free; then
+    printf 'cleanup failure: one or more smoke ports remain occupied\n' >&2
+    cleanup_failed=1
+  else
     printf 'cleanup evidence: ports free=%s,%s,%s,%s\n' \
       "$JUSTATOM_API_PORT" "$WEAVIATE_HTTP_PORT" "$WEAVIATE_GRPC_PORT" "$FAKE_EMBEDDING_PORT"
-  else
-    printf 'cleanup warning: one or more smoke ports remain occupied\n' >&2
   fi
+
+  if [[ "$before_projects_ready" != true ]]; then
+    printf 'cleanup failure: pre-existing Compose project snapshot is unavailable\n' >&2
+    cleanup_failed=1
+  elif ! after_projects="$(list_preexisting_compose_projects)"; then
+    printf 'cleanup failure: could not audit pre-existing Compose projects\n' >&2
+    cleanup_failed=1
+  elif [[ "$after_projects" != "$before_projects" ]]; then
+    printf 'cleanup failure: pre-existing Compose projects changed\n' >&2
+    printf 'before:\n%s\nafter:\n%s\n' "$before_projects" "$after_projects" >&2
+    cleanup_failed=1
+  else
+    printf 'cleanup evidence: pre-existing Compose projects unchanged\n'
+  fi
+
+  if (( main_status == 0 && cleanup_failed )); then
+    exit 1
+  fi
+  exit "$main_status"
 }
 
 fail() {
@@ -82,7 +146,9 @@ wait_http() {
   local url="$2"
   local attempt
   for attempt in $(seq 1 150); do
+    ensure_fake_embedding_is_alive
     if curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "$url" >/dev/null 2>&1; then
+      ensure_fake_embedding_is_alive
       return 0
     fi
     sleep 1
@@ -90,19 +156,42 @@ wait_http() {
   fail "$name did not become ready at $url"
 }
 
+ensure_fake_embedding_is_alive() {
+  if ! kill -0 "$FAKE_PID" >/dev/null 2>&1; then
+    fail "fake embedding endpoint exited; inspect $FAKE_LOG"
+  fi
+}
+
 wait_fake_embedding() {
   local url="http://127.0.0.1:${FAKE_EMBEDDING_PORT}/health"
   local attempt
   for attempt in $(seq 1 150); do
-    if ! kill -0 "$FAKE_PID" >/dev/null 2>&1; then
-      fail "fake embedding endpoint exited before becoming ready at $url"
-    fi
+    ensure_fake_embedding_is_alive
     if curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "$url" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
   fail "fake embedding endpoint did not become ready at $url"
+}
+
+run_with_stub_watch() {
+  local command_status
+
+  "$@" &
+  CHILD_PID=$!
+  while kill -0 "$CHILD_PID" >/dev/null 2>&1; do
+    ensure_fake_embedding_is_alive
+    sleep 1
+  done
+  if wait "$CHILD_PID"; then
+    command_status=0
+  else
+    command_status=$?
+  fi
+  CHILD_PID=""
+  ensure_fake_embedding_is_alive
+  return "$command_status"
 }
 
 trap cleanup EXIT
@@ -115,7 +204,10 @@ command -v curl >/dev/null || fail "curl is required"
 command -v jq >/dev/null || fail "jq is required"
 python -c 'import hypercorn, quart' || fail "activate the justatom Python environment"
 
-before_projects="$(list_compose_projects)"
+if ! before_projects="$(list_preexisting_compose_projects)"; then
+  fail "could not snapshot pre-existing Compose projects"
+fi
+before_projects_ready=true
 printf 'isolation evidence before: compose projects=%s\n' "${before_projects:-none}"
 if ! check_ports_are_free; then
   fail "smoke ports must be free: ${JUSTATOM_API_PORT},${WEAVIATE_HTTP_PORT},${WEAVIATE_GRPC_PORT},${FAKE_EMBEDDING_PORT}"
@@ -129,25 +221,28 @@ FAKE_EMBEDDING_MODEL="$EMBEDDING_MODEL" \
 FAKE_PID=$!
 wait_fake_embedding
 
-scripts/services.sh external up -d --build weaviate api \
-  || fail "external-backend services failed to start"
+if ! run_with_stub_watch scripts/services.sh external up -d --build weaviate api; then
+  fail "external-backend services failed to start"
+fi
 wait_http "retrieval API" "http://127.0.0.1:${JUSTATOM_API_PORT}/"
 
-index_response="$(
-  curl --connect-timeout 5 --max-time 60 --fail --silent --show-error \
+if ! run_with_stub_watch curl --connect-timeout 5 --max-time 60 --fail --silent --show-error \
     -H 'Content-Type: application/json' \
     -d '{"dataset_name_or_docs":[{"content":"банк негативов расширяет множество негативных примеров.","meta":{"topic":"retrieval"}},{"content":"Qwen создаёт эмбеддинги документов.","meta":{"topic":"embeddings"}},{"content":"Weaviate хранит векторы документов.","meta":{"topic":"storage"}}]}' \
-    "http://127.0.0.1:${JUSTATOM_API_PORT}/indexing"
-)" || fail "indexing through external endpoint failed"
+    "http://127.0.0.1:${JUSTATOM_API_PORT}/indexing" >"$INDEX_RESPONSE_FILE"; then
+  fail "indexing through external endpoint failed"
+fi
+index_response="$(<"$INDEX_RESPONSE_FILE")"
 printf '%s' "$index_response" | jq -e '.total_docs == 3' >/dev/null \
   || fail "expected three indexed documents"
 
-search_response="$(
-  curl --connect-timeout 5 --max-time 60 --fail --silent --show-error \
+if ! run_with_stub_watch curl --connect-timeout 5 --max-time 60 --fail --silent --show-error \
     -H 'Content-Type: application/json' \
     -d '{"text":"Зачем нужен банк негативов?","top_k":1}' \
-    "http://127.0.0.1:${JUSTATOM_API_PORT}/searching"
-)" || fail "retrieval search through external endpoint failed"
+    "http://127.0.0.1:${JUSTATOM_API_PORT}/searching" >"$SEARCH_RESPONSE_FILE"; then
+  fail "retrieval search through external endpoint failed"
+fi
+search_response="$(<"$SEARCH_RESPONSE_FILE")"
 printf '%s' "$search_response" | jq -e '.docs[0].meta.topic == "retrieval"' >/dev/null \
   || fail "retrieval document was not ranked first"
 printf '%s' "$search_response" | grep -Fq 'банк негативов' \
@@ -156,12 +251,13 @@ if printf '%s' "$search_response" | grep -Eq '\\u[0-9a-fA-F]{4}'; then
   fail "API response escaped readable UTF-8 text"
 fi
 
-storage_response="$(
-  curl --connect-timeout 5 --max-time 60 --fail --silent --show-error \
+if ! run_with_stub_watch curl --connect-timeout 5 --max-time 60 --fail --silent --show-error \
     -H 'Content-Type: application/json' \
     -d '{"text":"Где хранятся векторы документов?","top_k":1}' \
-    "http://127.0.0.1:${JUSTATOM_API_PORT}/searching"
-)" || fail "storage search through external endpoint failed"
+    "http://127.0.0.1:${JUSTATOM_API_PORT}/searching" >"$STORAGE_RESPONSE_FILE"; then
+  fail "storage search through external endpoint failed"
+fi
+storage_response="$(<"$STORAGE_RESPONSE_FILE")"
 printf '%s' "$storage_response" | jq -e '.docs[0].meta.topic == "storage"' >/dev/null \
   || fail "storage document was not ranked first"
 
