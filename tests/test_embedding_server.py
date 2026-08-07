@@ -26,15 +26,20 @@ class FakeEmbedder:
 
 
 class BlockingCloseEmbedder(FakeEmbedder):
-    def __init__(self):
+    def __init__(self, close_error=None):
         super().__init__()
         self.close_started = asyncio.Event()
         self.close_release = asyncio.Event()
+        self.close_completed = asyncio.Event()
+        self.close_error = close_error
 
     async def close(self):
         self.closed += 1
         self.close_started.set()
         await self.close_release.wait()
+        self.close_completed.set()
+        if self.close_error is not None:
+            raise self.close_error
 
 
 def test_settings_use_qwen_defaults():
@@ -139,10 +144,62 @@ def test_cancelled_embedding_shutdown_finishes_one_close():
         stop_task = asyncio.create_task(stop())
         await embedder.close_started.wait()
         stop_task.cancel()
+        await asyncio.sleep(0)
+        assert not stop_task.done()
+        assert not embedder.close_completed.is_set()
         embedder.close_release.set()
         with pytest.raises(asyncio.CancelledError):
             await stop_task
+        assert embedder.close_completed.is_set()
         await stop()
+        assert embedder.closed == 1
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_embedding_shutdowns_share_one_completed_close():
+    async def scenario():
+        embedder = BlockingCloseEmbedder()
+        settings = module.EmbeddingServerSettings("model", "cpu", 8, 512)
+        app = module.create_embedding_app(settings=settings, embedder=embedder)
+        stop = app.after_serving_funcs[0]
+        first_stop = asyncio.create_task(stop())
+        await embedder.close_started.wait()
+        second_stop = asyncio.create_task(stop())
+        await asyncio.sleep(0)
+        assert embedder.closed == 1
+        assert not first_stop.done()
+        assert not second_stop.done()
+        embedder.close_release.set()
+        await asyncio.gather(first_stop, second_stop)
+        assert embedder.close_completed.is_set()
+        assert embedder.closed == 1
+        await stop()
+        assert embedder.closed == 1
+
+    asyncio.run(scenario())
+
+
+def test_embedding_shutdown_shares_close_error_with_all_waiters():
+    async def scenario():
+        close_error = RuntimeError("close failed")
+        embedder = BlockingCloseEmbedder(close_error)
+        settings = module.EmbeddingServerSettings("model", "cpu", 8, 512)
+        app = module.create_embedding_app(settings=settings, embedder=embedder)
+        stop = app.after_serving_funcs[0]
+        first_stop = asyncio.create_task(stop())
+        await embedder.close_started.wait()
+        second_stop = asyncio.create_task(stop())
+        await asyncio.sleep(0)
+        embedder.close_release.set()
+        results = await asyncio.gather(first_stop, second_stop, return_exceptions=True)
+        assert results[0] is close_error
+        assert results[1] is close_error
+        assert embedder.close_completed.is_set()
+        assert embedder.closed == 1
+        with pytest.raises(RuntimeError) as repeated:
+            await stop()
+        assert repeated.value is close_error
         assert embedder.closed == 1
 
     asyncio.run(scenario())
