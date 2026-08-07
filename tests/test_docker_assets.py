@@ -213,3 +213,74 @@ def test_external_backend_smoke_rejects_managed_embedders_and_couples_fatal_bran
         assert branch is not None
         assert f"cleanup failure: {failure}" in branch.group("branch")
         assert "cleanup_failed=1" in branch.group("branch")
+
+
+def test_deployment_docs_use_the_launcher_and_describe_runtime_boundaries():
+    readme = _read("README.md")
+    guide = _read("docs/launch-guide.md")
+    architecture = _read("docs/architecture.md")
+    runtime = _read("docs/modules/runtime.md")
+
+    assert "scripts/services.sh cpu up -d --build" in guide
+    assert "scripts/services.sh cuda up -d --build" in guide
+    assert "EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1" in guide
+    assert "scripts/services.sh external up -d --build api weaviate" in guide
+    assert "EMBEDDING_DEVICE=mps" in guide
+    assert "conda run -n justatom python -m justatom.api.serve_embeddings" in guide
+    assert "Dockerfile.api" in readme
+    assert "Dockerfile.embedder.cpu" in guide
+    assert "Dockerfile.embedder.cuda" in guide
+    assert "no Torch or model" in guide
+    assert "portable CPU" in guide
+    assert "Linux/NVIDIA only" in guide
+    assert "cannot expose MPS to containers" in guide
+    assert "vLLM" in guide
+    assert "Triton" in guide
+    assert "llama.cpp" in guide
+    assert "One embedding service process owns one model instance" in guide
+    assert "do not reload it" in guide
+    assert "does not preserve the model in RAM" in guide
+    assert "client -> justatom-api -> OpenAICompatibleEmbedder -> embedding HTTP service" in architecture
+    assert "`-> WeaviateDocumentStore -> Weaviate" in architecture
+    assert "Query and document prefixes" in architecture
+    assert "batching" in architecture
+    assert "before HTTP inference" in architecture
+    assert "tokenization and model execution only" in architecture
+    assert "OpenAICompatibleEmbedder" in runtime
+
+    for document in (readme, guide, architecture, runtime):
+        assert "docker compose" not in document
+        assert "COMPOSE_PROFILES" not in document
+        assert "--profile" not in document
+
+
+def test_native_mps_smoke_has_a_bounded_host_only_lifecycle_and_contract_checks():
+    script = _read("scripts/smoke_native_embedding.sh")
+
+    assert '"$(uname -s)" != "Darwin"' in script
+    assert '"$(uname -m)" != "arm64"' in script
+    assert "Apple Silicon macOS is required" in script
+    assert 'EMBEDDING_PORT="${EMBEDDING_PORT:-18002}"' in script
+    assert "EMBEDDING_DEVICE=mps" in script
+    assert "torch.backends.mps.is_available()" in script
+    assert "serve_app(build_embedding_app(), host=\"127.0.0.1\"" in script
+    assert 'SERVER_PID=""' in script
+    assert "trap cleanup EXIT" in script
+    assert "trap 'exit 130' INT" in script
+    assert "trap 'exit 143' TERM" in script
+    assert 'kill "$SERVER_PID"' in script
+    assert 'wait "$SERVER_PID"' in script
+    assert 'rm -f "$LOG_FILE"' in script
+    assert "docker compose" not in script
+    assert "scripts/services.sh" not in script
+    assert 'wait_http "embedding health"' in script
+    assert 'wait_http "embedding models"' in script
+    assert "http://127.0.0.1:${EMBEDDING_PORT}/v1/models" in script
+    assert script.count("curl --connect-timeout 5 --max-time 300 --fail --silent --show-error") == 2
+    assert script.count('http://127.0.0.1:${EMBEDDING_PORT}/v1/embeddings') == 2
+    assert "русский запрос" in script
+    assert '$data[0].index == 0' in script
+    assert '$data[1].index == 1' in script
+    assert "equal dimensions" in script
+    assert "Loading from huggingface hub via" in script
+    assert '[[ "$model_loads" == "1" ]]' in script

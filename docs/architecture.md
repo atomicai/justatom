@@ -12,6 +12,25 @@ The runtime creates an `Indexer` for writes and a mode-specific `Retriever` for
 `keyword`, `vector`, or `hybrid` reads. It is an async context manager and owns
 closing the supplied store and embedder.
 
+## Retrieval Service Boundary
+
+Production retrieval splits orchestration, embedding inference, and storage
+into independent processes:
+
+```text
+client -> justatom-api -> OpenAICompatibleEmbedder -> embedding HTTP service
+                    `-> WeaviateDocumentStore -> Weaviate
+```
+
+`justatom-api` owns the `RetrievalRuntime`, HTTP embedding client, and Weaviate
+connection. Its image contains no model. Query and document prefixes and
+batching are applied by the API-side client before HTTP inference. The local
+embedding service remains domain-agnostic: it owns tokenization and model execution only.
+
+One embedding process owns one `HuggingFaceEmbedder` and one loaded model.
+CPU, Linux/NVIDIA CUDA, native macOS MPS, and external OpenAI-compatible
+services use the same embedding HTTP contract.
+
 ![Architecture overview](atom-arch.png)
 
 ## Packages

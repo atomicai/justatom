@@ -70,6 +70,67 @@ The evaluator accepts explicit `--search-mode`, `--embedding-model`,
 `--collection-name` flags. Values are passed to the strict runtime schema; old
 retrieval flag names are rejected.
 
+## Retrieval Service Deployment
+
+Use `scripts/services.sh` for every container deployment. It chooses exactly
+one embedding mode and forwards the supported lifecycle command. The API image
+is built from `Dockerfile.api` and contains no Torch or model weights. The
+`Dockerfile.embedder.cpu` image is a portable CPU service. The
+`Dockerfile.embedder.cuda` image is Linux/NVIDIA only. Docker Desktop on macOS
+cannot expose MPS to containers, so native MPS stays a host process.
+
+### Native MPS on Apple Silicon
+
+Run the embedding service directly on an Apple Silicon macOS host:
+
+```bash
+EMBEDDING_DEVICE=mps \
+EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B \
+conda run -n justatom python -m justatom.api.serve_embeddings
+```
+
+The service listens on `8000`. Point the API container at it with the external
+mode:
+
+```bash
+EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1 \
+  scripts/services.sh external up -d --build api weaviate
+```
+
+### Managed CPU Service
+
+The portable CPU backend runs alongside the API and Weaviate:
+
+```bash
+scripts/services.sh cpu up -d --build
+```
+
+### Managed CUDA Service
+
+The CUDA backend requires a Linux/NVIDIA host with a working `nvidia-smi`.
+Starting it elsewhere fails before any workload starts. On non-CUDA hosts, use
+the launcher’s CUDA configuration and platform-build validation only; neither
+establishes CUDA inference.
+
+```bash
+scripts/services.sh cuda up -d --build
+```
+
+### External OpenAI-compatible Service
+
+Any service implementing the same `/v1/embeddings` contract can back the API,
+including vLLM, Triton adapters, llama.cpp servers, and the built-in host
+process. Configure its URL and start only the API and Weaviate:
+
+```bash
+EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1 \
+  scripts/services.sh external up -d --build api weaviate
+```
+
+One embedding service process owns one model instance. Repeated requests do not reload it.
+The persistent Hugging Face cache avoids a redownload for unchanged weights,
+but does not preserve the model in RAM after a process restart.
+
 ## Shell Wrappers
 
 The pipeline wrapper preserves the `vanilla`, `atom_gate`, and `atomic` training

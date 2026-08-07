@@ -83,6 +83,20 @@ OpenAI-compatible HTTP and use `OpenAICompatibleEmbedder`. The `justatom`
 client has no `tritonclient` dependency and is safe to run on macOS; the Triton
 server remains on its supported host.
 
+## Containerized Deployment
+
+The production retrieval API and model inference are separate processes. The
+`Dockerfile.api` image contains no Torch or model weights; it calls an
+OpenAI-compatible embedding endpoint. `Dockerfile.embedder.cpu` provides a
+portable CPU service, while `Dockerfile.embedder.cuda` is for Linux/NVIDIA
+hosts. Docker Desktop on macOS cannot expose MPS to containers, so Apple
+Silicon inference remains a native host process.
+
+Use `scripts/services.sh` as the supported deployment launcher. It selects one
+of the external, CPU, or CUDA modes and keeps the API, embedder, and Weaviate
+configuration aligned. The [Launch Guide](docs/launch-guide.md) has copyable
+native MPS, CPU, CUDA, and external-backend commands.
+
 ## Strict Retrieval Configuration
 
 `build_runtime` accepts a strict `retrieval` mapping. It rejects unknown keys,
