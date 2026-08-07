@@ -3,7 +3,8 @@
 Date: 2026-08-07
 Branch: `feature/retrieval-runtime`
 Worktree: `/Users/thebat/IProject/justatom/.worktrees/retrieval-api-qwen`
-Fix commit: `98b896e fix: close retrieval final review`
+Initial fix commit: `98b896e fix: close retrieval final review`
+Re-review fix commit: `22ac4f5 fix: close final re-review blockers`
 
 ## Delivered
 
@@ -115,3 +116,77 @@ exited/running, `production-training` running, and `uniai` running.
 - The prior branch-wide Docker Scout critical-CVE scan gap remains dependent on
   Docker Scout authentication; it was outside these final-review fixes and was
   not rerun.
+
+## Final Re-review Fix Round
+
+### Delivered
+
+1. `_encode_batch` now drains its shielded `to_thread` task through any finite
+   sequence of caller cancellations. It records the first cancellation,
+   consumes worker completion or failure, and only then re-raises cancellation,
+   keeping the inference permit and lifecycle count held until thread work is
+   over. A three-cancellation regression proves `close()` stays pending and the
+   encoder is not closed while active, followed by exactly one close.
+2. CPU and external smoke scripts now source one Docker audit helper. Every
+   container, volume, and network listing and every volume/network inspection
+   captures and propagates its own status before any combined output is
+   accepted. Executable fake-Docker tests exercise all 13 failure paths both
+   directly and under literal `if !` condition context.
+3. Only the 13 tests that execute real Compose config or Bake rendering in
+   `tests/test_docker_assets.py` are marked `integration`; all 47 pure
+   Dockerfile, YAML, and static mutation cases remain standard. CI now has a
+   dedicated Ubuntu/Python 3.11 Docker Compose contract job. A characterization
+   puts a status-97 fake Docker first on `PATH` and proves the standard asset
+   slice never invokes it.
+
+### TDD Evidence
+
+| Slice | RED | GREEN |
+| --- | --- | --- |
+| Repeated cancellation | `1 failed in 0.47s`; the caller completed after its second cancellation while the worker was still blocked | full embedder file: `9 passed in 0.47s` |
+| Docker audit propagation | `13 failed in 0.13s`; missing shared helper/source left every fake-Docker failure or static contract red | CPU/external audit gate: `18 passed in 4.48s`; final literal-`if !` focused set included below |
+| Docker test classification/CI | `2 failed in 1.76s`; the fake-Docker run exposed 13 unmarked failures and the CI gate was absent | classification: `2 passed in 0.19s`; real Docker contracts: `13 passed, 47 deselected in 1.66s` |
+
+The final combined regression slice passed `27 tests in 6.00s` (`real 7.21`,
+`user 1.91`, `sys 0.65`). It includes all nine embedder lifecycle tests, all 16
+fake-Docker/shared-helper tests, and both no-Docker/CI classification tests.
+
+### Verification Matrix
+
+| Command | Result | Timing / evidence |
+| --- | --- | --- |
+| Docker-hidden standard suite: `pytest tests -m "not integration and not network" -q` with `/usr/local/bin` absent from `PATH` | pass | `507 passed, 17 deselected, 6 warnings in 24.12s`; `real 25.33`, `user 9.93`, `sys 2.41`; `docker` was undiscoverable while Bash 5 remained available |
+| Local Docker contract gate: `pytest tests/test_docker_assets.py -m integration -q` | pass | `13 passed, 47 deselected in 1.66s`; `real 2.72`, `user 2.02`, `sys 0.84` |
+| Final fresh `pytest tests -q` | pass | `524 passed, 8 warnings in 35.02s`; `real 37.17`, `user 13.53`, `sys 4.23` |
+| `make format-check` | pass | `173 files would be left unchanged`; `real 1.72`, `user 4.57`, `sys 1.18` |
+| `python -m mkdocs build --strict` | pass | MkDocs build `0.18s`; `real 1.39`, `user 1.08`, `sys 0.27` |
+| Bash syntax for every tracked `*.sh` | pass | no output |
+| Working and staged `git diff --check` | pass | no output before implementation commit |
+| external/cpu/cuda launcher configs | pass | exact services `api,weaviate`; `api,embedder-cpu,weaviate`; and `api,embedder-cuda,weaviate`, each in `real 0.04` |
+| CUDA Compose/Bake platform | pass | config `linux/amd64` in `real 0.04`; Bake `[linux/amd64]` in `real 0.06` |
+| macOS `cuda up -d` | expected rejection | status `2` before Compose in `real 0.00`: Linux host required |
+
+### Smoke and Cleanup Evidence
+
+Per the re-review instruction, the CPU Qwen and native MPS model smokes were
+not rerun. Their successful live outcomes and cleanup evidence remain recorded
+in the preceding **Live Smokes** section. This round covers the production
+inference change with deterministic blocking-thread lifecycle tests and covers
+both smoke-audit changes with executable fake-Docker subprocess tests.
+
+Post-verification audit found no `justatom-smoke-*` or
+`justatom-api-smoke-*` Compose projects. Ports
+`15555,18000,13211,15051,15556,13212,15052,18001,18002` all accepted a fresh
+loopback bind. `docker compose ls --all` still matched the earlier snapshot:
+`ci-pipelines` created, `clearml` running, `justatom` mixed exited/running,
+`production-training` running, and `uniai` running.
+
+### Residual Environment Gaps
+
+- CUDA inference remains unverified on this Darwin arm64 host; real Compose and
+  Bake contracts passed and `cuda up` rejected the host before Compose.
+- CPU Qwen and native MPS live smokes were intentionally not repeated in this
+  round, as requested; the prior successful runs remain documented above.
+- ShellCheck remains unavailable, and Docker Scout remains unauthenticated.
+  Bash parsing/subprocess behavior and all requested local Docker contracts
+  passed.
