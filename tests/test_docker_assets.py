@@ -91,3 +91,33 @@ def test_cpu_smoke_script_bounds_readiness_and_inference_requests():
     assert script.count("curl --connect-timeout 5 --max-time 300 --fail --silent --show-error") == 3
     assert script.count("--connect-timeout") == 4
     assert script.count("--max-time") == 4
+
+
+def test_external_backend_smoke_uses_real_api_image_without_torch():
+    script = _read("scripts/smoke_api_external_backend.sh")
+    fixture = _read("tests/fixtures/openai_embedding_stub.py")
+
+    assert "set -euo pipefail" in script
+    assert 'export COMPOSE_PROJECT_NAME="$PROJECT"' in script
+    assert "host.docker.internal" in script
+    assert "scripts/services.sh external up -d --build weaviate api" in script
+    assert "scripts/services.sh external logs --no-color" in script
+    assert "scripts/services.sh external down -v --remove-orphans" in script
+    assert "docker compose" not in script
+    assert "COMPOSE_PROFILES" not in script
+    assert 'find_spec("torch") is None' in script
+    assert "JUSTATOM_API_PORT" in script
+    assert "WEAVIATE_HTTP_PORT" in script
+    assert "WEAVIATE_GRPC_PORT" in script
+    assert "FAKE_EMBEDDING_PORT" in script
+    assert 'PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"' in script
+    assert 'kill -0 "$FAKE_PID"' in script
+    assert ".docs[0].meta.topic == \"retrieval\"" in script
+    assert ".docs[0].meta.topic == \"storage\"" in script
+    assert "банк негативов" in script
+    assert "\\\\u" in script
+    assert "/v1/embeddings" in fixture
+    assert '"/health"' in fixture
+    assert '"/v1/models"' in fixture
+    assert "fixture-embedding-model" in fixture
+    assert 'app.config.setdefault("PROVIDE_AUTOMATIC_OPTIONS", True)' in fixture
