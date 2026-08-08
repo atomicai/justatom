@@ -57,6 +57,20 @@ An OpenAI-compatible Triton deployment is used only through its HTTP API. The
 client does not import or require `tritonclient`, so it can run on macOS while
 the Triton server runs on its supported host.
 
+## Service Ownership
+
+In a deployed retrieval service, `justatom-api` uses
+`OpenAICompatibleEmbedder` as the runtime-side client. It applies query and
+document prefixes and batching before sending text to `/v1/embeddings`; an
+embedding HTTP service owns tokenization and model execution only. This keeps
+the CPU, Linux/NVIDIA CUDA, native macOS MPS, and external backend contract
+identical without moving model ownership into the API image.
+
+The API image contains no Torch or model weights. One embedding service process
+owns one model instance for its lifetime, so repeated calls reuse it. A
+persistent model cache avoids downloads, but a restarted process still reloads
+the model into RAM or accelerator memory.
+
 ## Strict Config Builder
 
 For config-driven applications, `build_runtime` accepts exactly the retrieval

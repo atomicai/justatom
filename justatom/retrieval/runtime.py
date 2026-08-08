@@ -235,7 +235,7 @@ async def _cleanup_after_failure(store: DocumentStore | None, embedder: Embedder
     except asyncio.CancelledError as cancellation:
         cleanup_error = await asyncio.shield(cleanup_task)
         if cleanup_error is not None:
-            raise cancellation from cleanup_error
+            raise cleanup_error from cancellation
         raise
 
 

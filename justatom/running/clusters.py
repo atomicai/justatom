@@ -5,10 +5,7 @@ from typing import Any, TypeVar
 
 import numpy as np
 import torch
-from bertopic import BERTopic
-from bertopic.backend import BaseEmbedder
 from tqdm.autonotebook import tqdm
-from umap import UMAP
 
 from justatom.etc.schema import Document
 from justatom.modeling.mask import ILanguageModel
@@ -16,9 +13,26 @@ from justatom.processing.loader import NamedDataLoader
 from justatom.processing.mask import IProcessor
 from justatom.processing.silo import igniset
 from justatom.retrieval.contracts import Embedder
-from justatom.running.mask import IClusteringRunner, IDimReducer, IDocEmbedder
+from justatom.running.mask import IClusteringRunner, ICLUSTERINGWrapperBackend, IDimReducer, IDocEmbedder
 
 _T = TypeVar("_T")
+
+
+def _load_bertopic():
+    try:
+        from bertopic import BERTopic
+        from bertopic.backend import BaseEmbedder
+    except ModuleNotFoundError as error:
+        raise ImportError("BERTopic clustering requires `pip install 'justatom[clustering]'`") from error
+    return BERTopic, BaseEmbedder
+
+
+def _load_umap():
+    try:
+        from umap import UMAP
+    except ModuleNotFoundError as error:
+        raise ImportError("UMAP dimension reduction requires `pip install 'justatom[clustering]'`") from error
+    return UMAP
 
 
 class DocEmbedder(IDocEmbedder):
@@ -70,10 +84,9 @@ class DocEmbedder(IDocEmbedder):
             yield embeddings.numpy()
 
 
-class IHFWrapperBackend(BaseEmbedder):
+class IHFWrapperBackend(ICLUSTERINGWrapperBackend):
     def __init__(self, model, batch_size: int = 16):
-        super().__init__()
-        self.model = model
+        super().__init__(model=model)
         self.batch_size = batch_size
 
     def embed(self, documents: list[str], verbose: bool = False) -> np.ndarray:
@@ -93,9 +106,9 @@ class IHFWrapperBackend(BaseEmbedder):
         return embeddings
 
 
-class EmbeddingBackendAdapter(BaseEmbedder):
+class EmbeddingBackendAdapter(ICLUSTERINGWrapperBackend):
     def __init__(self, embedder: Embedder):
-        super().__init__()
+        super().__init__(model=embedder)
         self.embedder = embedder
         self._condition = threading.Condition()
         self._ready = threading.Event()
@@ -244,11 +257,14 @@ class EmbeddingBackendAdapter(BaseEmbedder):
 class IBTRunner(IClusteringRunner):
     """BERTopic class"""
 
-    def __init__(self, model: BaseEmbedder, **kwargs):
+    def __init__(self, model: ICLUSTERINGWrapperBackend, **kwargs):
         super().__init__(model=model)
         if "n_gram_range" in kwargs:
             kwargs["n_gram_range"] = tuple(kwargs["n_gram_range"])
-        self.topic_model = BERTopic(embedding_model=model, **kwargs)
+        bertopic_type, base_embedder = _load_bertopic()
+        if not isinstance(model, base_embedder):
+            raise TypeError("BERTopic embedding model must implement its BaseEmbedder contract")
+        self.topic_model = bertopic_type(embedding_model=model, **kwargs)
 
     def fit_transform(self, docs: list[str | Document], **kwargs) -> tuple[list[int], np.ndarray | None]:
         _docs = [str(d) if isinstance(d, str) else d.content for d in docs]
@@ -259,7 +275,7 @@ class IBTRunner(IClusteringRunner):
 
 class IUMAPDimReducer(IDimReducer):
     def __init__(self, **kwargs):
-        self.umap = UMAP(**kwargs)
+        self.umap = _load_umap()(**kwargs)
 
     def fit_transform(self, embeddings: np.ndarray) -> np.ndarray:
         embs = self.umap.fit_transform(embeddings)
