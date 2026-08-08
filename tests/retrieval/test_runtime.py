@@ -760,10 +760,9 @@ def test_builder_finishes_failure_cleanup_when_cancelled(monkeypatch):
         assert not task.done()
 
         embedder.release_close.set()
-        with pytest.raises(asyncio.CancelledError) as exc_info:
+        with pytest.raises(RuntimeError, match="embedder cleanup failed") as exc_info:
             await task
         assert embedder.closed == 1
-        assert isinstance(exc_info.value.__cause__, RuntimeError)
-        assert str(exc_info.value.__cause__) == "embedder cleanup failed"
+        assert isinstance(exc_info.value.__cause__, asyncio.CancelledError)
 
     asyncio.run(exercise())
