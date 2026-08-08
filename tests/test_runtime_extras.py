@@ -55,6 +55,12 @@ def test_ci_covers_supported_python_range_and_representative_platforms():
     assert _action_step(jobs["pytest-macos"], "actions/setup-python@v5")["with"]["python-version"] == "3.12"
 
 
+def test_windows_tests_run_from_git_bash():
+    run_tests = _step(_workflow_jobs()["pytest-windows"], "Run tests")
+
+    assert run_tests["shell"] == "bash"
+
+
 @pytest.mark.parametrize(
     "job_name",
     ["pytest-ubuntu", "pytest-windows", "pytest-macos", "pytest-integration-weaviate"],
