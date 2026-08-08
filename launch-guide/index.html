@@ -348,6 +348,57 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#retrieval-service-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Retrieval Service Deployment
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Retrieval Service Deployment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#native-mps-on-apple-silicon" class="md-nav__link">
+    <span class="md-ellipsis">
+      Native MPS on Apple Silicon
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#managed-cpu-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      Managed CPU Service
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#managed-cuda-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      Managed CUDA Service
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#external-openai-compatible-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      External OpenAI-compatible Service
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#shell-wrappers" class="md-nav__link">
     <span class="md-ellipsis">
       Shell Wrappers
@@ -649,6 +700,57 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#retrieval-service-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Retrieval Service Deployment
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Retrieval Service Deployment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#native-mps-on-apple-silicon" class="md-nav__link">
+    <span class="md-ellipsis">
+      Native MPS on Apple Silicon
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#managed-cpu-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      Managed CPU Service
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#managed-cuda-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      Managed CUDA Service
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#external-openai-compatible-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      External OpenAI-compatible Service
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#shell-wrappers" class="md-nav__link">
     <span class="md-ellipsis">
       Shell Wrappers
@@ -740,6 +842,46 @@ python -m justatom.api.eval \
 <code>--query-prefix</code>, <code>--document-prefix</code>, <code>--weaviate-url</code>, and
 <code>--collection-name</code> flags. Values are passed to the strict runtime schema; old
 retrieval flag names are rejected.</p>
+<h2 id="retrieval-service-deployment">Retrieval Service Deployment<a class="headerlink" href="#retrieval-service-deployment" title="Permanent link">&para;</a></h2>
+<p>Use <code>scripts/services.sh</code> for every container deployment. It chooses exactly
+one embedding mode and forwards the supported lifecycle command. The API image
+is built from <code>Dockerfile.api</code> and contains no Torch or model weights. The
+<code>Dockerfile.embedder.cpu</code> image is a portable CPU service. The
+<code>Dockerfile.embedder.cuda</code> image is Linux/NVIDIA only. Docker Desktop on macOS
+cannot expose MPS to containers, so native MPS stays a host process.</p>
+<h3 id="native-mps-on-apple-silicon">Native MPS on Apple Silicon<a class="headerlink" href="#native-mps-on-apple-silicon" title="Permanent link">&para;</a></h3>
+<p>Run the embedding service directly on an Apple Silicon macOS host:</p>
+<p><code>bash
+EMBEDDING_DEVICE=mps \
+EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B \
+conda run -n justatom python -m justatom.api.serve_embeddings</code></p>
+<p>The service listens on <code>8000</code>. Point the API container at it with the external
+mode:</p>
+<p><code>bash
+EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1 \
+  scripts/services.sh external up -d --build api weaviate</code></p>
+<h3 id="managed-cpu-service">Managed CPU Service<a class="headerlink" href="#managed-cpu-service" title="Permanent link">&para;</a></h3>
+<p>The portable CPU backend runs alongside the API and Weaviate:</p>
+<p><code>bash
+scripts/services.sh cpu up -d --build</code></p>
+<h3 id="managed-cuda-service">Managed CUDA Service<a class="headerlink" href="#managed-cuda-service" title="Permanent link">&para;</a></h3>
+<p>The CUDA backend requires a Linux x86_64/amd64 NVIDIA host with a working
+<code>nvidia-smi</code>. Starting it elsewhere fails before any workload starts. On
+non-CUDA hosts, use the launcher’s CUDA configuration and platform-build
+validation only; neither establishes CUDA inference.</p>
+<p>CUDA mode never falls back to CPU.</p>
+<p><code>bash
+scripts/services.sh cuda up -d --build</code></p>
+<h3 id="external-openai-compatible-service">External OpenAI-compatible Service<a class="headerlink" href="#external-openai-compatible-service" title="Permanent link">&para;</a></h3>
+<p>Any service implementing the same <code>/v1/embeddings</code> contract can back the API,
+including vLLM, Triton adapters, llama.cpp servers, and the built-in host
+process. Configure its URL and start only the API and Weaviate:</p>
+<p><code>bash
+EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1 \
+  scripts/services.sh external up -d --build api weaviate</code></p>
+<p>One embedding service process owns one model instance. Repeated requests do not reload it.
+The persistent Hugging Face cache avoids a redownload for unchanged weights,
+but does not preserve the model in RAM after a process restart.</p>
 <h2 id="shell-wrappers">Shell Wrappers<a class="headerlink" href="#shell-wrappers" title="Permanent link">&para;</a></h2>
 <p>The pipeline wrapper preserves the <code>vanilla</code>, <code>atom_gate</code>, and <code>atomic</code> training
 variants while passing evaluator settings through the current CLI:</p>

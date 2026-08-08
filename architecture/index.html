@@ -363,6 +363,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#retrieval-service-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Retrieval Service Boundary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#packages" class="md-nav__link">
     <span class="md-ellipsis">
       Packages
@@ -637,6 +646,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#retrieval-service-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Retrieval Service Boundary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#packages" class="md-nav__link">
     <span class="md-ellipsis">
       Packages
@@ -721,6 +739,19 @@ DocumentStore + Embedder -&gt; RetrievalRuntime -&gt; Indexer + Retriever</code>
 <p>The runtime creates an <code>Indexer</code> for writes and a mode-specific <code>Retriever</code> for
 <code>keyword</code>, <code>vector</code>, or <code>hybrid</code> reads. It is an async context manager and owns
 closing the supplied store and embedder.</p>
+<h2 id="retrieval-service-boundary">Retrieval Service Boundary<a class="headerlink" href="#retrieval-service-boundary" title="Permanent link">&para;</a></h2>
+<p>Production retrieval splits orchestration, embedding inference, and storage
+into independent processes:</p>
+<p><code>text
+client -&gt; justatom-api -&gt; OpenAICompatibleEmbedder -&gt; embedding HTTP service
+                    `-&gt; WeaviateDocumentStore -&gt; Weaviate</code></p>
+<p><code>justatom-api</code> owns the <code>RetrievalRuntime</code>, HTTP embedding client, and Weaviate
+connection. Its image contains no model. Query and document prefixes and
+batching are applied by the API-side client before HTTP inference. The local
+embedding service remains domain-agnostic: it owns tokenization and model execution only.</p>
+<p>One embedding process owns one <code>HuggingFaceEmbedder</code> and one loaded model.
+CPU, Linux/NVIDIA CUDA, native macOS MPS, and external OpenAI-compatible
+services use the same embedding HTTP contract.</p>
 <p><img alt="Architecture overview" src="../atom-arch.png" /></p>
 <h2 id="packages">Packages<a class="headerlink" href="#packages" title="Permanent link">&para;</a></h2>
 <h3 id="justatomretrieval"><code>justatom.retrieval</code><a class="headerlink" href="#justatomretrieval" title="Permanent link">&para;</a></h3>
