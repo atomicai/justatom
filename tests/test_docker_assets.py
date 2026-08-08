@@ -215,6 +215,20 @@ def _rendered_compose_contract():
     }
 
 
+def _assert_bind_mount(mount, *, source, target, read_only=None):
+    expected_keys = {"type", "source", "target", "bind"}
+    if read_only is not None:
+        expected_keys.add("read_only")
+
+    assert set(mount) == expected_keys
+    assert mount["type"] == "bind"
+    assert Path(mount["source"]).resolve() == Path(source).resolve()
+    assert mount["target"] == target
+    if read_only is not None:
+        assert mount["read_only"] is read_only
+    assert mount["bind"] in ({}, {"create_host_path": True})
+
+
 def _assert_rendered_compose_contract(rendered):
     assert sorted(rendered["external"]["services"]) == ["api", "weaviate"]
     assert sorted(rendered["cpu"]["services"]) == ["api", "embedder-cpu", "weaviate"]
@@ -229,14 +243,12 @@ def _assert_rendered_compose_contract(rendered):
         assert api.get("restart") == "unless-stopped"
         assert len(api["volumes"]) == 1
         api_config = api["volumes"][0]
-        assert api_config == {
-            "type": "bind",
-            "source": api_config["source"],
-            "target": "/etc/justatom/serve.yaml",
-            "read_only": True,
-            "bind": {},
-        }
-        assert Path(api_config["source"]).resolve() == Path("configs/serve.docker.yaml").resolve()
+        _assert_bind_mount(
+            api_config,
+            source="configs/serve.docker.yaml",
+            target="/etc/justatom/serve.yaml",
+            read_only=True,
+        )
         assert weaviate["restart"] == "on-failure:0"
         assert weaviate["volumes"] == [
             {
@@ -275,13 +287,17 @@ def _assert_rendered_compose_contract(rendered):
     assert redis["ports"] == [{"mode": "ingress", "target": 6379, "published": "6379", "protocol": "tcp"}]
     assert len(redis["volumes"]) == 1
     redis_config = redis["volumes"][0]
-    assert redis_config == {
-        "type": "bind",
-        "source": redis_config["source"],
-        "target": "/redis.conf",
-        "bind": {},
-    }
-    assert Path(redis_config["source"]).resolve() == Path("redis.conf").resolve()
+    _assert_bind_mount(redis_config, source="redis.conf", target="/redis.conf")
+
+
+@pytest.mark.integration
+def test_rendered_compose_contract_accepts_generated_bind_metadata():
+    rendered = _rendered_compose_contract()
+    for config in rendered.values():
+        config["services"]["api"]["volumes"][0]["bind"] = {"create_host_path": True}
+    rendered["legacy"]["services"]["redis"]["volumes"][0]["bind"] = {"create_host_path": True}
+
+    _assert_rendered_compose_contract(rendered)
 
 
 @pytest.mark.integration
@@ -291,6 +307,8 @@ def _assert_rendered_compose_contract(rendered):
         lambda value: value["cpu"]["services"]["embedder-cpu"]["networks"]["default"].update(aliases=[]),
         lambda value: value["cuda"]["services"]["embedder-cuda"].update(volumes=[]),
         lambda value: value["external"]["services"]["api"]["volumes"][0].update(read_only=False),
+        lambda value: value["external"]["services"]["api"]["volumes"][0].update(source="/wrong/config.yaml"),
+        lambda value: value["legacy"]["services"]["redis"]["volumes"][0].update(target="/wrong.conf"),
         lambda value: value["cpu"]["services"]["api"]["environment"].update(JUSTATOM_START_MQ="true"),
         lambda value: value["cuda"]["services"]["embedder-cuda"]["deploy"]["resources"]["reservations"]["devices"][0].update(
             driver="other", count=2, capabilities=["compute"]
