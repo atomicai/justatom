@@ -52,6 +52,10 @@ embedder = [
   "mmh3==4.1.0",
   "fastnumbers==5.1.0",
 ]
+clustering = [
+  "bertopic==0.16.2",
+  "umap-learn>=0.5,<1",
+]
 test = [
   "httpx>=0.27,<1",
   "pytest>=8,<9",

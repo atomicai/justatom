@@ -1,6 +1,8 @@
 import asyncio
 import json
 import queue
+import subprocess
+import sys
 import threading
 
 import httpx
@@ -28,6 +30,66 @@ def _close_if_supported(adapter):
     close = getattr(adapter, "close", None)
     if close is not None:
         close()
+
+
+def test_adapter_imports_without_optional_clustering_dependencies():
+    code = """
+import sys
+
+sys.modules["bertopic"] = None
+sys.modules["bertopic.backend"] = None
+sys.modules["umap"] = None
+
+from justatom.running.clusters import EmbeddingBackendAdapter, IBTRunner, IUMAPDimReducer
+
+class FakeEmbedder:
+    async def embed_documents(self, texts):
+        return [[float(index), 1.0] for index, _ in enumerate(texts)]
+
+    async def close(self):
+        return None
+
+adapter = EmbeddingBackendAdapter(FakeEmbedder())
+try:
+    assert adapter.embed(["a", "b"]).tolist() == [[0.0, 1.0], [1.0, 1.0]]
+finally:
+    adapter.close()
+
+for constructor in (lambda: IBTRunner(object()), IUMAPDimReducer):
+    try:
+        constructor()
+    except ImportError as error:
+        assert "justatom[clustering]" in str(error)
+    else:
+        raise AssertionError("optional clustering constructor unexpectedly succeeded")
+"""
+    result = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_embedding_adapter_satisfies_real_bertopic_base_contract(monkeypatch):
+    from bertopic.backend import BaseEmbedder
+
+    from justatom.running import clusters
+
+    captured = {}
+
+    class FakeBERTopic:
+        def __init__(self, embedding_model, **kwargs):
+            captured["embedding_model"] = embedding_model
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(clusters, "_load_bertopic", lambda: (FakeBERTopic, BaseEmbedder))
+    adapter = EmbeddingBackendAdapter(FakeEmbedder())
+    try:
+        clusters.IBTRunner(adapter, n_gram_range=[1, 2])
+
+        assert isinstance(captured["embedding_model"], BaseEmbedder)
+        assert captured["embedding_model"].embed(["a"]).tolist() == [[0.0, 1.0]]
+        assert captured["kwargs"]["n_gram_range"] == (1, 2)
+    finally:
+        adapter.close()
 
 
 def test_bertopic_adapter_uses_document_embedding_role():

@@ -83,6 +83,13 @@ def test_embedder_extra_has_local_runner_dependencies_without_torch_wheel():
     assert not _contains_requirement(embedder, "torch")
 
 
+def test_clustering_extra_owns_bertopic_and_umap_dependencies():
+    clustering = _extras()["clustering"]
+
+    assert _contains_requirement(clustering, "bertopic")
+    assert _contains_requirement(clustering, "umap-learn")
+
+
 @pytest.mark.parametrize("declaration", ["Torch>=2.8", "torch == 2.8", "torch[cpu]>=2.8", "TORCH [cpu] >= 2.8"])
 def test_embedder_extra_rejects_direct_torch_requirement_variants(monkeypatch, declaration):
     monkeypatch.setattr(
