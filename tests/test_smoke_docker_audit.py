@@ -1,9 +1,12 @@
 import os
+import shlex
 import stat
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests.shell_utils import bash_executable
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT_HELPER = ROOT / "scripts" / "smoke_docker_audit.sh"
@@ -50,7 +53,8 @@ if [[ "${FAIL_QUERY:-}" == "$query" ]]; then
   exit 17
 fi
 printf '%s\\n' "$output"
-"""
+""",
+        encoding="utf-8",
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
 
@@ -70,7 +74,7 @@ def _run_helper(tmp_path: Path, helper: str, fail_query: str = "") -> tuple[int,
         }
     )
     command = f"""
-source {AUDIT_HELPER!s}
+source {shlex.quote(AUDIT_HELPER.as_posix())}
 if output="$({helper})"; then
   status=0
 else
@@ -85,15 +89,16 @@ fi
 printf '%s\\n' "$output"
 """
     result = subprocess.run(
-        ["bash", "-c", command],
+        [bash_executable(), "-c", command],
         cwd=ROOT,
         env=env,
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     lines = result.stdout.splitlines()
-    queries = query_log.read_text().splitlines() if query_log.exists() else []
+    queries = query_log.read_text(encoding="utf-8").splitlines() if query_log.exists() else []
     failed_under_if_not = lines[1] == "failed_under_if_not=true"
     return int(lines[0].removeprefix("status=")), failed_under_if_not, lines[2:], queries
 
@@ -147,7 +152,7 @@ def test_container_smokes_share_the_hardened_docker_audit() -> None:
         "smoke_containerized_retrieval.sh",
         "smoke_api_external_backend.sh",
     ):
-        script = (ROOT / "scripts" / script_name).read_text()
+        script = (ROOT / "scripts" / script_name).read_text(encoding="utf-8")
         assert "source scripts/smoke_docker_audit.sh" in script
         assert "list_compose_projects()" not in script
         assert "project_resources()" not in script

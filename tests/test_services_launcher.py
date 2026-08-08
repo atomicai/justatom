@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.shell_utils import bash_executable
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO_ROOT / "scripts" / "services.sh"
 
@@ -49,7 +51,7 @@ printf 'arg=%s\n' "$@" >> "$DOCKER_LOG"
 
 def _run_launcher(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", str(LAUNCHER), *args],
+        [bash_executable(), str(LAUNCHER), *args],
         cwd=REPO_ROOT,
         env=env,
         text=True,
@@ -263,5 +265,14 @@ def test_cuda_up_runs_after_linux_amd64_nvidia_preflight_succeeds(tmp_path, mach
     assert docker_log.exists()
 
 
-def test_launcher_is_executable():
-    assert LAUNCHER.stat().st_mode & stat.S_IXUSR
+def test_launcher_is_executable_in_git_index():
+    result = subprocess.run(
+        ["git", "ls-files", "--stage", "--", LAUNCHER.relative_to(REPO_ROOT).as_posix()],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert result.stdout.split(maxsplit=1)[0] == "100755"
