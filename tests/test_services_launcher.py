@@ -44,14 +44,25 @@ printf 'arg=%s\n' "$@" >> "$DOCKER_LOG"
     env.pop("EMBEDDING_BASE_URL", None)
     env["COMPOSE_PROFILES"] = "cpu,cuda"
     env["DOCKER_LOG"] = str(docker_log)
+    env["JUSTATOM_TEST_BIN"] = str(bin_dir)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     env.update(overrides)
     return env, docker_log
 
 
 def _run_launcher(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    command = [bash_executable(), str(LAUNCHER), *args]
+    if os.name == "nt":
+        command = [
+            bash_executable(),
+            "-c",
+            'export PATH="$(cygpath -u "$JUSTATOM_TEST_BIN"):$PATH"; exec "$BASH" "$@"',
+            "justatom-test",
+            str(LAUNCHER),
+            *args,
+        ]
     return subprocess.run(
-        [bash_executable(), str(LAUNCHER), *args],
+        command,
         cwd=REPO_ROOT,
         env=env,
         text=True,
