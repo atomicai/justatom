@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -45,8 +47,10 @@ exit 97
 
 
 def test_ci_has_dedicated_docker_compose_contract_gate() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ci.yaml").read_text()
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yaml").read_text())
+    job = workflow["jobs"]["pytest-integration-docker-compose"]
+    setup_python = next(step for step in job["steps"] if step.get("uses") == "actions/setup-python@v5")
+    test_step = next(step for step in job["steps"] if step.get("name") == "Run Docker Compose contract tests")
 
-    assert "pytest-integration-docker-compose:" in workflow
-    assert "python-version: '3.11'" in workflow
-    assert "python -m pytest tests/test_docker_assets.py -m integration" in workflow
+    assert setup_python["with"]["python-version"] == "3.12"
+    assert test_step["run"] == "python -m pytest tests/test_docker_assets.py -m integration"
