@@ -68,28 +68,50 @@ for constructor in (lambda: IBTRunner(object()), IUMAPDimReducer):
     assert result.returncode == 0, result.stderr
 
 
-def test_embedding_adapter_satisfies_real_bertopic_base_contract(monkeypatch):
-    from bertopic.backend import BaseEmbedder
+def test_embedding_adapter_satisfies_real_bertopic_base_contract():
+    code = """
+import sys
+import types
 
-    from justatom.running import clusters
+class BaseEmbedder:
+    def __init__(self, embedding_model=None, word_embedding_model=None):
+        self.embedding_model = embedding_model
+        self.word_embedding_model = word_embedding_model
 
-    captured = {}
+class BERTopic:
+    def __init__(self, embedding_model, **kwargs):
+        self.embedding_model = embedding_model
+        self.kwargs = kwargs
 
-    class FakeBERTopic:
-        def __init__(self, embedding_model, **kwargs):
-            captured["embedding_model"] = embedding_model
-            captured["kwargs"] = kwargs
+bertopic = types.ModuleType("bertopic")
+bertopic.BERTopic = BERTopic
+backend = types.ModuleType("bertopic.backend")
+backend.BaseEmbedder = BaseEmbedder
+bertopic.backend = backend
+sys.modules["bertopic"] = bertopic
+sys.modules["bertopic.backend"] = backend
 
-    monkeypatch.setattr(clusters, "_load_bertopic", lambda: (FakeBERTopic, BaseEmbedder))
-    adapter = EmbeddingBackendAdapter(FakeEmbedder())
-    try:
-        clusters.IBTRunner(adapter, n_gram_range=[1, 2])
+from justatom.running.clusters import EmbeddingBackendAdapter, IBTRunner
 
-        assert isinstance(captured["embedding_model"], BaseEmbedder)
-        assert captured["embedding_model"].embed(["a"]).tolist() == [[0.0, 1.0]]
-        assert captured["kwargs"]["n_gram_range"] == (1, 2)
-    finally:
-        adapter.close()
+class FakeEmbedder:
+    async def embed_documents(self, texts):
+        return [[float(index), 1.0] for index, _ in enumerate(texts)]
+
+    async def close(self):
+        return None
+
+adapter = EmbeddingBackendAdapter(FakeEmbedder())
+try:
+    runner = IBTRunner(adapter, n_gram_range=[1, 2])
+    assert isinstance(runner.topic_model.embedding_model, BaseEmbedder)
+    assert runner.topic_model.embedding_model.embed(["a"]).tolist() == [[0.0, 1.0]]
+    assert runner.topic_model.kwargs["n_gram_range"] == (1, 2)
+finally:
+    adapter.close()
+"""
+    result = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_bertopic_adapter_uses_document_embedding_role():
