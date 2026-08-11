@@ -16,7 +16,7 @@ from justatom.processing.loader import NamedDataLoader
 from justatom.processing.prime import TrainWithContrastiveProcessor
 from justatom.running.encoders import EncoderRunner
 from justatom.tooling.collections import build_collection_metadata, resolve_artifact_dirname, write_collection_metadata
-from justatom.training.config import RuntimeConfig, TrainConfig, train_config_to_dict
+from justatom.training.config import LoraAdapterConfig, RuntimeConfig, TrainConfig, train_config_to_dict
 from justatom.training.data import prepare_training_data_from_config
 from justatom.training.methods import resolve_method
 from justatom.training.module import ContrastiveTrainingModule
@@ -26,6 +26,7 @@ from justatom.training.module import ContrastiveTrainingModule
 class ArtifactPaths:
     root: Path
     deployable_encoder: Path
+    adapter: Path
     research_checkpoint: Path
     manifest: Path
 
@@ -34,6 +35,7 @@ def artifact_paths(root: Path) -> ArtifactPaths:
     return ArtifactPaths(
         root=root,
         deployable_encoder=root / "encoder",
+        adapter=root / "adapter",
         research_checkpoint=root / "research" / "checkpoint.pt",
         manifest=root / "run_manifest.yaml",
     )
@@ -171,8 +173,49 @@ def resolve_torch_device(runtime: RuntimeConfig) -> str:
     return "cpu"
 
 
+def resolve_training_precision(runtime: RuntimeConfig) -> str:
+    if runtime.precision != "auto":
+        return runtime.precision
+    if resolve_torch_device(runtime).startswith("cuda"):
+        return "bf16-mixed" if torch.cuda.is_bf16_supported() else "16-mixed"
+    return "32-true"
+
+
+def apply_lora_adapter(language_model: ILanguageModel, config: LoraAdapterConfig) -> ILanguageModel:
+    if not config.enabled:
+        return language_model
+
+    from peft import LoraConfig, TaskType, get_peft_model
+
+    target_modules = list(config.target_modules) if isinstance(config.target_modules, tuple) else config.target_modules
+    language_model.model = get_peft_model(
+        language_model.model,
+        LoraConfig(
+            task_type=TaskType.FEATURE_EXTRACTION,
+            inference_mode=False,
+            r=config.rank,
+            lora_alpha=config.alpha,
+            lora_dropout=config.dropout,
+            target_modules=target_modules,
+            use_rslora=config.use_rslora,
+            bias=config.bias,
+        ),
+    )
+    return language_model
+
+
 def load_encoder(config: TrainConfig, processor: TrainWithContrastiveProcessor) -> EncoderRunner:
     language_model = ILanguageModel.load(model_name_or_path=config.model.name_or_path)
+    if config.runtime.gradient_checkpointing:
+        backbone = language_model.model
+        if not hasattr(backbone, "gradient_checkpointing_enable"):
+            raise ValueError(f"{config.model.name_or_path} does not support gradient checkpointing")
+        backbone.gradient_checkpointing_enable()
+        if hasattr(backbone, "enable_input_require_grads"):
+            backbone.enable_input_require_grads()
+        if hasattr(backbone, "config") and hasattr(backbone.config, "use_cache"):
+            backbone.config.use_cache = False
+    apply_lora_adapter(language_model, config.model.lora)
     return EncoderRunner(
         model=language_model,
         processor=processor,
@@ -199,6 +242,7 @@ def build_lightning_trainer(config: TrainConfig) -> L.Trainer:
         max_epochs=config.optimization.epochs,
         accelerator=config.runtime.accelerator,
         devices=config.runtime.devices,
+        precision=resolve_training_precision(config.runtime),
         accumulate_grad_batches=config.optimization.grad_acc_steps,
         logger=build_training_logger(config),
         log_every_n_steps=1,
@@ -213,6 +257,7 @@ class TrainingResult:
     encoder_dir: Path
     research_checkpoint: Path | None
     metrics_path: Path | None
+    adapter_dir: Path | None = None
 
 
 class TrainingJob:
@@ -249,7 +294,14 @@ class TrainingJob:
         trainer = self.trainer_factory(config)
         trainer.fit(module, train_dataloaders=loader)
 
-        encoder_dir = module.save_deployable_encoder(paths.deployable_encoder)
         checkpoint = module.save_research_checkpoint(paths.research_checkpoint)
+        adapter_dir = module.save_lora_adapter(paths.adapter)
+        encoder_dir = module.save_deployable_encoder(paths.deployable_encoder)
         metrics_path = None if module.metrics_path is None else Path(module.metrics_path)
-        return TrainingResult(paths.root, encoder_dir, checkpoint, metrics_path)
+        return TrainingResult(
+            run_dir=paths.root,
+            encoder_dir=encoder_dir,
+            research_checkpoint=checkpoint,
+            metrics_path=metrics_path,
+            adapter_dir=adapter_dir,
+        )

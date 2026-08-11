@@ -296,8 +296,27 @@ class ContrastiveTrainingModule(L.LightningModule):
         self.objective.kernel.clamp_temperature_()
 
     def save_deployable_encoder(self, destination: Path) -> Path:
+        if self.config.model.lora.enabled:
+            peft_model = self._lora_model()
+            self.encoder.to("cpu")
+            self.encoder.model.model = peft_model.merge_and_unload(safe_merge=True)
         destination.mkdir(parents=True, exist_ok=True)
         self.encoder.save(str(destination))
+        return destination
+
+    def _lora_model(self):
+        from peft import PeftModel
+
+        model = getattr(getattr(self.encoder, "model", None), "model", None)
+        if not isinstance(model, PeftModel):
+            raise RuntimeError("LoRA is enabled, but the encoder does not contain a PEFT model")
+        return model
+
+    def save_lora_adapter(self, destination: Path) -> Path | None:
+        if not self.config.model.lora.enabled:
+            return None
+        destination.mkdir(parents=True, exist_ok=True)
+        self._lora_model().save_pretrained(str(destination), safe_serialization=True)
         return destination
 
     def save_research_checkpoint(self, destination: Path) -> Path | None:

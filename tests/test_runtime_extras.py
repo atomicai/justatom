@@ -89,6 +89,14 @@ def test_embedder_extra_has_local_runner_dependencies_without_torch_wheel():
     assert not _contains_requirement(embedder, "torch")
 
 
+def test_torch_extra_has_peft_and_qwen3_compatible_transformers():
+    torch_extra = _extras()["torch"]
+    transformers = next(Requirement(item) for item in torch_extra if Requirement(item).name == "transformers")
+
+    assert _contains_requirement(torch_extra, "peft")
+    assert "4.51" in str(transformers.specifier)
+
+
 def test_clustering_extra_owns_bertopic_and_umap_dependencies():
     clustering = _extras()["clustering"]
 

@@ -10,6 +10,14 @@ model:
   content_prefix: "passage:"
   max_query_seq_len: null
   max_seq_len: 512
+  lora:
+    enabled: false
+    rank: 16
+    alpha: 32
+    dropout: 0.0
+    target_modules: all-linear
+    use_rslora: true
+    bias: none
 
 dataset:
   id: null
@@ -59,3 +67,5 @@ artifacts:
 runtime:
   accelerator: auto
   devices: auto
+  precision: auto
+  gradient_checkpointing: false

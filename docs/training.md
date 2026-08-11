@@ -118,14 +118,65 @@ bash scripts/run_benchmark.sh \
   --auto-e5-prefixes
 ```
 
+## LoRA adapters
+
+LoRA is an encoder configuration, so it composes with every training method.
+The objective, query gate, and memory bank do not change; the optimizer simply
+updates PEFT adapter parameters instead of the frozen backbone parameters.
+
+The default `all-linear` target is resolved by PEFT from the Hugging Face model
+itself. This keeps the same config usable for Qwen3-Embedding, E5, BGE, and
+mBERT. An explicit list is still available for controlled experiments.
+`justatom/pfbert` is intentionally unsupported because it is not a Hugging Face
+encoder.
+
+```yaml
+method: atomic
+
+model:
+  name_or_path: Qwen/Qwen3-Embedding-0.6B
+  query_prefix: |-
+    Instruct: Given a web search query, retrieve relevant passages that answer the query
+    Query:
+  content_prefix: ""
+  lora:
+    enabled: true
+    rank: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: all-linear
+    use_rslora: true
+    bias: none
+
+optimization:
+  lr_encoder: 0.0002
+
+runtime:
+  accelerator: auto
+  precision: auto
+  gradient_checkpointing: true
+```
+
+This is ordinary Hugging Face PEFT; it does not require Unsloth, bitsandbytes,
+or a quantized base model. With `precision: auto`, CUDA uses BF16 when the GPU
+supports it and otherwise FP16. MPS and CPU default to FP32 for compatibility;
+`16-mixed` can be selected explicitly on a supported Mac. Gradient
+checkpointing is independent of LoRA and can be enabled when sequence length
+or batch size needs more memory.
+
 ## Artifacts
 
 Every successful training run writes:
 
 - `encoder/`: deployable Hugging Face-compatible encoder artifact
+- `adapter/`: PEFT adapter and its config when LoRA is enabled
 - `research/checkpoint.pt`: complete training state for analysis or continuation
 - `run_manifest.yaml`: resolved method, data, seed, hyperparameters, and Git state
 - `batch_metrics.csv`: losses, retrieval ranks, `alpha(q)`, bank geometry, collision `g(q)`, hard weights, and margin distributions
+
+The adapter and research checkpoint are saved before LoRA is merged into the
+deployable encoder. Loading `encoder/` therefore does not require PEFT, while
+`adapter/` retains the small reusable delta for reproducibility.
 
 The benchmark additionally writes commands, retrieval tables, geometry tables,
 and process RSS snapshots. These files are the reproducibility boundary for

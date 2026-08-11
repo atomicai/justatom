@@ -29,6 +29,7 @@ def test_artifact_directories_are_distinct(tmp_path: Path):
     paths = artifact_paths(tmp_path)
 
     assert paths.deployable_encoder == tmp_path / "encoder"
+    assert paths.adapter == tmp_path / "adapter"
     assert paths.research_checkpoint == tmp_path / "research" / "checkpoint.pt"
     assert paths.manifest == tmp_path / "run_manifest.yaml"
 
@@ -49,6 +50,10 @@ def test_training_job_writes_manifest_before_fit_and_returns_artifacts(tmp_path:
             events.append("encoder")
             destination.mkdir(parents=True)
             return destination
+
+        def save_lora_adapter(self, destination):
+            events.append("adapter")
+            return None
 
         def save_research_checkpoint(self, destination):
             events.append("checkpoint")
@@ -71,6 +76,7 @@ def test_training_job_writes_manifest_before_fit_and_returns_artifacts(tmp_path:
 
     result = job.run()
 
-    assert events == ["fit", "encoder", "checkpoint"]
+    assert events == ["fit", "checkpoint", "adapter", "encoder"]
     assert result.encoder_dir == tmp_path / "encoder"
     assert result.research_checkpoint == tmp_path / "research" / "checkpoint.pt"
+    assert result.adapter_dir is None
