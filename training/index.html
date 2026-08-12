@@ -378,6 +378,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#lora-adapters" class="md-nav__link">
+    <span class="md-ellipsis">
+      LoRA adapters
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#artifacts" class="md-nav__link">
     <span class="md-ellipsis">
       Artifacts
@@ -658,6 +667,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#lora-adapters" class="md-nav__link">
+    <span class="md-ellipsis">
+      LoRA adapters
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#artifacts" class="md-nav__link">
     <span class="md-ellipsis">
       Artifacts
@@ -791,14 +809,56 @@ bash scripts/run_benchmark.sh \
   --batch-size 32 \
   --epochs 2 \
   --auto-e5-prefixes</code></p>
+<h2 id="lora-adapters">LoRA adapters<a class="headerlink" href="#lora-adapters" title="Permanent link">&para;</a></h2>
+<p>LoRA is an encoder configuration, so it composes with every training method.
+The objective, query gate, and memory bank do not change; the optimizer simply
+updates PEFT adapter parameters instead of the frozen backbone parameters.</p>
+<p>The default <code>all-linear</code> target is resolved by PEFT from the Hugging Face model
+itself. This keeps the same config usable for Qwen3-Embedding, E5, BGE, and
+mBERT. An explicit list is still available for controlled experiments.
+<code>justatom/pfbert</code> is intentionally unsupported because it is not a Hugging Face
+encoder.</p>
+<p>```yaml
+method: atomic</p>
+<p>model:
+  name_or_path: Qwen/Qwen3-Embedding-0.6B
+  query_prefix: |-
+    Instruct: Given a web search query, retrieve relevant passages that answer the query
+    Query:
+  content_prefix: ""
+  lora:
+    enabled: true
+    rank: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: all-linear
+    use_rslora: true
+    bias: none</p>
+<p>optimization:
+  lr_encoder: 0.0002</p>
+<p>runtime:
+  accelerator: auto
+  precision: auto
+  gradient_checkpointing: true
+```</p>
+<p>This is ordinary Hugging Face PEFT; it does not require Unsloth, bitsandbytes,
+or a quantized base model. With <code>precision: auto</code>, CUDA uses BF16 when the GPU
+supports it and otherwise FP16. MPS and CPU default to FP32 for compatibility;
+<code>16-mixed</code> can be selected explicitly on a supported Mac. Gradient
+checkpointing is independent of LoRA and can be enabled when sequence length
+or batch size needs more memory.</p>
 <h2 id="artifacts">Artifacts<a class="headerlink" href="#artifacts" title="Permanent link">&para;</a></h2>
 <p>Every successful training run writes:</p>
 <ul>
 <li><code>encoder/</code>: deployable Hugging Face-compatible encoder artifact</li>
+<li><code>adapter/</code>: PEFT adapter and its config when LoRA is enabled</li>
 <li><code>research/checkpoint.pt</code>: complete training state for analysis or continuation</li>
 <li><code>run_manifest.yaml</code>: resolved method, data, seed, hyperparameters, and Git state</li>
 <li><code>batch_metrics.csv</code>: losses, retrieval ranks, <code>alpha(q)</code>, bank geometry, collision <code>g(q)</code>, hard weights, and margin distributions</li>
 </ul>
+<p>The adapter and research checkpoint are saved before LoRA is merged into the
+deployable encoder. Loading <code>encoder/</code> therefore does not require PEFT, while
+<code>adapter/</code> retains the small reusable delta for reproducibility.</p>
 <p>The benchmark additionally writes commands, retrieval tables, geometry tables,
 and process RSS snapshots. These files are the reproducibility boundary for
 reported experiments.</p>
