@@ -30,12 +30,24 @@ class ExperimentConfig:
 
 
 @dataclass(frozen=True)
+class LoraAdapterConfig:
+    enabled: bool = False
+    rank: int = 16
+    alpha: int = 32
+    dropout: float = 0.0
+    target_modules: str | tuple[str, ...] = "all-linear"
+    use_rslora: bool = True
+    bias: str = "none"
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     name_or_path: str = "intfloat/multilingual-e5-small"
     query_prefix: str = "query:"
     content_prefix: str = "passage:"
     max_query_seq_len: int | None = None
     max_seq_len: int = 512
+    lora: LoraAdapterConfig = field(default_factory=LoraAdapterConfig)
 
 
 @dataclass(frozen=True)
@@ -153,6 +165,8 @@ class ArtifactConfig:
 class RuntimeConfig:
     accelerator: str = "auto"
     devices: str | int = "auto"
+    precision: str = "auto"
+    gradient_checkpointing: bool = False
 
 
 @dataclass(frozen=True)
@@ -253,6 +267,20 @@ def _normalize_dataset(raw: Any) -> Any:
     return normalized
 
 
+def _normalize_model(raw: Any) -> Any:
+    if not isinstance(raw, Mapping):
+        return raw
+    normalized = dict(raw)
+    lora = normalized.get("lora")
+    if isinstance(lora, Mapping):
+        lora = dict(lora)
+        target_modules = lora.get("target_modules")
+        if isinstance(target_modules, list):
+            lora["target_modules"] = tuple(target_modules)
+        normalized["lora"] = lora
+    return normalized
+
+
 def _require_bool(value: Any, path: str) -> None:
     if not isinstance(value, bool):
         raise ValueError(f"{path} must be a boolean")
@@ -281,6 +309,24 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_int(config.model.max_seq_len, "model.max_seq_len", 1)
     if config.model.max_query_seq_len is not None:
         _require_int(config.model.max_query_seq_len, "model.max_query_seq_len", 1)
+    lora = config.model.lora
+    _require_bool(lora.enabled, "model.lora.enabled")
+    _require_int(lora.rank, "model.lora.rank", 1)
+    _require_int(lora.alpha, "model.lora.alpha", 1)
+    _require_number(lora.dropout, "model.lora.dropout", 0.0, 1.0)
+    _require_bool(lora.use_rslora, "model.lora.use_rslora")
+    if lora.bias not in {"none", "all", "lora_only"}:
+        raise ValueError("model.lora.bias must be one of: none, all, lora_only")
+    if isinstance(lora.target_modules, str):
+        if not lora.target_modules:
+            raise ValueError("model.lora.target_modules must be a non-empty string or list of strings")
+    elif isinstance(lora.target_modules, tuple):
+        if not lora.target_modules or not all(isinstance(name, str) and name for name in lora.target_modules):
+            raise ValueError("model.lora.target_modules must be a non-empty string or list of strings")
+    else:
+        raise ValueError("model.lora.target_modules must be a non-empty string or list of strings")
+    if lora.enabled and config.model.name_or_path == "justatom/pfbert":
+        raise ValueError("model.lora is supported only for Hugging Face encoders; justatom/pfbert is not supported")
 
     _require_bool(config.dataset.lazy, "dataset.lazy")
     if config.dataset.limit is not None:
@@ -343,6 +389,9 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_bool(config.artifacts.save_research_checkpoint, "artifacts.save_research_checkpoint")
     if not isinstance(config.runtime.devices, (str, int)) or isinstance(config.runtime.devices, bool):
         raise ValueError("runtime.devices must be a string or integer")
+    if not isinstance(config.runtime.precision, str) or not config.runtime.precision:
+        raise ValueError("runtime.precision must be a non-empty string")
+    _require_bool(config.runtime.gradient_checkpointing, "runtime.gradient_checkpointing")
 
 
 def parse_train_config(raw: Mapping[str, Any]) -> TrainConfig:
@@ -357,6 +406,8 @@ def parse_train_config(raw: Mapping[str, Any]) -> TrainConfig:
     base = canonical_method_config(method)
     payload = dict(raw)
     payload.pop("method")
+    if "model" in payload:
+        payload["model"] = _normalize_model(payload["model"])
     if "dataset" in payload:
         payload["dataset"] = _normalize_dataset(payload["dataset"])
     config = _overlay_dataclass(base, payload)

@@ -98,3 +98,50 @@ def test_dataset_loader_options_are_typed_and_round_trippable():
 def test_dataset_lazy_must_be_boolean():
     with pytest.raises(ValueError, match=r"dataset\.lazy"):
         parse_train_config({"method": "vanilla", "dataset": {"lazy": "yes"}})
+
+
+def test_lora_config_is_model_agnostic_and_round_trippable():
+    config = parse_train_config(
+        {
+            "method": "atomic",
+            "model": {
+                "name_or_path": "intfloat/multilingual-e5-small",
+                "lora": {
+                    "enabled": True,
+                    "rank": 8,
+                    "alpha": 16,
+                    "dropout": 0.05,
+                    "target_modules": ["query", "value"],
+                    "use_rslora": False,
+                },
+            },
+        }
+    )
+
+    assert config.model.lora.enabled is True
+    assert config.model.lora.target_modules == ("query", "value")
+    assert parse_train_config(train_config_to_dict(config)) == config
+
+
+def test_lora_rejects_non_hugging_face_pfbert():
+    with pytest.raises(ValueError, match=r"pfbert is not supported"):
+        parse_train_config(
+            {
+                "method": "vanilla",
+                "model": {
+                    "name_or_path": "justatom/pfbert",
+                    "lora": {"enabled": True},
+                },
+            }
+        )
+
+
+@pytest.mark.parametrize("target_modules", [[], [""], 7])
+def test_lora_rejects_invalid_target_modules(target_modules):
+    with pytest.raises(ValueError, match=r"model\.lora\.target_modules"):
+        parse_train_config(
+            {
+                "method": "vanilla",
+                "model": {"lora": {"enabled": True, "target_modules": target_modules}},
+            }
+        )

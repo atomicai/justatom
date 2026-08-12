@@ -93,7 +93,9 @@ class IProcessor(abc.ABC):
         }
 
     def do_prefix(self, x: str, pref: str):
-        return pref.strip() + " " + x.strip()
+        prefix = pref.strip()
+        text = x.strip()
+        return f"{prefix} {text}" if prefix else text
 
     def _check_sample_features(self, basket: SampleBasket):
         """
