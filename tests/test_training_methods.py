@@ -59,3 +59,28 @@ def test_vanilla_rejects_alpha_even_for_ablation():
 
     with pytest.raises(ValueError, match="vanilla.*alpha_gate"):
         resolve_method(invalid)
+
+
+def test_vanilla_memory_bank_requires_ablation_role():
+    vanilla = canonical_method_config(TrainingMethod.VANILLA)
+    atomic = canonical_method_config(TrainingMethod.ATOMIC)
+    bank = replace(
+        atomic.memory_bank,
+        adaptive=replace(atomic.memory_bank.adaptive, enabled=False),
+        margin=replace(atomic.memory_bank.margin, mode=MarginMode.OFF, regularization_weight=0.0),
+    )
+
+    with pytest.raises(ValueError, match="canonical vanilla.*experiment.role=ablation"):
+        resolve_method(replace(vanilla, memory_bank=bank))
+
+    ablation = replace(
+        vanilla,
+        experiment=ExperimentConfig(role=ExperimentRole.ABLATION, seed=42),
+        memory_bank=bank,
+    )
+    resolved = resolve_method(ablation)
+
+    assert resolved.memory_bank.enabled
+    assert resolved.memory_bank.size == 512
+    assert not resolved.memory_bank.adaptive.enabled
+    assert resolved.memory_bank.margin.mode is MarginMode.OFF

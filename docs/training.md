@@ -81,6 +81,26 @@ python -m justatom.api.train \
   --memory-bank.margin.mode constant
 ```
 
+A plain InfoNCE control with detached bank negatives keeps the `vanilla`
+method identity but must also be labeled as an ablation. It does not construct
+an alpha gate or query-margin head:
+
+```bash
+python -m justatom.api.train \
+  --config configs/train.yaml \
+  --method vanilla \
+  --experiment.role ablation \
+  --objective.decoupled false \
+  --optimization.epochs 1 \
+  --optimization.num-samples 3000 \
+  --memory-bank.enabled true \
+  --memory-bank.size 512 \
+  --memory-bank.mining random \
+  --memory-bank.random-negatives 12 \
+  --memory-bank.adaptive.enabled false \
+  --memory-bank.margin.mode off
+```
+
 ## Commands
 
 Train one method:
@@ -149,7 +169,7 @@ model:
     bias: none
 
 optimization:
-  lr_encoder: 0.0002
+  lr_encoder: 0.00002
 
 runtime:
   accelerator: auto
@@ -163,6 +183,12 @@ supports it and otherwise FP16. MPS and CPU default to FP32 for compatibility;
 `16-mixed` can be selected explicitly on a supported Mac. Gradient
 checkpointing is independent of LoRA and can be enabled when sequence length
 or batch size needs more memory.
+
+The reproducible Qwen3 0.6B vanilla-plus-bank control is available at
+`configs/experiments/qwen3-06b-lora-vanilla-bank.yaml`. It uses standard
+coupled InfoNCE, 3,000 sampled pairs, one epoch, and 12 random detached bank
+negatives per query. Override `dataset.id` and `artifacts.save_dir` on the
+command line to reuse the recipe.
 
 ## Artifacts
 

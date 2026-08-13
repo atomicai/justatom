@@ -9,7 +9,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from justatom.training.alpha_gate import QueryAlphaGate
-from justatom.training.config import TrainingMethod
+from justatom.training.config import ExperimentConfig, ExperimentRole, MarginMode, TrainingMethod
 from justatom.training.methods import canonical_method_config
 from justatom.training.module import ContrastiveTrainingModule
 from justatom.training.objective import ObjectiveOutput
@@ -80,6 +80,26 @@ def test_module_constructs_only_components_required_by_method():
     assert vanilla.alpha_gate is None and vanilla.memory_bank is None and vanilla.margin_head is None
     assert isinstance(gate.alpha_gate, QueryAlphaGate) and gate.memory_bank is None
     assert atomic.alpha_gate is not None and atomic.memory_bank is not None and atomic.margin_head is not None
+
+
+def test_vanilla_bank_ablation_constructs_bank_without_gate_or_margin_head():
+    vanilla = canonical_method_config(TrainingMethod.VANILLA)
+    atomic = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(
+        vanilla,
+        experiment=ExperimentConfig(role=ExperimentRole.ABLATION, seed=42),
+        memory_bank=replace(
+            atomic.memory_bank,
+            adaptive=replace(atomic.memory_bank.adaptive, enabled=False),
+            margin=replace(atomic.memory_bank.margin, mode=MarginMode.OFF, regularization_weight=0.0),
+        ),
+    )
+
+    module = ContrastiveTrainingModule.build(TinyEncoder(), config)
+
+    assert module.alpha_gate is None
+    assert module.memory_bank is not None
+    assert module.margin_head is None
 
 
 def test_optimizer_contains_encoder_temperature_alpha_and_margin_parameters_once():

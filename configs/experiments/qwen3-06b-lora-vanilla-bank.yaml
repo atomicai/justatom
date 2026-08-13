@@ -1,0 +1,58 @@
+method: vanilla
+
+experiment:
+  role: ablation
+  seed: 42
+
+model:
+  name_or_path: Qwen/Qwen3-Embedding-0.6B
+  query_prefix: |-
+    Instruct: Given a web search query, retrieve relevant passages that answer the query
+    Query:
+  content_prefix: ""
+  max_query_seq_len: 128
+  max_seq_len: 512
+  lora:
+    enabled: true
+    rank: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: all-linear
+    use_rslora: true
+    bias: none
+
+dataset:
+  id: miracl-ru
+  limit: 10000
+
+optimization:
+  lr_encoder: 0.00002
+  batch_size: 8
+  grad_acc_steps: 4
+  epochs: 1
+  num_samples: 3000
+
+objective:
+  decoupled: false
+  simcse_dropout_weight: 0.0
+
+memory_bank:
+  enabled: true
+  size: 512
+  warmup_steps: 50
+  mining: random
+  hard_negatives: 0
+  random_negatives: 12
+  hard_warmup_steps: 0
+  hard_ramp_steps: 1
+  adaptive:
+    enabled: false
+  margin:
+    mode: "off"
+    regularization_weight: 0.0
+
+runtime:
+  accelerator: auto
+  devices: 1
+  precision: auto
+  gradient_checkpointing: true

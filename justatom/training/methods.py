@@ -67,7 +67,12 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
         if gate.enabled:
             raise ValueError("vanilla does not permit alpha_gate.enabled")
         if bank.enabled:
-            raise ValueError("vanilla does not permit memory_bank.enabled")
+            if role is not ExperimentRole.ABLATION:
+                raise ValueError("canonical vanilla does not permit memory_bank.enabled; use experiment.role=ablation")
+            if bank.size <= 0:
+                raise ValueError("vanilla bank ablation requires memory_bank.size > 0")
+            if bank.margin.mode is MarginMode.QUERY and not bank.adaptive.enabled:
+                raise ValueError("memory_bank.margin.mode=query requires memory_bank.adaptive.enabled=true")
         return config
 
     if not gate.enabled:

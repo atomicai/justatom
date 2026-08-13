@@ -34,3 +34,23 @@ def test_resolve_train_config_applies_dataset_preset_and_method_profile():
     assert config.dataset.name_or_path == ".data/polaroids.ai.data.json"
     assert config.dataset.lazy is False
     assert config.memory_bank.enabled
+
+
+def test_qwen_lora_vanilla_bank_recipe_resolves():
+    config = train.resolve_train_config(
+        config_path="configs/experiments/qwen3-06b-lora-vanilla-bank.yaml",
+    )
+
+    assert config.method.value == "vanilla"
+    assert config.experiment.role.value == "ablation"
+    assert config.model.lora.enabled
+    assert config.optimization.lr_encoder == pytest.approx(2e-5)
+    assert config.optimization.epochs == 1
+    assert config.optimization.num_samples == 3000
+    assert not config.objective.decoupled
+    assert config.memory_bank.enabled
+    assert config.memory_bank.mining == "random"
+    assert config.memory_bank.hard_negatives == 0
+    assert config.memory_bank.random_negatives == 12
+    assert not config.memory_bank.adaptive.enabled
+    assert config.memory_bank.margin.mode.value == "off"
