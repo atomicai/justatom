@@ -45,6 +45,8 @@ def test_qwen_lora_vanilla_bank_recipe_resolves():
     assert config.experiment.role.value == "ablation"
     assert config.model.lora.enabled
     assert config.optimization.lr_encoder == pytest.approx(2e-5)
+    assert config.optimization.epochs == 1
+    assert not config.objective.decoupled
     assert config.memory_bank.enabled
     assert not config.memory_bank.adaptive.enabled
     assert config.memory_bank.margin.mode.value == "off"

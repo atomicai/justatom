@@ -90,6 +90,7 @@ python -m justatom.api.train \
   --config configs/train.yaml \
   --method vanilla \
   --experiment.role ablation \
+  --objective.decoupled false \
   --memory-bank.enabled true \
   --memory-bank.size 512 \
   --memory-bank.adaptive.enabled false \
@@ -180,8 +181,9 @@ checkpointing is independent of LoRA and can be enabled when sequence length
 or batch size needs more memory.
 
 The reproducible Qwen3 0.6B vanilla-plus-bank control is available at
-`configs/experiments/qwen3-06b-lora-vanilla-bank.yaml`. Override `dataset.id`
-and `artifacts.save_dir` on the command line to reuse the recipe.
+`configs/experiments/qwen3-06b-lora-vanilla-bank.yaml`. It uses standard
+coupled InfoNCE and a single epoch. Override `dataset.id` and
+`artifacts.save_dir` on the command line to reuse the recipe.
 
 ## Artifacts
 
