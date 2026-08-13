@@ -30,7 +30,7 @@ optimization:
   batch_size: 8
   grad_acc_steps: 4
   epochs: 1
-  num_samples: 4096
+  num_samples: 3000
 
 objective:
   decoupled: false
@@ -40,11 +40,11 @@ memory_bank:
   enabled: true
   size: 512
   warmup_steps: 50
-  mining: mixed
-  hard_negatives: 4
+  mining: random
+  hard_negatives: 0
   random_negatives: 12
-  hard_warmup_steps: 120
-  hard_ramp_steps: 200
+  hard_warmup_steps: 0
+  hard_ramp_steps: 1
   adaptive:
     enabled: false
   margin:

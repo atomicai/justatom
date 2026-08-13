@@ -91,8 +91,12 @@ python -m justatom.api.train \
   --method vanilla \
   --experiment.role ablation \
   --objective.decoupled false \
+  --optimization.epochs 1 \
+  --optimization.num-samples 3000 \
   --memory-bank.enabled true \
   --memory-bank.size 512 \
+  --memory-bank.mining random \
+  --memory-bank.random-negatives 12 \
   --memory-bank.adaptive.enabled false \
   --memory-bank.margin.mode off
 ```
@@ -182,8 +186,9 @@ or batch size needs more memory.
 
 The reproducible Qwen3 0.6B vanilla-plus-bank control is available at
 `configs/experiments/qwen3-06b-lora-vanilla-bank.yaml`. It uses standard
-coupled InfoNCE and a single epoch. Override `dataset.id` and
-`artifacts.save_dir` on the command line to reuse the recipe.
+coupled InfoNCE, 3,000 sampled pairs, one epoch, and 12 random detached bank
+negatives per query. Override `dataset.id` and `artifacts.save_dir` on the
+command line to reuse the recipe.
 
 ## Artifacts
 

@@ -46,7 +46,11 @@ def test_qwen_lora_vanilla_bank_recipe_resolves():
     assert config.model.lora.enabled
     assert config.optimization.lr_encoder == pytest.approx(2e-5)
     assert config.optimization.epochs == 1
+    assert config.optimization.num_samples == 3000
     assert not config.objective.decoupled
     assert config.memory_bank.enabled
+    assert config.memory_bank.mining == "random"
+    assert config.memory_bank.hard_negatives == 0
+    assert config.memory_bank.random_negatives == 12
     assert not config.memory_bank.adaptive.enabled
     assert config.memory_bank.margin.mode.value == "off"
