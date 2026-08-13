@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 import torch
 import torch.nn.functional as F
@@ -8,6 +9,7 @@ from loguru import logger
 from torch import nn
 
 from justatom.training.config import MarginConfig, MarginMode, MemoryBankConfig
+from justatom.training.reranker import CachedTextReranker
 from justatom.training.telemetry import scalar_distribution
 
 
@@ -53,7 +55,7 @@ class QueryMarginHead(nn.Module):
 class ContrastiveMemoryBank:
     """Typed FIFO bank of detached document embeddings used as extra negatives."""
 
-    def __init__(self, config: MemoryBankConfig):
+    def __init__(self, config: MemoryBankConfig, *, reranker: CachedTextReranker | None = None):
         if not isinstance(config, MemoryBankConfig):
             raise TypeError("ContrastiveMemoryBank requires MemoryBankConfig")
         if config.mining not in {"all", "random", "hard", "mixed"}:
@@ -62,10 +64,12 @@ class ContrastiveMemoryBank:
             raise ValueError("memory_bank.adaptive.collision_beta must be positive")
 
         self.config = config
+        self.reranker = reranker
         self.embeddings: torch.Tensor | None = None
         self.doc_key_ids: torch.Tensor | None = None
         self.content_key_ids: torch.Tensor | None = None
         self.query_key_ids: torch.Tensor | None = None
+        self.documents: list[str] | None = [] if reranker is not None else None
 
     @property
     def enabled(self) -> bool:
@@ -74,6 +78,10 @@ class ContrastiveMemoryBank:
     @property
     def current_size(self) -> int:
         return 0 if self.embeddings is None else int(self.embeddings.shape[0])
+
+    @property
+    def reranker_enabled(self) -> bool:
+        return self.reranker is not None
 
     def _base_metrics(self) -> dict[str, float | str]:
         return {
@@ -90,14 +98,30 @@ class ContrastiveMemoryBank:
         }
 
     def _noop_selection(self) -> MemorySelection:
+        metrics = self._base_metrics()
+        if self.reranker is not None:
+            metrics.update(self._base_reranker_metrics())
         return MemorySelection(
             embeddings=None,
             active_mask=None,
             log_weights=None,
             collision_g=None,
             hard_weights=None,
-            metrics=self._base_metrics(),
+            metrics=metrics,
         )
+
+    @staticmethod
+    def _base_reranker_metrics() -> dict[str, float]:
+        return {
+            "reranker/candidates_mean": 0.0,
+            "reranker/safe_negatives_mean": 0.0,
+            "reranker/ambiguous_mean": 0.0,
+            "reranker/above_positive_mean": 0.0,
+            "reranker/cache_hits": 0.0,
+            "reranker/cache_misses": 0.0,
+            "reranker/cache_hit_rate": 0.0,
+            "reranker/skipped": 0.0,
+        }
 
     @torch.no_grad()
     def select(
@@ -107,6 +131,8 @@ class ContrastiveMemoryBank:
         query_vectors: torch.Tensor,
         positive_vectors: torch.Tensor,
         step: int,
+        query_texts: Sequence[str] | None = None,
+        positive_texts: Sequence[str] | None = None,
     ) -> MemorySelection:
         if not self.enabled or self.embeddings is None or self.current_size == 0 or int(step) < self.config.warmup_steps:
             return self._noop_selection()
@@ -130,8 +156,24 @@ class ContrastiveMemoryBank:
         random_k = self.config.random_negatives
         hard_active = torch.zeros_like(valid)
         random_active = torch.zeros_like(valid)
+        reranker_metrics: dict[str, float] = {}
 
-        if self.config.mining == "all":
+        if self.reranker is not None:
+            reranker_config = self.reranker.config
+            hard_k = reranker_config.prefilter_hard_negatives
+            random_k = reranker_config.prefilter_random_negatives
+            hard_candidates = self._topk_mask(bank_similarities, valid, hard_k)
+            random_candidates = self._random_mask(valid & ~hard_candidates, random_k)
+            candidate_mask = hard_candidates | random_candidates
+            active, reranker_metrics = self._reranker_selection(
+                candidate_mask=candidate_mask,
+                bank_similarities=bank_similarities,
+                query_texts=query_texts,
+                positive_texts=positive_texts,
+            )
+            hard_active = active & hard_candidates
+            random_active = active & random_candidates
+        elif self.config.mining == "all":
             active = valid.clone()
             hard_k = 0
             random_k = 0
@@ -163,6 +205,7 @@ class ContrastiveMemoryBank:
             hard_k=hard_k,
             random_k=random_k,
         )
+        metrics.update(reranker_metrics)
         return MemorySelection(
             embeddings=embeddings,
             active_mask=active,
@@ -171,6 +214,92 @@ class ContrastiveMemoryBank:
             hard_weights=hard_weights,
             metrics=metrics,
         )
+
+    def _reranker_selection(
+        self,
+        *,
+        candidate_mask: torch.Tensor,
+        bank_similarities: torch.Tensor,
+        query_texts: Sequence[str] | None,
+        positive_texts: Sequence[str] | None,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        assert self.reranker is not None
+        if query_texts is None or positive_texts is None:
+            raise ValueError("reranker selection requires query_texts and positive_texts")
+        batch_size, bank_size = candidate_mask.shape
+        if len(query_texts) != batch_size or len(positive_texts) != batch_size:
+            raise ValueError("reranker texts must match the query batch size")
+        if self.documents is None or len(self.documents) != bank_size:
+            raise RuntimeError("reranker document metadata is not aligned with memory-bank embeddings")
+
+        pair_queries: list[str] = []
+        pair_documents: list[str] = []
+        row_candidates: list[list[int]] = []
+        for row in range(batch_size):
+            indices = candidate_mask[row].nonzero(as_tuple=False).view(-1).detach().cpu().tolist()
+            row_candidates.append(indices)
+            pair_queries.append(str(query_texts[row]))
+            pair_documents.append(str(positive_texts[row]))
+            pair_queries.extend(str(query_texts[row]) for _ in indices)
+            pair_documents.extend(self.documents[index] for index in indices)
+
+        score_result = self.reranker.score_pairs(pair_queries, pair_documents)
+        active = torch.zeros_like(candidate_mask)
+        positive_scores: list[float] = []
+        candidate_scores: list[float] = []
+        score_gaps: list[float] = []
+        safe_counts: list[int] = []
+        ambiguous_counts: list[int] = []
+        above_positive_counts: list[int] = []
+        offset = 0
+        for row, indices in enumerate(row_candidates):
+            positive_score = score_result.values[offset]
+            offset += 1
+            row_scores = score_result.values[offset : offset + len(indices)]
+            offset += len(indices)
+            if positive_score is None:
+                safe_counts.append(0)
+                ambiguous_counts.append(len(indices))
+                above_positive_counts.append(0)
+                continue
+            positive_scores.append(positive_score)
+            safe_indices: list[int] = []
+            above_positive = 0
+            for bank_index, candidate_score in zip(indices, row_scores):
+                if candidate_score is None:
+                    continue
+                candidate_scores.append(candidate_score)
+                score_gaps.append(positive_score - candidate_score)
+                above_positive += int(candidate_score >= positive_score)
+                if candidate_score <= positive_score - self.reranker.config.min_score_gap:
+                    safe_indices.append(bank_index)
+            safe_counts.append(len(safe_indices))
+            ambiguous_counts.append(len(indices) - len(safe_indices))
+            above_positive_counts.append(above_positive)
+            if safe_indices:
+                safe_tensor = torch.tensor(safe_indices, device=bank_similarities.device, dtype=torch.long)
+                count = min(self.reranker.config.negatives, len(safe_indices))
+                selected = bank_similarities[row, safe_tensor].topk(count).indices
+                active[row, safe_tensor[selected]] = True
+
+        total_cache = score_result.cache_hits + score_result.cache_misses
+        metrics = self._base_reranker_metrics()
+        metrics.update(
+            {
+                "reranker/candidates_mean": float(candidate_mask.float().sum(dim=1).mean().item()),
+                "reranker/safe_negatives_mean": float(sum(safe_counts) / max(batch_size, 1)),
+                "reranker/ambiguous_mean": float(sum(ambiguous_counts) / max(batch_size, 1)),
+                "reranker/above_positive_mean": float(sum(above_positive_counts) / max(batch_size, 1)),
+                "reranker/cache_hits": float(score_result.cache_hits),
+                "reranker/cache_misses": float(score_result.cache_misses),
+                "reranker/cache_hit_rate": float(score_result.cache_hits / total_cache) if total_cache else 0.0,
+                "reranker/skipped": float(score_result.skipped),
+            }
+        )
+        metrics.update(scalar_distribution("reranker/positive_score", torch.tensor(positive_scores)))
+        metrics.update(scalar_distribution("reranker/candidate_score", torch.tensor(candidate_scores)))
+        metrics.update(scalar_distribution("reranker/positive_candidate_gap", torch.tensor(score_gaps)))
+        return active, metrics
 
     def _valid_identity_mask(
         self,
@@ -247,7 +376,13 @@ class ContrastiveMemoryBank:
             metrics.update(scalar_distribution("memory/hard_weight", hard_weights))
         return metrics
 
-    def enqueue(self, vectors: torch.Tensor, batch: dict[str, torch.Tensor]) -> None:
+    def enqueue(
+        self,
+        vectors: torch.Tensor,
+        batch: dict[str, torch.Tensor],
+        *,
+        document_texts: Sequence[str] | None = None,
+    ) -> None:
         if not self.enabled or vectors.numel() == 0:
             return
         vectors = F.normalize(vectors.detach().clone(), p=2, dim=-1, eps=1e-8)
@@ -261,6 +396,15 @@ class ContrastiveMemoryBank:
             vectors.device,
         )
         self.query_key_ids = self._append_ids(self.query_key_ids, batch.get("query_key_id"), vectors.device)
+        if self.reranker is not None:
+            if document_texts is None or len(document_texts) != vectors.shape[0]:
+                raise ValueError("reranker-enabled memory bank requires one document text per vector")
+            assert self.documents is not None
+            self.documents = [*self.documents, *(str(text) for text in document_texts)][-self.config.size :]
+
+    def close(self) -> None:
+        if self.reranker is not None:
+            self.reranker.close()
 
     def _append(self, previous: torch.Tensor | None, current: torch.Tensor) -> torch.Tensor:
         merged = current if previous is None else torch.cat([previous.to(current), current], dim=0)

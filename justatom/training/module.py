@@ -15,6 +15,7 @@ from justatom.training.gradient_projection import project_conflicting_gradients
 from justatom.training.memory_bank import ContrastiveMemoryBank, QueryMarginHead
 from justatom.training.methods import resolve_method
 from justatom.training.objective import ContrastiveObjective, ObjectiveInputs, ObjectiveOutput
+from justatom.training.reranker import build_reranker
 from justatom.training.sampling import inverse_idf_recall, sample_safe_negative_indices
 from justatom.training.telemetry import batch_retrieval_metrics, resolve_metric_tensors, scalar_distribution
 
@@ -57,7 +58,11 @@ class ContrastiveTrainingModule(L.LightningModule):
         config = resolve_method(config)
         embedding_dim = int(getattr(encoder, "output_dims"))
         alpha_gate = QueryAlphaGate(embedding_dim, config.alpha_gate) if config.alpha_gate.enabled else None
-        memory_bank = ContrastiveMemoryBank(config.memory_bank) if config.memory_bank.enabled else None
+        memory_bank = (
+            ContrastiveMemoryBank(config.memory_bank, reranker=build_reranker(config.reranker))
+            if config.memory_bank.enabled
+            else None
+        )
         margin_head = (
             QueryMarginHead(embedding_dim, config.memory_bank.margin)
             if config.memory_bank.margin.mode is MarginMode.QUERY
@@ -167,10 +172,31 @@ class ContrastiveTrainingModule(L.LightningModule):
             return margin, margin
         return None, None
 
+    def _reranker_texts(self, batch: dict[str, Any]) -> tuple[list[str], list[str]]:
+        queries = batch.get("query_text")
+        documents = batch.get("content_text")
+        if queries is not None and documents is not None:
+            return [str(text) for text in queries], [str(text) for text in documents]
+        tokenizer = getattr(getattr(self.encoder, "processor", None), "tokenizer", None)
+        if tokenizer is None or "input_ids" not in batch or "pos_input_ids" not in batch:
+            raise RuntimeError("reranker requires raw texts or a tokenizer capable of decoding the training batch")
+        query_ids = batch["input_ids"].detach().cpu()
+        document_ids = batch["pos_input_ids"].detach().cpu()
+        decoded_queries = tokenizer.batch_decode(query_ids, skip_special_tokens=True)
+        decoded_documents = tokenizer.batch_decode(document_ids, skip_special_tokens=True)
+        return (
+            [self._remove_text_prefix(text, self.config.model.query_prefix) for text in decoded_queries],
+            [self._remove_text_prefix(text, self.config.model.content_prefix) for text in decoded_documents],
+        )
+
     def compute_training_step(self, batch: dict[str, Any], *, step: int) -> ObjectiveOutput:
         queries, positives = self.encoder.encode_pair(batch)
         alpha = None if self.alpha_gate is None else self.alpha_gate(queries)
         query_alt = self._encode_dropout_query_view(batch) if self.needs_simcse else None
+        query_texts = None
+        positive_texts = None
+        if self.memory_bank is not None and self.memory_bank.reranker_enabled:
+            query_texts, positive_texts = self._reranker_texts(batch)
         selection = (
             None
             if self.memory_bank is None
@@ -179,6 +205,8 @@ class ContrastiveTrainingModule(L.LightningModule):
                 query_vectors=queries,
                 positive_vectors=positives,
                 step=step,
+                query_texts=query_texts,
+                positive_texts=positive_texts,
             )
         )
         raw_margin, margin = self._margin_values(queries)
@@ -226,7 +254,7 @@ class ContrastiveTrainingModule(L.LightningModule):
                 metrics.update(selection.metrics)
         output = replace(output, metrics=metrics)
         if self.memory_bank is not None:
-            self.memory_bank.enqueue(positives, batch)
+            self.memory_bank.enqueue(positives, batch, document_texts=positive_texts)
         return output
 
     @staticmethod
@@ -308,6 +336,8 @@ class ContrastiveTrainingModule(L.LightningModule):
     def on_train_end(self) -> None:
         if self.metrics_logger is not None:
             self.metrics_logger.close_log()
+        if self.memory_bank is not None:
+            self.memory_bank.close()
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         seen: set[int] = set()

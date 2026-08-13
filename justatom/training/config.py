@@ -155,6 +155,36 @@ class GradientProjectionConfig:
 
 
 @dataclass(frozen=True)
+class RerankerCacheConfig:
+    """Persistent score-cache policy for an optional teacher reranker."""
+
+    mode: str = "read-write"
+    path: str = ".cache/justatom/reranker.sqlite"
+    on_miss: str = "score"
+
+
+@dataclass(frozen=True)
+class RerankerConfig:
+    """Optional teacher used to filter memory-bank negatives."""
+
+    enabled: bool = False
+    backend: str = "transformers"
+    model_name_or_path: str = "Qwen/Qwen3-Reranker-4B"
+    revision: str | None = "22e683669bc0f0bd69640a1354a6d0aebcfeede5"
+    instruction: str = "Given a web search query, retrieve relevant passages that answer the query"
+    device: str = "auto"
+    dtype: str = "auto"
+    local_files_only: bool = True
+    max_length: int = 512
+    batch_size: int = 4
+    prefilter_hard_negatives: int = 32
+    prefilter_random_negatives: int = 8
+    negatives: int = 12
+    min_score_gap: float = 0.1
+    cache: RerankerCacheConfig = field(default_factory=RerankerCacheConfig)
+
+
+@dataclass(frozen=True)
 class TelemetryConfig:
     backend: str = "csv"
     metrics_path: str | None = None
@@ -190,6 +220,7 @@ class TrainConfig:
     alpha_gate: AlphaGateConfig = field(default_factory=AlphaGateConfig)
     memory_bank: MemoryBankConfig = field(default_factory=MemoryBankConfig)
     gradient_projection: GradientProjectionConfig = field(default_factory=GradientProjectionConfig)
+    reranker: RerankerConfig = field(default_factory=RerankerConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     artifacts: ArtifactConfig = field(default_factory=ArtifactConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -398,6 +429,40 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_bool(projection.enabled, "gradient_projection.enabled")
     _require_number(projection.memory_weight, "gradient_projection.memory_weight", 0.0)
     _require_number(projection.eps, "gradient_projection.eps", 1e-30)
+
+    reranker = config.reranker
+    _require_bool(reranker.enabled, "reranker.enabled")
+    if reranker.backend != "transformers":
+        raise ValueError("reranker.backend must be transformers")
+    if not isinstance(reranker.model_name_or_path, str) or not reranker.model_name_or_path:
+        raise ValueError("reranker.model_name_or_path must be a non-empty string")
+    if reranker.revision is not None and (not isinstance(reranker.revision, str) or not reranker.revision):
+        raise ValueError("reranker.revision must be a non-empty string or null")
+    if not isinstance(reranker.instruction, str) or not reranker.instruction:
+        raise ValueError("reranker.instruction must be a non-empty string")
+    if not isinstance(reranker.device, str) or not reranker.device:
+        raise ValueError("reranker.device must be a non-empty string")
+    if reranker.dtype not in {"auto", "float32", "float16", "bfloat16"}:
+        raise ValueError("reranker.dtype must be one of: auto, float32, float16, bfloat16")
+    _require_bool(reranker.local_files_only, "reranker.local_files_only")
+    _require_int(reranker.max_length, "reranker.max_length", 1)
+    _require_int(reranker.batch_size, "reranker.batch_size", 1)
+    _require_int(reranker.prefilter_hard_negatives, "reranker.prefilter_hard_negatives", 0)
+    _require_int(reranker.prefilter_random_negatives, "reranker.prefilter_random_negatives", 0)
+    _require_int(reranker.negatives, "reranker.negatives", 1)
+    _require_number(reranker.min_score_gap, "reranker.min_score_gap", 0.0)
+    if reranker.prefilter_hard_negatives + reranker.prefilter_random_negatives <= 0:
+        raise ValueError("reranker prefilter requires at least one candidate")
+    if reranker.cache.mode not in {"off", "read-write", "read-only"}:
+        raise ValueError("reranker.cache.mode must be one of: off, read-write, read-only")
+    if not isinstance(reranker.cache.path, str) or not reranker.cache.path:
+        raise ValueError("reranker.cache.path must be a non-empty string")
+    if reranker.cache.on_miss not in {"score", "error", "skip"}:
+        raise ValueError("reranker.cache.on_miss must be one of: score, error, skip")
+    if reranker.cache.mode == "read-only" and reranker.cache.on_miss == "score":
+        raise ValueError("reranker.cache.mode=read-only does not permit cache.on_miss=score")
+    if reranker.enabled and not bank.enabled:
+        raise ValueError("reranker.enabled requires memory_bank.enabled=true")
 
     if config.telemetry.backend not in {"csv", "wandb"}:
         raise ValueError("telemetry.backend must be one of: csv, wandb")

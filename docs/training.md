@@ -66,6 +66,64 @@ Gradient accumulation is performed by the ATOMIC manual optimization step so
 each microbatch is projected before its update is accumulated. The same path is
 implemented with ordinary PyTorch operations and works on CUDA, MPS, and CPU.
 
+### Optional teacher-filtered memory
+
+The projected ATOMIC implementation remains the default and does not require a
+reranker. Setting `reranker.enabled: true` adds a frozen teacher only to memory
+candidate selection; it does not replace InfoNCE, change the projection, or add
+anything to the deployable encoder.
+
+For every query, the student first selects hard and random candidates from the
+FIFO bank. The teacher scores the labelled positive and those candidates. A
+candidate is admitted as a negative only when its score is at least
+`min_score_gap` below the positive score. The final `negatives` entries are the
+safe candidates with the highest student similarity:
+
+```text
+FIFO bank
+  -> student top-32 + 8 random candidates
+  -> frozen reranker false-negative filter
+  -> 12 hardest safe negatives
+  -> memory loss
+  -> one-sided gradient projection
+```
+
+Teacher scoring is online, while scores are stored in a content-addressed
+SQLite cache. The key includes the model revision, instruction, scoring
+template, maximum length, query, and document. A first seed populates the cache;
+later seeds and epochs reuse matching pairs. Use `read-only` with
+`on_miss: error` to make a populated cache a strict reproducibility boundary.
+
+```yaml
+method: atomic
+
+reranker:
+  enabled: true
+  backend: transformers
+  model_name_or_path: Qwen/Qwen3-Reranker-4B
+  revision: 22e683669bc0f0bd69640a1354a6d0aebcfeede5
+  local_files_only: true
+  device: auto
+  dtype: auto
+  max_length: 512
+  batch_size: 4
+  prefilter_hard_negatives: 32
+  prefilter_random_negatives: 8
+  negatives: 12
+  min_score_gap: 0.1
+  cache:
+    mode: read-write  # off | read-write | read-only
+    path: .cache/justatom/reranker.sqlite
+    on_miss: score    # score | error | skip
+```
+
+The Transformers backend and cache are created only when the option is enabled,
+and the model weights are loaded lazily on the first cache miss. With
+`local_files_only: true`, training never downloads the teacher.
+On MPS or a machine that cannot host both models, leave the reranker disabled;
+the original memory selection and projected ATOMIC path are unchanged. A
+service backend can implement the same scoring contract in a future extension.
+
 ## Canonical Profiles
 
 Selecting a method applies its registered defaults before YAML and CLI

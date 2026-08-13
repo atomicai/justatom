@@ -52,6 +52,25 @@ objective: {}
 alpha_gate: {}
 memory_bank: {}
 gradient_projection: {}
+reranker:
+  enabled: false
+  backend: transformers
+  model_name_or_path: Qwen/Qwen3-Reranker-4B
+  revision: 22e683669bc0f0bd69640a1354a6d0aebcfeede5
+  instruction: Given a web search query, retrieve relevant passages that answer the query
+  device: auto
+  dtype: auto
+  local_files_only: true
+  max_length: 512
+  batch_size: 4
+  prefilter_hard_negatives: 32
+  prefilter_random_negatives: 8
+  negatives: 12
+  min_score_gap: 0.1
+  cache:
+    mode: read-write
+    path: .cache/justatom/reranker.sqlite
+    on_miss: score
 
 telemetry:
   backend: csv

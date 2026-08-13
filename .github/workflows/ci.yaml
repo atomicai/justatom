@@ -45,6 +45,7 @@ jobs:
           justatom/training/alpha_gate.py \
           justatom/training/memory_bank.py \
           justatom/training/gradient_projection.py \
+          justatom/training/reranker.py \
           justatom/training/objective.py \
           justatom/training/sampling.py \
           justatom/training/telemetry.py \

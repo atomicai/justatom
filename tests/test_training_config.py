@@ -76,7 +76,45 @@ def test_train_config_serialization_is_plain_and_round_trippable():
     assert payload["experiment"]["role"] == "canonical"
     assert payload["memory_bank"]["margin"]["mode"] == "off"
     assert payload["gradient_projection"]["enabled"] is True
+    assert payload["reranker"]["enabled"] is False
     assert restored == config
+
+
+def test_optional_transformers_reranker_is_typed_and_round_trippable(tmp_path):
+    config = parse_train_config(
+        {
+            "method": "atomic",
+            "reranker": {
+                "enabled": True,
+                "backend": "transformers",
+                "local_files_only": True,
+                "prefilter_hard_negatives": 16,
+                "prefilter_random_negatives": 4,
+                "negatives": 8,
+                "cache": {"mode": "read-write", "path": str(tmp_path / "teacher.sqlite")},
+            },
+        }
+    )
+
+    assert config.reranker.enabled
+    assert config.reranker.backend == "transformers"
+    assert config.reranker.negatives == 8
+    assert parse_train_config(train_config_to_dict(config)) == config
+
+
+def test_reranker_requires_a_memory_bank():
+    with pytest.raises(ValueError, match="requires memory_bank.enabled"):
+        parse_train_config({"method": "vanilla", "reranker": {"enabled": True}})
+
+
+def test_read_only_reranker_cache_cannot_score_misses():
+    with pytest.raises(ValueError, match="does not permit"):
+        parse_train_config(
+            {
+                "method": "atomic",
+                "reranker": {"enabled": True, "cache": {"mode": "read-only", "on_miss": "score"}},
+            }
+        )
 
 
 def test_dataset_loader_options_are_typed_and_round_trippable():

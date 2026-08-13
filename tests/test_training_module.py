@@ -9,10 +9,11 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from justatom.training.alpha_gate import QueryAlphaGate
-from justatom.training.config import ExperimentConfig, ExperimentRole, MarginMode, TrainingMethod
+from justatom.training.config import ExperimentConfig, ExperimentRole, MarginMode, RerankerCacheConfig, TrainingMethod
 from justatom.training.methods import canonical_method_config
 from justatom.training.module import ContrastiveTrainingModule
 from justatom.training.objective import ObjectiveOutput
+from justatom.training.reranker import CachedTextReranker
 
 
 class TinyEncoder(nn.Module):
@@ -84,6 +85,7 @@ def test_module_constructs_only_components_required_by_method():
     assert vanilla.alpha_gate is None and vanilla.memory_bank is None and vanilla.margin_head is None
     assert isinstance(gate.alpha_gate, QueryAlphaGate) and gate.memory_bank is None
     assert atomic.alpha_gate is None and atomic.memory_bank is not None and atomic.margin_head is None
+    assert not atomic.memory_bank.reranker_enabled
     assert atomic.config.gradient_projection.enabled
     assert atomic.automatic_optimization is False
 
@@ -135,6 +137,78 @@ def test_atomic_enqueues_documents_after_objective(monkeypatch):
     module.compute_training_step(tiny_batch(), step=0)
 
     assert events == ["loss", "enqueue"]
+
+
+def test_optional_reranker_is_wired_into_atomic_without_changing_projection():
+    class ConstantBackend:
+        fingerprint = "constant"
+
+        def score_pairs(self, queries, documents):
+            return [0.9 if document.startswith("current") else 0.1 for document in documents]
+
+        def close(self):
+            return None
+
+    base = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(
+        base,
+        memory_bank=replace(base.memory_bank, warmup_steps=0),
+        reranker=replace(
+            base.reranker,
+            enabled=True,
+            prefilter_hard_negatives=2,
+            prefilter_random_negatives=0,
+            negatives=1,
+            cache=RerankerCacheConfig(mode="off"),
+        ),
+    )
+    module = ContrastiveTrainingModule.build(TinyEncoder(), config)
+    assert module.memory_bank is not None and module.memory_bank.reranker is not None
+    module.memory_bank.reranker = CachedTextReranker(config.reranker, backend=ConstantBackend())
+    first = {
+        **tiny_batch(),
+        "query_text": ["q1", "q2"],
+        "content_text": ["bank one", "bank two"],
+    }
+    second = {
+        **tiny_batch(),
+        "doc_key_id": torch.tensor([101, 102]),
+        "content_key_id": torch.tensor([111, 112]),
+        "query_key_id": torch.tensor([121, 122]),
+        "query_text": ["q3", "q4"],
+        "content_text": ["current three", "current four"],
+    }
+
+    module.compute_training_step(first, step=0)
+    output = module.compute_training_step(second, step=1)
+
+    assert module.config.gradient_projection.enabled
+    assert module.memory_bank.documents == ["bank one", "bank two", "current three", "current four"]
+    assert output.memory_loss is not None
+    assert output.metrics["reranker/safe_negatives_mean"] == 2.0
+
+
+def test_optional_reranker_does_not_require_gradient_projection():
+    base = canonical_method_config(TrainingMethod.VANILLA)
+    config = replace(
+        base,
+        experiment=ExperimentConfig(role=ExperimentRole.ABLATION),
+        memory_bank=replace(base.memory_bank, enabled=True, size=8),
+        reranker=replace(
+            base.reranker,
+            enabled=True,
+            prefilter_hard_negatives=2,
+            prefilter_random_negatives=0,
+            negatives=1,
+            cache=RerankerCacheConfig(mode="off"),
+        ),
+    )
+
+    module = ContrastiveTrainingModule.build(TinyEncoder(), config)
+
+    assert module.memory_bank is not None and module.memory_bank.reranker_enabled
+    assert not module.config.gradient_projection.enabled
+    assert module.automatic_optimization
 
 
 def test_alpha_mix_weight_uses_exact_linear_warmup():
