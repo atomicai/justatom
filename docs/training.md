@@ -190,6 +190,11 @@ coupled InfoNCE, 3,000 sampled pairs, one epoch, and 12 random detached bank
 negatives per query. Override `dataset.id` and `artifacts.save_dir` on the
 command line to reuse the recipe.
 
+For `intfloat/multilingual-e5-small`, use
+`configs/experiments/e5-small-lora-infonce.yaml`. This one-epoch control keeps
+standard coupled InfoNCE but omits the memory bank. Its `query:` and `passage:`
+prefixes are part of the E5 input contract and must also be used at inference.
+
 ## Artifacts
 
 Every successful training run writes:

@@ -54,3 +54,24 @@ def test_qwen_lora_vanilla_bank_recipe_resolves():
     assert config.memory_bank.random_negatives == 12
     assert not config.memory_bank.adaptive.enabled
     assert config.memory_bank.margin.mode.value == "off"
+
+
+def test_e5_small_lora_infonce_recipe_resolves():
+    config = train.resolve_train_config(
+        config_path="configs/experiments/e5-small-lora-infonce.yaml",
+    )
+
+    assert config.method.value == "vanilla"
+    assert config.experiment.role.value == "ablation"
+    assert config.model.name_or_path == "intfloat/multilingual-e5-small"
+    assert config.model.query_prefix == "query:"
+    assert config.model.content_prefix == "passage:"
+    assert config.model.lora.enabled
+    assert config.model.lora.target_modules == "all-linear"
+    assert config.optimization.lr_encoder == pytest.approx(2e-5)
+    assert config.optimization.batch_size == 8
+    assert config.optimization.grad_acc_steps == 4
+    assert config.optimization.epochs == 1
+    assert config.optimization.num_samples == 3000
+    assert not config.objective.decoupled
+    assert not config.memory_bank.enabled

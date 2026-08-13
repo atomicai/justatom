@@ -1,0 +1,44 @@
+method: vanilla
+
+experiment:
+  role: ablation
+  seed: 42
+
+model:
+  name_or_path: intfloat/multilingual-e5-small
+  query_prefix: "query:"
+  content_prefix: "passage:"
+  max_query_seq_len: 128
+  max_seq_len: 512
+  lora:
+    enabled: true
+    rank: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: all-linear
+    use_rslora: true
+    bias: none
+
+dataset:
+  id: justatom
+
+optimization:
+  lr_encoder: 0.00002
+  batch_size: 8
+  grad_acc_steps: 4
+  epochs: 1
+  num_samples: 3000
+
+objective:
+  decoupled: false
+  simcse_dropout_weight: 0.0
+
+memory_bank:
+  enabled: false
+  size: 0
+
+runtime:
+  accelerator: auto
+  devices: 1
+  precision: auto
+  gradient_checkpointing: true
