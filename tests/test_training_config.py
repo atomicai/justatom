@@ -18,9 +18,11 @@ def test_parse_train_config_builds_typed_atomic_config():
     assert config.method is TrainingMethod.ATOMIC
     assert config.experiment.role is ExperimentRole.CANONICAL
     assert config.experiment.seed == 42
-    assert config.alpha_gate.enabled
+    assert not config.alpha_gate.enabled
     assert config.memory_bank.enabled
-    assert config.memory_bank.margin.mode is MarginMode.QUERY
+    assert config.memory_bank.margin.mode is MarginMode.OFF
+    assert config.gradient_projection.enabled
+    assert not config.objective.decoupled
 
 
 def test_parse_train_config_rejects_unknown_nested_field():
@@ -72,7 +74,8 @@ def test_train_config_serialization_is_plain_and_round_trippable():
 
     assert payload["method"] == "atomic"
     assert payload["experiment"]["role"] == "canonical"
-    assert payload["memory_bank"]["margin"]["mode"] == "query"
+    assert payload["memory_bank"]["margin"]["mode"] == "off"
+    assert payload["gradient_projection"]["enabled"] is True
     assert restored == config
 
 

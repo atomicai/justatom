@@ -460,7 +460,7 @@ class ScenarioConfigTest(unittest.TestCase):
                     "epochs": 3,
                 },
                 "objective": {"temperature": 0.07},
-                "alpha_gate": {"mix_weight": 0.4},
+                "gradient_projection": {"memory_weight": 0.4},
                 "telemetry": {"backend": "wandb"},
             }
         )
@@ -471,7 +471,7 @@ class ScenarioConfigTest(unittest.TestCase):
         self.assertEqual(config.optimization.grad_acc_steps, 3)
         self.assertEqual(config.optimization.epochs, 3)
         self.assertEqual(config.objective.temperature, 0.07)
-        self.assertEqual(config.alpha_gate.mix_weight, 0.4)
+        self.assertEqual(config.gradient_projection.memory_weight, 0.4)
         self.assertIsNone(config.dataset.split)
         self.assertIsNone(config.dataset.limit)
         self.assertEqual(config.telemetry.backend, "wandb")

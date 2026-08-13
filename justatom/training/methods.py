@@ -3,10 +3,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 from justatom.training.config import (
-    AdaptiveBankConfig,
     AlphaGateConfig,
     ExperimentRole,
-    MarginConfig,
+    GradientProjectionConfig,
     MarginMode,
     MemoryBankConfig,
     ObjectiveConfig,
@@ -29,31 +28,15 @@ def canonical_method_config(method: TrainingMethod | str) -> TrainConfig:
         enabled=True,
         size=512,
         warmup_steps=50,
-        mining="mixed",
-        hard_negatives=4,
+        mining="random",
+        hard_negatives=0,
         random_negatives=12,
-        hard_warmup_steps=120,
-        hard_ramp_steps=200,
-        adaptive=AdaptiveBankConfig(
-            enabled=True,
-            collision_threshold=0.0,
-            collision_beta=0.05,
-        ),
-        margin=MarginConfig(
-            mode=MarginMode.QUERY,
-            base=0.05,
-            scale=0.02,
-            minimum=0.0,
-            maximum=0.15,
-            admission_beta=0.05,
-            regularization_weight=50.0,
-        ),
     )
     return TrainConfig(
         method=method,
-        objective=objective,
-        alpha_gate=alpha_gate,
+        objective=ObjectiveConfig(decoupled=False),
         memory_bank=memory_bank,
+        gradient_projection=GradientProjectionConfig(enabled=True),
     )
 
 
@@ -66,6 +49,8 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
     if method is TrainingMethod.VANILLA:
         if gate.enabled:
             raise ValueError("vanilla does not permit alpha_gate.enabled")
+        if config.gradient_projection.enabled:
+            raise ValueError("vanilla does not permit gradient_projection.enabled")
         if bank.enabled:
             if role is not ExperimentRole.ABLATION:
                 raise ValueError("canonical vanilla does not permit memory_bank.enabled; use experiment.role=ablation")
@@ -75,26 +60,32 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
                 raise ValueError("memory_bank.margin.mode=query requires memory_bank.adaptive.enabled=true")
         return config
 
-    if not gate.enabled:
-        raise ValueError(f"{method.value} requires alpha_gate.enabled=true")
+    if not gate.enabled and method is TrainingMethod.ATOM_GATE:
+        raise ValueError("atom_gate requires alpha_gate.enabled=true")
 
     if method is TrainingMethod.ATOM_GATE:
+        if config.gradient_projection.enabled:
+            raise ValueError("atom_gate does not permit gradient_projection.enabled")
         if bank.enabled:
             raise ValueError("atom_gate does not permit memory_bank.enabled")
         return config
 
+    if gate.enabled:
+        raise ValueError("atomic does not permit alpha_gate.enabled; memory gradients are controlled by projection")
     if not bank.enabled:
         raise ValueError("atomic requires memory_bank.enabled=true")
     if bank.size <= 0:
         raise ValueError("atomic requires memory_bank.size > 0")
+    if not config.gradient_projection.enabled:
+        raise ValueError("atomic requires gradient_projection.enabled=true")
 
     if role is ExperimentRole.CANONICAL:
-        if not bank.adaptive.enabled:
-            raise ValueError(
-                "canonical atomic requires memory_bank.adaptive.enabled=true; use experiment.role=ablation for controls"
-            )
-        if bank.margin.mode is not MarginMode.QUERY:
-            raise ValueError("canonical atomic requires query margin; set experiment.role=ablation for a fixed-margin control")
+        if config.objective.decoupled:
+            raise ValueError("canonical atomic requires standard coupled InfoNCE")
+        if bank.margin.mode is not MarginMode.OFF:
+            raise ValueError("canonical atomic keeps memory margin off; use experiment.role=ablation to enable it")
+        if bank.adaptive.enabled:
+            raise ValueError("canonical atomic keeps adaptive bank weights off; use experiment.role=ablation to enable them")
 
     if bank.margin.mode is MarginMode.QUERY and not bank.adaptive.enabled:
         raise ValueError("memory_bank.margin.mode=query requires memory_bank.adaptive.enabled=true")

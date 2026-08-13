@@ -146,6 +146,15 @@ class MemoryBankConfig:
 
 
 @dataclass(frozen=True)
+class GradientProjectionConfig:
+    """One-sided gradient surgery for the ATOMIC memory objective."""
+
+    enabled: bool = False
+    memory_weight: float = 1.0
+    eps: float = 1e-12
+
+
+@dataclass(frozen=True)
 class TelemetryConfig:
     backend: str = "csv"
     metrics_path: str | None = None
@@ -180,6 +189,7 @@ class TrainConfig:
     objective: ObjectiveConfig = field(default_factory=ObjectiveConfig)
     alpha_gate: AlphaGateConfig = field(default_factory=AlphaGateConfig)
     memory_bank: MemoryBankConfig = field(default_factory=MemoryBankConfig)
+    gradient_projection: GradientProjectionConfig = field(default_factory=GradientProjectionConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     artifacts: ArtifactConfig = field(default_factory=ArtifactConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -383,6 +393,11 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_number(margin.maximum, "memory_bank.margin.maximum", margin.minimum)
     _require_number(margin.admission_beta, "memory_bank.margin.admission_beta", 1e-12)
     _require_number(margin.regularization_weight, "memory_bank.margin.regularization_weight", 0.0)
+
+    projection = config.gradient_projection
+    _require_bool(projection.enabled, "gradient_projection.enabled")
+    _require_number(projection.memory_weight, "gradient_projection.memory_weight", 0.0)
+    _require_number(projection.eps, "gradient_projection.eps", 1e-30)
 
     if config.telemetry.backend not in {"csv", "wandb"}:
         raise ValueError("telemetry.backend must be one of: csv, wandb")

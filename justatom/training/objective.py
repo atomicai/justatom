@@ -28,7 +28,10 @@ class ObjectiveInputs:
 @dataclass(frozen=True)
 class ObjectiveOutput:
     loss: torch.Tensor
+    primary_loss: torch.Tensor
+    memory_loss: torch.Tensor | None
     main_per_row: torch.Tensor
+    memory_per_row: torch.Tensor | None
     simcse_per_row: torch.Tensor | None
     soft_fn_per_row: torch.Tensor | None
     metrics: dict[str, float | torch.Tensor]
@@ -63,12 +66,27 @@ class ContrastiveObjective(nn.Module):
             inputs.queries,
             inputs.positives,
             reduction="none",
-            memory_negatives=None if memory is None else memory.embeddings,
-            memory_negative_mask=None if memory is None else memory.active_mask,
-            memory_log_weights=None if memory is None else memory.log_weights,
-            memory_margin=inputs.margin,
-            memory_soft_beta=None if margin_config is None else margin_config.admission_beta,
         )
+        memory_per_row = None
+        has_memory = (
+            memory is not None
+            and memory.embeddings is not None
+            and memory.active_mask is not None
+            and bool(memory.active_mask.any().item())
+        )
+        if has_memory:
+            assert memory is not None
+            augmented = self.kernel.info_nce(
+                inputs.queries,
+                inputs.positives,
+                reduction="none",
+                memory_negatives=memory.embeddings,
+                memory_negative_mask=memory.active_mask,
+                memory_log_weights=memory.log_weights,
+                memory_margin=inputs.margin,
+                memory_soft_beta=None if margin_config is None else margin_config.admission_beta,
+            )
+            memory_per_row = augmented - main
 
         simcse = None
         soft_fn = None
@@ -91,13 +109,17 @@ class ContrastiveObjective(nn.Module):
             if alpha.shape != main.shape:
                 raise ValueError(f"alpha must have shape {tuple(main.shape)}, got {tuple(alpha.shape)}")
             per_row = main + (1.0 - alpha) * auxiliary
+        if memory_per_row is not None:
+            per_row = per_row + memory_per_row
         loss = per_row.mean()
+        memory_loss = None if memory_per_row is None else memory_per_row.mean()
 
         active_negatives = 0.0
         if memory is not None and memory.active_mask is not None:
             active_negatives = float(memory.active_mask.float().sum(dim=1).mean().item())
         metrics: dict[str, float | torch.Tensor] = {
             "loss/main": main.detach().mean(),
+            "loss/memory": 0.0 if memory_per_row is None else memory_per_row.detach().mean(),
             "loss/alpha_aux": 0.0 if simcse is None else simcse.detach().mean(),
             "loss/soft_fn": 0.0 if soft_fn is None else soft_fn.detach().mean(),
             "loss/lexical_mix": 0.0,
@@ -130,12 +152,17 @@ class ContrastiveObjective(nn.Module):
         if margin_config is not None and inputs.raw_margin is not None:
             regularization = margin_config.regularization_weight * (inputs.raw_margin - margin_config.base).pow(2).mean()
             loss = loss + regularization
+            memory_loss = regularization if memory_loss is None else memory_loss + regularization
             metrics["loss/memory_margin_regularization"] = regularization.detach()
             metrics["loss/memory_margin_regularization_tensor"] = regularization
 
+        primary_loss = loss if memory_loss is None else loss - memory_loss
         return ObjectiveOutput(
             loss=loss,
+            primary_loss=primary_loss,
+            memory_loss=memory_loss,
             main_per_row=main,
+            memory_per_row=memory_per_row,
             simcse_per_row=simcse,
             soft_fn_per_row=soft_fn,
             metrics=metrics,

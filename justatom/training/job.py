@@ -16,7 +16,7 @@ from justatom.processing.loader import NamedDataLoader
 from justatom.processing.prime import TrainWithContrastiveProcessor
 from justatom.running.encoders import EncoderRunner
 from justatom.tooling.collections import build_collection_metadata, resolve_artifact_dirname, write_collection_metadata
-from justatom.training.config import LoraAdapterConfig, RuntimeConfig, TrainConfig, train_config_to_dict
+from justatom.training.config import LoraAdapterConfig, RuntimeConfig, TrainConfig, TrainingMethod, train_config_to_dict
 from justatom.training.data import prepare_training_data_from_config
 from justatom.training.methods import resolve_method
 from justatom.training.module import ContrastiveTrainingModule
@@ -243,7 +243,9 @@ def build_lightning_trainer(config: TrainConfig) -> L.Trainer:
         accelerator=config.runtime.accelerator,
         devices=config.runtime.devices,
         precision=resolve_training_precision(config.runtime),
-        accumulate_grad_batches=config.optimization.grad_acc_steps,
+        # ATOMIC performs gradient accumulation inside its manual optimization
+        # step so both objectives can be differentiated and projected first.
+        accumulate_grad_batches=(1 if config.method is TrainingMethod.ATOMIC else config.optimization.grad_acc_steps),
         logger=build_training_logger(config),
         log_every_n_steps=1,
         enable_checkpointing=False,
