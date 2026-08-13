@@ -351,9 +351,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#adaptive-bank" class="md-nav__link">
+  <a href="#atomic-protected-online-memory" class="md-nav__link">
     <span class="md-ellipsis">
-      Adaptive Bank
+      ATOMIC: protected online memory
     </span>
   </a>
   
@@ -640,9 +640,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#adaptive-bank" class="md-nav__link">
+  <a href="#atomic-protected-online-memory" class="md-nav__link">
     <span class="md-ellipsis">
-      Adaptive Bank
+      ATOMIC: protected online memory
     </span>
   </a>
   
@@ -706,33 +706,29 @@
 <thead>
 <tr>
 <th>Method</th>
-<th>Objective</th>
-<th>Query gate</th>
-<th>Memory bank</th>
-<th>Query margin</th>
+<th>Primary objective</th>
+<th>Auxiliary objective</th>
+<th>Gradient control</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>vanilla</code></td>
-<td>decoupled InfoNCE</td>
-<td>no</td>
-<td>no</td>
-<td>no</td>
+<td>InfoNCE</td>
+<td>none</td>
+<td>none</td>
 </tr>
 <tr>
 <td><code>atom_gate</code></td>
-<td>InfoNCE plus query-controlled auxiliary pressure</td>
-<td><code>alpha(q)</code></td>
-<td>no</td>
-<td>no</td>
+<td>InfoNCE</td>
+<td>query-controlled SimCSE pressure</td>
+<td>learned <code>alpha(q)</code></td>
 </tr>
 <tr>
 <td><code>atomic</code></td>
-<td><code>atom_gate</code> plus adaptive bank negatives</td>
-<td><code>alpha(q)</code></td>
-<td>yes</td>
-<td><code>m(q)</code></td>
+<td>standard coupled InfoNCE</td>
+<td>detached online memory</td>
+<td>one-sided orthogonal projection</td>
 </tr>
 </tbody>
 </table>
@@ -751,36 +747,41 @@ L_i_gate = L_i + (1 - alpha_i) lambda_sc L_i_sc.</code></p>
 <p>When lexical metadata is available, the same gate also controls a pairwise
 semantic/lexical auxiliary term. The gate is training-only; the saved encoder
 has the same inference interface as the source embedding model.</p>
-<h2 id="adaptive-bank">Adaptive Bank<a class="headerlink" href="#adaptive-bank" title="Permanent link">&para;</a></h2>
+<h2 id="atomic-protected-online-memory">ATOMIC: protected online memory<a class="headerlink" href="#atomic-protected-online-memory" title="Permanent link">&para;</a></h2>
 <p><code>atomic</code> keeps a FIFO queue <code>B</code> of detached document embeddings. The bank does
-not retain previous autograd graphs. For each current query:</p>
+not retain previous autograd graphs. Unlike an ordinary memory-bank objective,
+ATOMIC does not place the extra negatives directly into the protected primary
+loss. It decomposes the objective exactly into:</p>
 <p><code>text
-g(q_i) = max_j cosine(q_i, b_j) - cosine(q_i, p_i)
-w_h(q_i) = sigmoid((c - g(q_i)) / beta_c)</code></p>
-<p>Large positive <code>g(q)</code> indicates that a bank candidate is closer than the known
-positive and may be a false negative. Its hard-negative contribution is then
-reduced by <code>w_h(q)</code>.</p>
-<p>The query margin head predicts</p>
-<p><code>text
-m_raw(q) = m_0 + s tanh(h_m(q))
-m(q) = clip(m_raw(q), m_min, m_max).</code></p>
-<p>Each selected bank logit receives differentiable soft admission:</p>
-<p><code>text
-a_ij = sigmoid((S_i+ - m(q_i) - S_ij_bank) / beta_m)
-z_ij_bank = S_ij_bank / tau + log w_h(q_i) + log a_ij.</code></p>
-<p>The bank columns are concatenated with in-batch negative columns inside the
-same log-sum-exp denominator. Gradients flow through current query embeddings,
-temperature, <code>alpha(q)</code>, and <code>m(q)</code>, but never through stored bank embeddings.</p>
+L_primary = InfoNCE(Q, P)
+L_memory  = InfoNCE(Q, P, B) - InfoNCE(Q, P)</code></p>
+<p>Let <code>g_p</code> and <code>g_m</code> be their gradients over the trainable parameters. The
+primary gradient is protected. When the memory gradient conflicts with it,
+ATOMIC removes only the opposing component:</p>
+<p>```text
+if dot(g_p, g_m) &lt; 0:
+    g_m &lt;- g_m - dot(g_p, g_m) / ||g_p||^2 * g_p</p>
+<p>g_update = g_p + lambda_memory * g_m
+```</p>
+<p>The projected memory component is orthogonal to <code>g_p</code>, so it cannot oppose the
+primary descent direction to first order. Aligned memory gradients are retained
+unchanged. Parameters owned only by an optional memory-side head also retain
+their gradients. Projection is training-only and adds no inference components.</p>
+<p>Gradient accumulation is performed by the ATOMIC manual optimization step so
+each microbatch is projected before its update is accumulated. The same path is
+implemented with ordinary PyTorch operations and works on CUDA, MPS, and CPU.</p>
 <h2 id="canonical-profiles">Canonical Profiles<a class="headerlink" href="#canonical-profiles" title="Permanent link">&para;</a></h2>
 <p>Selecting a method applies its registered defaults before YAML and CLI
-overrides. Canonical <code>atomic</code> currently uses a 512-entry mixed bank, 4 hard and
-12 random candidates, adaptive collision weighting, and a query margin centered
-at <code>0.05</code>. Structural changes must be labeled as ablations:</p>
+overrides. Canonical <code>atomic</code> uses standard coupled InfoNCE, a 512-entry FIFO
+bank, 50 optimizer-step warmup, 12 random candidates per query, and memory
+weight <code>1.0</code>. It does not construct the old alpha gate or a query-margin head.
+Structural additions must be labeled as ablations:</p>
 <p><code>bash
 python -m justatom.api.train \
   --config configs/train.yaml \
   --method atomic \
   --experiment.role ablation \
+  --memory-bank.adaptive.enabled true \
   --memory-bank.margin.mode constant</code></p>
 <p>A plain InfoNCE control with detached bank negatives keeps the <code>vanilla</code>
 method identity but must also be labeled as an ablation. It does not construct
@@ -828,8 +829,10 @@ bash scripts/run_benchmark.sh \
   --auto-e5-prefixes</code></p>
 <h2 id="lora-adapters">LoRA adapters<a class="headerlink" href="#lora-adapters" title="Permanent link">&para;</a></h2>
 <p>LoRA is an encoder configuration, so it composes with every training method.
-The objective, query gate, and memory bank do not change; the optimizer simply
-updates PEFT adapter parameters instead of the frozen backbone parameters.</p>
+The objective and memory-gradient projection do not change; the optimizer
+simply updates PEFT adapter parameters instead of the frozen backbone
+parameters. For ATOMIC, projection is therefore applied in adapter-parameter
+space, including the learnable temperature.</p>
 <p>The default <code>all-linear</code> target is resolved by PEFT from the Hugging Face model
 itself. This keeps the same config usable for Qwen3-Embedding, E5, BGE, and
 mBERT. An explicit list is still available for controlled experiments.
@@ -876,7 +879,7 @@ command line to reuse the recipe.</p>
 <li><code>adapter/</code>: PEFT adapter and its config when LoRA is enabled</li>
 <li><code>research/checkpoint.pt</code>: complete training state for analysis or continuation</li>
 <li><code>run_manifest.yaml</code>: resolved method, data, seed, hyperparameters, and Git state</li>
-<li><code>batch_metrics.csv</code>: losses, retrieval ranks, <code>alpha(q)</code>, bank geometry, collision <code>g(q)</code>, hard weights, and margin distributions</li>
+<li><code>batch_metrics.csv</code>: losses, retrieval ranks, bank geometry, gradient cosine, conflict flag, projection coefficient, and gradient norms</li>
 </ul>
 <p>The adapter and research checkpoint are saved before LoRA is merged into the
 deployable encoder. Loading <code>encoder/</code> therefore does not require PEFT, while
