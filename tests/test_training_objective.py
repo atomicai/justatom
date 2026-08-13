@@ -16,6 +16,8 @@ def test_objective_vanilla_has_no_auxiliary_components():
     output = objective(ObjectiveInputs(queries=queries, positives=positives))
 
     assert output.loss.ndim == 0
+    torch.testing.assert_close(output.primary_loss, output.loss)
+    assert output.memory_loss is None
     assert output.simcse_per_row is None
     assert output.metrics["loss/alpha_aux"] == 0.0
     assert output.metrics["loss/memory_margin_regularization"] == 0.0
@@ -104,6 +106,9 @@ def test_objective_atomic_forwards_bank_columns_and_live_margin():
         ),
         margin_config=MarginConfig(mode=MarginMode.QUERY, admission_beta=0.05),
     )
+    assert output.memory_loss is not None
+    assert output.memory_per_row is not None
+    torch.testing.assert_close(output.loss, output.primary_loss + output.memory_loss)
     output.loss.backward()
 
     assert margin.grad is not None and float(margin.grad.abs().sum()) > 0.0

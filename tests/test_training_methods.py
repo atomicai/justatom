@@ -15,9 +15,13 @@ def test_canonical_profiles_have_exact_structural_components():
 
     assert not vanilla.alpha_gate.enabled and not vanilla.memory_bank.enabled
     assert gate.alpha_gate.enabled and not gate.memory_bank.enabled
-    assert atomic.alpha_gate.enabled and atomic.memory_bank.enabled
-    assert atomic.memory_bank.adaptive.enabled
-    assert atomic.memory_bank.margin.mode is MarginMode.QUERY
+    assert not atomic.alpha_gate.enabled and atomic.memory_bank.enabled
+    assert atomic.gradient_projection.enabled
+    assert not atomic.objective.decoupled
+    assert atomic.memory_bank.mining == "random"
+    assert atomic.memory_bank.random_negatives == 12
+    assert not atomic.memory_bank.adaptive.enabled
+    assert atomic.memory_bank.margin.mode is MarginMode.OFF
 
 
 def test_canonical_atom_gate_rejects_bank():
@@ -46,6 +50,21 @@ def test_atomic_fixed_margin_requires_ablation_role():
         experiment=ExperimentConfig(role=ExperimentRole.ABLATION, seed=42),
     )
     assert resolve_method(ablation).memory_bank.margin.mode is MarginMode.CONSTANT
+
+
+def test_atomic_requires_projection_and_rejects_alpha_gate():
+    atomic = canonical_method_config(TrainingMethod.ATOMIC)
+    gate = canonical_method_config(TrainingMethod.ATOM_GATE)
+
+    with pytest.raises(ValueError, match="gradient_projection.enabled=true"):
+        resolve_method(
+            replace(
+                atomic,
+                gradient_projection=replace(atomic.gradient_projection, enabled=False),
+            )
+        )
+    with pytest.raises(ValueError, match="does not permit alpha_gate"):
+        resolve_method(replace(atomic, alpha_gate=gate.alpha_gate))
 
 
 def test_vanilla_rejects_alpha_even_for_ablation():

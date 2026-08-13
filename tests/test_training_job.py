@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 from justatom.training.config import TrainingMethod
-from justatom.training.job import RunManifest, TrainingJob, artifact_paths, write_run_manifest
+from justatom.training.job import RunManifest, TrainingJob, artifact_paths, build_lightning_trainer, write_run_manifest
 from justatom.training.methods import canonical_method_config
 
 
@@ -22,7 +22,8 @@ def test_manifest_contains_resolved_method_seed_and_git_state(tmp_path: Path):
     assert loaded["experiment"]["seed"] == 42
     assert loaded["git_commit"] == "abc123"
     assert loaded["git_dirty"] is True
-    assert loaded["resolved_config"]["memory_bank"]["margin"]["mode"] == "query"
+    assert loaded["resolved_config"]["memory_bank"]["margin"]["mode"] == "off"
+    assert loaded["resolved_config"]["gradient_projection"]["enabled"] is True
 
 
 def test_artifact_directories_are_distinct(tmp_path: Path):
@@ -32,6 +33,16 @@ def test_artifact_directories_are_distinct(tmp_path: Path):
     assert paths.adapter == tmp_path / "adapter"
     assert paths.research_checkpoint == tmp_path / "research" / "checkpoint.pt"
     assert paths.manifest == tmp_path / "run_manifest.yaml"
+
+
+def test_atomic_trainer_delegates_gradient_accumulation_to_manual_optimization():
+    atomic = canonical_method_config(TrainingMethod.ATOMIC)
+    atomic = replace(atomic, optimization=replace(atomic.optimization, grad_acc_steps=4))
+    vanilla = canonical_method_config(TrainingMethod.VANILLA)
+    vanilla = replace(vanilla, optimization=replace(vanilla.optimization, grad_acc_steps=4))
+
+    assert build_lightning_trainer(atomic).accumulate_grad_batches == 1
+    assert build_lightning_trainer(vanilla).accumulate_grad_batches == 4
 
 
 def test_training_job_writes_manifest_before_fit_and_returns_artifacts(tmp_path: Path):

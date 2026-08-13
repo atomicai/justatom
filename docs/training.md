@@ -2,11 +2,11 @@
 
 Justatom has one production training path and three public methods.
 
-| Method | Objective | Query gate | Memory bank | Query margin |
-| --- | --- | --- | --- | --- |
-| `vanilla` | decoupled InfoNCE | no | no | no |
-| `atom_gate` | InfoNCE plus query-controlled auxiliary pressure | `alpha(q)` | no | no |
-| `atomic` | `atom_gate` plus adaptive bank negatives | `alpha(q)` | yes | `m(q)` |
+| Method | Primary objective | Auxiliary objective | Gradient control |
+| --- | --- | --- | --- |
+| `vanilla` | InfoNCE | none | none |
+| `atom_gate` | InfoNCE | query-controlled SimCSE pressure | learned `alpha(q)` |
+| `atomic` | standard coupled InfoNCE | detached online memory | one-sided orthogonal projection |
 
 ## Objective
 
@@ -34,50 +34,52 @@ When lexical metadata is available, the same gate also controls a pairwise
 semantic/lexical auxiliary term. The gate is training-only; the saved encoder
 has the same inference interface as the source embedding model.
 
-## Adaptive Bank
+## ATOMIC: protected online memory
 
 `atomic` keeps a FIFO queue `B` of detached document embeddings. The bank does
-not retain previous autograd graphs. For each current query:
+not retain previous autograd graphs. Unlike an ordinary memory-bank objective,
+ATOMIC does not place the extra negatives directly into the protected primary
+loss. It decomposes the objective exactly into:
 
 ```text
-g(q_i) = max_j cosine(q_i, b_j) - cosine(q_i, p_i)
-w_h(q_i) = sigmoid((c - g(q_i)) / beta_c)
+L_primary = InfoNCE(Q, P)
+L_memory  = InfoNCE(Q, P, B) - InfoNCE(Q, P)
 ```
 
-Large positive `g(q)` indicates that a bank candidate is closer than the known
-positive and may be a false negative. Its hard-negative contribution is then
-reduced by `w_h(q)`.
-
-The query margin head predicts
+Let `g_p` and `g_m` be their gradients over the trainable parameters. The
+primary gradient is protected. When the memory gradient conflicts with it,
+ATOMIC removes only the opposing component:
 
 ```text
-m_raw(q) = m_0 + s tanh(h_m(q))
-m(q) = clip(m_raw(q), m_min, m_max).
+if dot(g_p, g_m) < 0:
+    g_m <- g_m - dot(g_p, g_m) / ||g_p||^2 * g_p
+
+g_update = g_p + lambda_memory * g_m
 ```
 
-Each selected bank logit receives differentiable soft admission:
+The projected memory component is orthogonal to `g_p`, so it cannot oppose the
+primary descent direction to first order. Aligned memory gradients are retained
+unchanged. Parameters owned only by an optional memory-side head also retain
+their gradients. Projection is training-only and adds no inference components.
 
-```text
-a_ij = sigmoid((S_i+ - m(q_i) - S_ij_bank) / beta_m)
-z_ij_bank = S_ij_bank / tau + log w_h(q_i) + log a_ij.
-```
-
-The bank columns are concatenated with in-batch negative columns inside the
-same log-sum-exp denominator. Gradients flow through current query embeddings,
-temperature, `alpha(q)`, and `m(q)`, but never through stored bank embeddings.
+Gradient accumulation is performed by the ATOMIC manual optimization step so
+each microbatch is projected before its update is accumulated. The same path is
+implemented with ordinary PyTorch operations and works on CUDA, MPS, and CPU.
 
 ## Canonical Profiles
 
 Selecting a method applies its registered defaults before YAML and CLI
-overrides. Canonical `atomic` currently uses a 512-entry mixed bank, 4 hard and
-12 random candidates, adaptive collision weighting, and a query margin centered
-at `0.05`. Structural changes must be labeled as ablations:
+overrides. Canonical `atomic` uses standard coupled InfoNCE, a 512-entry FIFO
+bank, 50 optimizer-step warmup, 12 random candidates per query, and memory
+weight `1.0`. It does not construct the old alpha gate or a query-margin head.
+Structural additions must be labeled as ablations:
 
 ```bash
 python -m justatom.api.train \
   --config configs/train.yaml \
   --method atomic \
   --experiment.role ablation \
+  --memory-bank.adaptive.enabled true \
   --memory-bank.margin.mode constant
 ```
 
@@ -141,8 +143,10 @@ bash scripts/run_benchmark.sh \
 ## LoRA adapters
 
 LoRA is an encoder configuration, so it composes with every training method.
-The objective, query gate, and memory bank do not change; the optimizer simply
-updates PEFT adapter parameters instead of the frozen backbone parameters.
+The objective and memory-gradient projection do not change; the optimizer
+simply updates PEFT adapter parameters instead of the frozen backbone
+parameters. For ATOMIC, projection is therefore applied in adapter-parameter
+space, including the learnable temperature.
 
 The default `all-linear` target is resolved by PEFT from the Hugging Face model
 itself. This keeps the same config usable for Qwen3-Embedding, E5, BGE, and
@@ -198,7 +202,7 @@ Every successful training run writes:
 - `adapter/`: PEFT adapter and its config when LoRA is enabled
 - `research/checkpoint.pt`: complete training state for analysis or continuation
 - `run_manifest.yaml`: resolved method, data, seed, hyperparameters, and Git state
-- `batch_metrics.csv`: losses, retrieval ranks, `alpha(q)`, bank geometry, collision `g(q)`, hard weights, and margin distributions
+- `batch_metrics.csv`: losses, retrieval ranks, bank geometry, gradient cosine, conflict flag, projection coefficient, and gradient norms
 
 The adapter and research checkpoint are saved before LoRA is merged into the
 deployable encoder. Loading `encoder/` therefore does not require PEFT, while

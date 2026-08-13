@@ -63,9 +63,13 @@ def tiny_batch():
 
 
 def finite_output():
+    loss = torch.tensor(1.0, requires_grad=True)
     return ObjectiveOutput(
-        loss=torch.tensor(1.0, requires_grad=True),
+        loss=loss,
+        primary_loss=loss,
+        memory_loss=None,
         main_per_row=torch.ones(2),
+        memory_per_row=None,
         simcse_per_row=None,
         soft_fn_per_row=None,
         metrics={},
@@ -79,7 +83,9 @@ def test_module_constructs_only_components_required_by_method():
 
     assert vanilla.alpha_gate is None and vanilla.memory_bank is None and vanilla.margin_head is None
     assert isinstance(gate.alpha_gate, QueryAlphaGate) and gate.memory_bank is None
-    assert atomic.alpha_gate is not None and atomic.memory_bank is not None and atomic.margin_head is not None
+    assert atomic.alpha_gate is None and atomic.memory_bank is not None and atomic.margin_head is None
+    assert atomic.config.gradient_projection.enabled
+    assert atomic.automatic_optimization is False
 
 
 def test_vanilla_bank_ablation_constructs_bank_without_gate_or_margin_head():
@@ -102,7 +108,7 @@ def test_vanilla_bank_ablation_constructs_bank_without_gate_or_margin_head():
     assert module.margin_head is None
 
 
-def test_optimizer_contains_encoder_temperature_alpha_and_margin_parameters_once():
+def test_optimizer_contains_all_atomic_parameters_once():
     module = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.ATOMIC))
 
     optimizer = module.configure_optimizers()
@@ -149,7 +155,10 @@ def test_compute_training_step_rejects_nonfinite_loss(monkeypatch):
     module = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.VANILLA))
     bad_output = ObjectiveOutput(
         loss=torch.tensor(float("nan")),
+        primary_loss=torch.tensor(float("nan")),
+        memory_loss=None,
         main_per_row=torch.ones(2),
+        memory_per_row=None,
         simcse_per_row=None,
         soft_fn_per_row=None,
         metrics={},
@@ -202,3 +211,61 @@ def test_lightning_automatic_optimization_keeps_tau_version_valid(tmp_path):
 
     assert trainer.global_step == 1
     assert torch.isfinite(module.objective.kernel.log_tau)
+
+
+def test_lightning_atomic_manual_optimization_steps_with_live_bank(tmp_path):
+    config = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(
+        config,
+        memory_bank=replace(config.memory_bank, size=8, warmup_steps=0, random_negatives=1),
+    )
+    module = ContrastiveTrainingModule.build(TinyEncoder(), config)
+    second = {key: value.clone() for key, value in tiny_batch().items()}
+    for key in ("doc_key_id", "content_key_id", "query_key_id"):
+        second[key] += 100
+    trainer = L.Trainer(
+        max_epochs=1,
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        enable_progress_bar=False,
+        default_root_dir=tmp_path,
+    )
+
+    trainer.fit(module, train_dataloaders=DataLoader([tiny_batch(), second], batch_size=None))
+
+    assert trainer.global_step == 2
+    assert module.memory_bank is not None and module.memory_bank.current_size == 4
+    assert torch.isfinite(module.objective.kernel.log_tau)
+
+
+def test_lightning_atomic_handles_gradient_accumulation_and_final_partial_step(tmp_path):
+    config = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(
+        config,
+        optimization=replace(config.optimization, grad_acc_steps=2),
+        memory_bank=replace(config.memory_bank, size=8, warmup_steps=0, random_negatives=1),
+    )
+    module = ContrastiveTrainingModule.build(TinyEncoder(), config)
+    batches = []
+    for offset in (0, 100, 200):
+        batch = {key: value.clone() for key, value in tiny_batch().items()}
+        for key in ("doc_key_id", "content_key_id", "query_key_id"):
+            batch[key] += offset
+        batches.append(batch)
+    trainer = L.Trainer(
+        max_epochs=1,
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        enable_progress_bar=False,
+        default_root_dir=tmp_path,
+    )
+
+    trainer.fit(module, train_dataloaders=DataLoader(batches, batch_size=None))
+
+    assert trainer.global_step == 2

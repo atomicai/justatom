@@ -11,6 +11,7 @@ from torch import nn
 from justatom.logging.io import CSVLogger
 from justatom.training.alpha_gate import QueryAlphaGate
 from justatom.training.config import MarginMode, TrainConfig, parse_train_config, train_config_to_dict
+from justatom.training.gradient_projection import project_conflicting_gradients
 from justatom.training.memory_bank import ContrastiveMemoryBank, QueryMarginHead
 from justatom.training.methods import resolve_method
 from justatom.training.objective import ContrastiveObjective, ObjectiveInputs, ObjectiveOutput
@@ -43,6 +44,7 @@ class ContrastiveTrainingModule(L.LightningModule):
         self._last_negative_indices: torch.Tensor | None = None
         self.metrics_path = None if config.telemetry.metrics_path is None else Path(config.telemetry.metrics_path)
         self.metrics_logger = CSVLogger(self.metrics_path) if self.metrics_path is not None else None
+        self.automatic_optimization = not config.gradient_projection.enabled
 
     @classmethod
     def build(
@@ -207,6 +209,10 @@ class ContrastiveTrainingModule(L.LightningModule):
         )
         if not torch.isfinite(output.loss.detach()):
             raise RuntimeError(f"Non-finite loss at step={step}: {output.loss.detach().cpu().item()}")
+        if not torch.isfinite(output.primary_loss.detach()):
+            raise RuntimeError(f"Non-finite primary loss at step={step}: {output.primary_loss.detach().cpu().item()}")
+        if output.memory_loss is not None and not torch.isfinite(output.memory_loss.detach()):
+            raise RuntimeError(f"Non-finite memory loss at step={step}: {output.memory_loss.detach().cpu().item()}")
         with torch.no_grad():
             metrics: dict[str, Any] = dict(output.metrics)
             metrics.update(batch_retrieval_metrics(queries @ positives.T))
@@ -223,10 +229,63 @@ class ContrastiveTrainingModule(L.LightningModule):
             self.memory_bank.enqueue(positives, batch)
         return output
 
-    def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
-        output = self.compute_training_step(batch, step=int(self.global_step))
-        metrics = resolve_metric_tensors(output.metrics)
-        numeric_metrics = {key: value for key, value in metrics.items() if isinstance(value, (int, float))}
+    @staticmethod
+    def _optimizer_parameters(optimizer: Any) -> list[nn.Parameter]:
+        raw_optimizer = getattr(optimizer, "optimizer", optimizer)
+        return [parameter for group in raw_optimizer.param_groups for parameter in group["params"]]
+
+    @staticmethod
+    def _capture_gradients(parameters: list[nn.Parameter]) -> list[torch.Tensor | None]:
+        return [None if parameter.grad is None else parameter.grad.detach().clone() for parameter in parameters]
+
+    def _projected_optimization_step(self, output: ObjectiveOutput, batch_idx: int) -> dict[str, float]:
+        optimizer = self.optimizers()
+        parameters = self._optimizer_parameters(optimizer)
+        accumulated = self._capture_gradients(parameters)
+        optimizer.zero_grad()
+
+        primary_loss = self.adjust_loss_for_accumulation(output.primary_loss)
+        self.manual_backward(primary_loss, retain_graph=output.memory_loss is not None)
+        primary_gradients = self._capture_gradients(parameters)
+        optimizer.zero_grad()
+
+        if output.memory_loss is None:
+            memory_gradients: list[torch.Tensor | None] = [None for _ in parameters]
+        else:
+            memory_loss = self.adjust_loss_for_accumulation(output.memory_loss)
+            self.manual_backward(memory_loss)
+            memory_gradients = self._capture_gradients(parameters)
+            optimizer.zero_grad()
+
+        projected_memory, stats = project_conflicting_gradients(
+            primary_gradients,
+            memory_gradients,
+            eps=self.config.gradient_projection.eps,
+        )
+        memory_weight = float(self.config.gradient_projection.memory_weight)
+        for parameter, previous, primary, memory in zip(
+            parameters,
+            accumulated,
+            primary_gradients,
+            projected_memory,
+        ):
+            combined = previous
+            if primary is not None:
+                combined = primary if combined is None else combined + primary
+            if memory is not None and memory_weight > 0.0:
+                weighted_memory = memory * memory_weight
+                combined = weighted_memory if combined is None else combined + weighted_memory
+            parameter.grad = combined
+
+        if self.should_step_optimizer(batch_idx):
+            optimizer.step()
+            optimizer.zero_grad()
+            self.objective.kernel.clamp_temperature_()
+        return stats.metrics()
+
+    def _log_training_metrics(self, metrics: dict[str, Any]) -> None:
+        resolved = resolve_metric_tensors(metrics)
+        numeric_metrics = {key: value for key, value in resolved.items() if isinstance(value, (int, float))}
         if self.metrics_logger is not None:
             self.metrics_logger.log_metrics(
                 {
@@ -237,7 +296,14 @@ class ContrastiveTrainingModule(L.LightningModule):
                 }
             )
         self.log_dict(numeric_metrics, on_step=True, on_epoch=False, prog_bar=False)
-        return output.loss
+
+    def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
+        output = self.compute_training_step(batch, step=int(self.global_step))
+        metrics: dict[str, Any] = dict(output.metrics)
+        if self.config.gradient_projection.enabled:
+            metrics.update(self._projected_optimization_step(output, batch_idx))
+        self._log_training_metrics(metrics)
+        return output.loss.detach() if not self.automatic_optimization else output.loss
 
     def on_train_end(self) -> None:
         if self.metrics_logger is not None:

@@ -67,8 +67,9 @@ def test_lora_can_be_combined_with_atomic_method():
     config = canonical_method_config(TrainingMethod.ATOMIC)
     config = replace(config, model=replace(config.model, lora=LoraAdapterConfig(enabled=True)))
 
-    assert config.alpha_gate.enabled
+    assert not config.alpha_gate.enabled
     assert config.memory_bank.enabled
+    assert config.gradient_projection.enabled
     assert config.model.lora.enabled
 
 

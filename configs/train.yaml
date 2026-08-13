@@ -51,6 +51,7 @@ optimization:
 objective: {}
 alpha_gate: {}
 memory_bank: {}
+gradient_projection: {}
 
 telemetry:
   backend: csv
