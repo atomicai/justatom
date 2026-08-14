@@ -4,9 +4,9 @@ Justatom has one production training path and three public methods.
 
 | Method | Primary objective | Auxiliary objective | Gradient control |
 | --- | --- | --- | --- |
-| `vanilla` | InfoNCE | none | none |
-| `atom_gate` | InfoNCE | query-controlled SimCSE pressure | learned `alpha(q)` |
-| `atomic` | standard coupled InfoNCE | detached online memory | one-sided orthogonal projection |
+| `vanilla` | coupled InfoNCE | none | none |
+| `atom_gate` | coupled InfoNCE | query-controlled SimCSE and semantic/lexical pairs | stop-gradient on the SimCSE coefficient |
+| `atomic` | coupled InfoNCE | detached online memory | one-sided orthogonal projection |
 
 ## Objective
 
@@ -17,22 +17,24 @@ in-batch similarity matrix is
 S = Q P^T,       S_ij = cosine(q_i, p_j).
 ```
 
-The decoupled InfoNCE row loss is
+All three canonical methods use the same coupled InfoNCE row loss:
 
 ```text
-L_i = -S_ii / tau + log sum_{j != i} exp(S_ij / tau).
+L_i = -S_ii / tau + log sum_j exp(S_ij / tau).
 ```
 
 `atom_gate` learns a query-only scalar `alpha_i = alpha(q_i)` and adds the
 SimCSE dropout-view pressure per query:
 
 ```text
-L_i_gate = L_i + (1 - alpha_i) lambda_sc L_i_sc.
+L_i_gate = L_i + (1 - stop_gradient(alpha_i)) lambda_sc L_i_sc.
 ```
 
 When lexical metadata is available, the same gate also controls a pairwise
-semantic/lexical auxiliary term. The gate is training-only; the saved encoder
-has the same inference interface as the source embedding model.
+semantic/lexical auxiliary term. Alpha remains live on that pair-supervision
+path, which trains the gate, but the gate cannot lower the current SimCSE loss
+by moving toward one. The gate is training-only; the saved encoder has the
+same inference interface as the source embedding model.
 
 ## ATOMIC: protected online memory
 
@@ -69,10 +71,14 @@ implemented with ordinary PyTorch operations and works on CUDA, MPS, and CPU.
 ## Canonical Profiles
 
 Selecting a method applies its registered defaults before YAML and CLI
-overrides. Canonical `atomic` uses standard coupled InfoNCE, a 512-entry FIFO
-bank, 50 optimizer-step warmup, 12 random candidates per query, and memory
-weight `1.0`. It does not construct the old alpha gate or a query-margin head.
-Structural additions must be labeled as ablations:
+overrides. Canonical `vanilla`, `atom_gate`, and `atomic` share coupled
+InfoNCE so method comparisons do not change the primary contrastive kernel.
+Using decoupled InfoNCE requires `experiment.role: ablation` explicitly.
+
+Canonical `atomic` adds a 512-entry FIFO bank, 50 optimizer-step warmup, 12
+random candidates per query, and memory weight `1.0`. It does not construct
+the alpha gate or a query-margin head. Structural additions must be labeled as
+ablations:
 
 ```bash
 python -m justatom.api.train \

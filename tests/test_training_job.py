@@ -22,8 +22,25 @@ def test_manifest_contains_resolved_method_seed_and_git_state(tmp_path: Path):
     assert loaded["experiment"]["seed"] == 42
     assert loaded["git_commit"] == "abc123"
     assert loaded["git_dirty"] is True
+    assert loaded["objective_contract"] == {
+        "contrastive_kernel": "coupled_infonce",
+        "alpha_aux_gradient": "not_applicable",
+    }
     assert loaded["resolved_config"]["memory_bank"]["margin"]["mode"] == "off"
     assert loaded["resolved_config"]["gradient_projection"]["enabled"] is True
+
+
+def test_atom_gate_manifest_records_detached_auxiliary_control():
+    manifest = RunManifest.from_config(
+        canonical_method_config(TrainingMethod.ATOM_GATE),
+        git_commit="abc123",
+        git_dirty=False,
+    )
+
+    assert manifest.objective_contract == {
+        "contrastive_kernel": "coupled_infonce",
+        "alpha_aux_gradient": "detached",
+    }
 
 
 def test_artifact_directories_are_distinct(tmp_path: Path):

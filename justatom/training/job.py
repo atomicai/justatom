@@ -62,6 +62,17 @@ def _git_output(*args: str) -> str | None:
     return value if result.returncode == 0 and value else None
 
 
+def objective_contract(config: TrainConfig) -> dict[str, str]:
+    return {
+        "contrastive_kernel": (
+            "decoupled_infonce" if config.objective.decoupled else "coupled_infonce"
+        ),
+        "alpha_aux_gradient": (
+            "detached" if config.method is TrainingMethod.ATOM_GATE else "not_applicable"
+        ),
+    }
+
+
 @dataclass(frozen=True)
 class RunManifest:
     schema_version: int
@@ -70,6 +81,7 @@ class RunManifest:
     created_at: str
     git_commit: str | None
     git_dirty: bool | None
+    objective_contract: dict[str, str]
     resolved_config: dict[str, Any]
 
     @classmethod
@@ -88,6 +100,7 @@ class RunManifest:
             created_at=datetime.now(timezone.utc).isoformat(),
             git_commit=git_commit,
             git_dirty=git_dirty,
+            objective_contract=objective_contract(config),
             resolved_config=payload,
         )
 
@@ -106,6 +119,7 @@ class RunManifest:
             "created_at": self.created_at,
             "git_commit": self.git_commit,
             "git_dirty": self.git_dirty,
+            "objective_contract": self.objective_contract,
             "resolved_config": self.resolved_config,
         }
 
