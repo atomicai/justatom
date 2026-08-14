@@ -133,9 +133,7 @@ class ContrastiveMemoryBank:
             "reranker/skipped": 0.0,
         }
         metrics.update(scalar_distribution("reranker/teacher_weight", torch.empty(0)))
-        metrics.update(
-            scalar_distribution("reranker/selected_teacher_weight", torch.empty(0))
-        )
+        metrics.update(scalar_distribution("reranker/selected_teacher_weight", torch.empty(0)))
         return metrics
 
     @torch.no_grad()
@@ -267,11 +265,7 @@ class ContrastiveMemoryBank:
 
         score_result = self.reranker.score_pairs(pair_queries, pair_documents)
         active = torch.zeros_like(candidate_mask)
-        teacher_log_weights = (
-            torch.zeros_like(bank_similarities)
-            if self.reranker.config.strategy == "teacher_weighted"
-            else None
-        )
+        teacher_log_weights = torch.zeros_like(bank_similarities) if self.reranker.config.strategy == "teacher_weighted" else None
         positive_scores: list[float] = []
         candidate_scores: list[float] = []
         score_gaps: list[float] = []
@@ -306,9 +300,7 @@ class ContrastiveMemoryBank:
                 if candidate_score <= positive_score - self.reranker.config.min_score_gap:
                     safe_indices.append(bank_index)
                 if self.reranker.config.strategy == "teacher_weighted":
-                    scaled_gap = (
-                        score_gap - self.reranker.config.min_score_gap
-                    ) / self.reranker.config.teacher_temperature
+                    scaled_gap = (score_gap - self.reranker.config.min_score_gap) / self.reranker.config.teacher_temperature
                     if scaled_gap >= 0.0:
                         confidence = 1.0 / (1.0 + math.exp(-scaled_gap))
                     else:
@@ -341,18 +333,13 @@ class ContrastiveMemoryBank:
                     device=bank_similarities.device,
                     dtype=bank_similarities.dtype,
                 )
-                adjusted_logits = (
-                    bank_similarities[row, scored_tensor] / self.contrastive_temperature
-                    + row_log_weights
-                )
+                adjusted_logits = bank_similarities[row, scored_tensor] / self.contrastive_temperature + row_log_weights
                 count = min(self.reranker.config.negatives, len(scored_indices))
                 selected = adjusted_logits.topk(count).indices
                 selected_indices = scored_tensor[selected]
                 active[row, selected_indices] = True
                 teacher_log_weights[row, selected_indices] = row_log_weights[selected]
-                selected_teacher_weights.extend(
-                    row_log_weights[selected].exp().detach().cpu().tolist()
-                )
+                selected_teacher_weights.extend(row_log_weights[selected].exp().detach().cpu().tolist())
 
         total_cache = score_result.cache_hits + score_result.cache_misses
         metrics = self._base_reranker_metrics()
@@ -371,9 +358,7 @@ class ContrastiveMemoryBank:
         metrics.update(scalar_distribution("reranker/positive_score", torch.tensor(positive_scores)))
         metrics.update(scalar_distribution("reranker/candidate_score", torch.tensor(candidate_scores)))
         metrics.update(scalar_distribution("reranker/positive_candidate_gap", torch.tensor(score_gaps)))
-        metrics.update(
-            scalar_distribution("reranker/teacher_weight", torch.tensor(teacher_weights))
-        )
+        metrics.update(scalar_distribution("reranker/teacher_weight", torch.tensor(teacher_weights)))
         metrics.update(
             scalar_distribution(
                 "reranker/selected_teacher_weight",

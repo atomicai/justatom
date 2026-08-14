@@ -6,11 +6,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from justatom.training.config import (
-    MemoryBankConfig,
-    RerankerCacheConfig,
-    RerankerConfig,
-)
+from justatom.training.config import MemoryBankConfig, RerankerCacheConfig, RerankerConfig
 from justatom.training.memory_bank import ContrastiveMemoryBank
 from justatom.training.reranker import CachedTextReranker
 
