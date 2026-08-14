@@ -16,13 +16,14 @@ from justatom.training.config import (
 
 def canonical_method_config(method: TrainingMethod | str) -> TrainConfig:
     method = TrainingMethod(method)
+    objective = ObjectiveConfig(decoupled=False)
     if method is TrainingMethod.VANILLA:
-        return TrainConfig(method=method)
+        return TrainConfig(method=method, objective=objective)
 
-    objective = ObjectiveConfig(simcse_dropout_weight=0.1)
+    atom_gate_objective = replace(objective, simcse_dropout_weight=0.1)
     alpha_gate = AlphaGateConfig(enabled=True, mix_weight=0.3)
     if method is TrainingMethod.ATOM_GATE:
-        return TrainConfig(method=method, objective=objective, alpha_gate=alpha_gate)
+        return TrainConfig(method=method, objective=atom_gate_objective, alpha_gate=alpha_gate)
 
     memory_bank = MemoryBankConfig(
         enabled=True,
@@ -34,7 +35,7 @@ def canonical_method_config(method: TrainingMethod | str) -> TrainConfig:
     )
     return TrainConfig(
         method=method,
-        objective=ObjectiveConfig(decoupled=False),
+        objective=objective,
         memory_bank=memory_bank,
         gradient_projection=GradientProjectionConfig(enabled=True),
     )
@@ -45,6 +46,11 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
     role = config.experiment.role
     gate = config.alpha_gate
     bank = config.memory_bank
+
+    if role is ExperimentRole.CANONICAL and config.objective.decoupled:
+        raise ValueError(
+            f"canonical {method.value} requires coupled InfoNCE; use experiment.role=ablation for DCL"
+        )
 
     if method is TrainingMethod.VANILLA:
         if gate.enabled:
@@ -80,8 +86,6 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
         raise ValueError("atomic requires gradient_projection.enabled=true")
 
     if role is ExperimentRole.CANONICAL:
-        if config.objective.decoupled:
-            raise ValueError("canonical atomic requires standard coupled InfoNCE")
         if bank.margin.mode is not MarginMode.OFF:
             raise ValueError("canonical atomic keeps memory margin off; use experiment.role=ablation to enable it")
         if bank.adaptive.enabled:

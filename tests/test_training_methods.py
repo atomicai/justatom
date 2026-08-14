@@ -13,6 +13,9 @@ def test_canonical_profiles_have_exact_structural_components():
     gate = canonical_method_config(TrainingMethod.ATOM_GATE)
     atomic = canonical_method_config(TrainingMethod.ATOMIC)
 
+    assert not vanilla.objective.decoupled
+    assert not gate.objective.decoupled
+    assert not atomic.objective.decoupled
     assert not vanilla.alpha_gate.enabled and not vanilla.memory_bank.enabled
     assert gate.alpha_gate.enabled and not gate.memory_bank.enabled
     assert not atomic.alpha_gate.enabled and atomic.memory_bank.enabled
@@ -22,6 +25,18 @@ def test_canonical_profiles_have_exact_structural_components():
     assert atomic.memory_bank.random_negatives == 12
     assert not atomic.memory_bank.adaptive.enabled
     assert atomic.memory_bank.margin.mode is MarginMode.OFF
+
+
+@pytest.mark.parametrize("method", list(TrainingMethod))
+def test_canonical_methods_reject_dcl_but_ablation_allows_it(method):
+    config = canonical_method_config(method)
+    dcl = replace(config, objective=replace(config.objective, decoupled=True))
+
+    with pytest.raises(ValueError, match="coupled InfoNCE.*experiment.role=ablation"):
+        resolve_method(dcl)
+
+    ablation = replace(dcl, experiment=ExperimentConfig(role=ExperimentRole.ABLATION, seed=42))
+    assert resolve_method(ablation).objective.decoupled
 
 
 def test_canonical_atom_gate_rejects_bank():
