@@ -367,7 +367,7 @@ git status --short
 
 Confirm only the spec, plan, production files, focused tests, and public training documentation are tracked in the branch. Do not add unrelated untracked files.
 
-- [ ] **Step 4: Push and open the draft PR**
+- [x] **Step 4: Push and open the draft PR**
 
 ```bash
 git push -u origin fix/alpha-gate-objective
