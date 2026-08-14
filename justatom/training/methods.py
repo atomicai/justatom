@@ -48,9 +48,7 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
     bank = config.memory_bank
 
     if role is ExperimentRole.CANONICAL and config.objective.decoupled:
-        raise ValueError(
-            f"canonical {method.value} requires coupled InfoNCE; use experiment.role=ablation for DCL"
-        )
+        raise ValueError(f"canonical {method.value} requires coupled InfoNCE; use experiment.role=ablation for DCL")
 
     if method is TrainingMethod.VANILLA:
         if gate.enabled:

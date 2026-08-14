@@ -64,12 +64,8 @@ def _git_output(*args: str) -> str | None:
 
 def objective_contract(config: TrainConfig) -> dict[str, str]:
     return {
-        "contrastive_kernel": (
-            "decoupled_infonce" if config.objective.decoupled else "coupled_infonce"
-        ),
-        "alpha_aux_gradient": (
-            "detached" if config.method is TrainingMethod.ATOM_GATE else "not_applicable"
-        ),
+        "contrastive_kernel": ("decoupled_infonce" if config.objective.decoupled else "coupled_infonce"),
+        "alpha_aux_gradient": ("detached" if config.method is TrainingMethod.ATOM_GATE else "not_applicable"),
     }
 
 
