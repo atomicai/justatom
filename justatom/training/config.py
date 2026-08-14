@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping, TypeVar
+from typing import Any, TypeVar
 
 
 class TrainingMethod(str, Enum):
@@ -165,7 +166,7 @@ class RerankerCacheConfig:
 
 @dataclass(frozen=True)
 class RerankerConfig:
-    """Optional teacher used to filter memory-bank negatives."""
+    """Optional teacher used to filter or softly weight bank negatives."""
 
     enabled: bool = False
     backend: str = "transformers"
@@ -181,6 +182,9 @@ class RerankerConfig:
     prefilter_random_negatives: int = 8
     negatives: int = 12
     min_score_gap: float = 0.1
+    strategy: str = "filter"
+    teacher_temperature: float = 0.05
+    teacher_weight_floor: float = 1e-4
     cache: RerankerCacheConfig = field(default_factory=RerankerCacheConfig)
 
 
@@ -451,6 +455,15 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_int(reranker.prefilter_random_negatives, "reranker.prefilter_random_negatives", 0)
     _require_int(reranker.negatives, "reranker.negatives", 1)
     _require_number(reranker.min_score_gap, "reranker.min_score_gap", 0.0)
+    if reranker.strategy not in {"filter", "teacher_weighted"}:
+        raise ValueError("reranker.strategy must be one of: filter, teacher_weighted")
+    _require_number(reranker.teacher_temperature, "reranker.teacher_temperature", 1e-12)
+    _require_number(
+        reranker.teacher_weight_floor,
+        "reranker.teacher_weight_floor",
+        1e-12,
+        1.0,
+    )
     if reranker.prefilter_hard_negatives + reranker.prefilter_random_negatives <= 0:
         raise ValueError("reranker prefilter requires at least one candidate")
     if reranker.cache.mode not in {"off", "read-write", "read-only"}:

@@ -67,6 +67,9 @@ reranker:
   prefilter_random_negatives: 8
   negatives: 12
   min_score_gap: 0.1
+  strategy: filter
+  teacher_temperature: 0.05
+  teacher_weight_floor: 0.0001
   cache:
     mode: read-write
     path: .cache/justatom/reranker.sqlite

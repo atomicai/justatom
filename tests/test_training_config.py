@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from justatom.training.config import ExperimentRole, MarginMode, TrainingMethod, parse_train_config, train_config_to_dict
+from justatom.training.config import (
+    ExperimentRole,
+    MarginMode,
+    TrainingMethod,
+    parse_train_config,
+    train_config_to_dict,
+)
 
 
 def test_parse_train_config_builds_typed_atomic_config():
@@ -91,6 +97,9 @@ def test_optional_transformers_reranker_is_typed_and_round_trippable(tmp_path):
                 "prefilter_hard_negatives": 16,
                 "prefilter_random_negatives": 4,
                 "negatives": 8,
+                "strategy": "teacher_weighted",
+                "teacher_temperature": 0.07,
+                "teacher_weight_floor": 0.001,
                 "cache": {"mode": "read-write", "path": str(tmp_path / "teacher.sqlite")},
             },
         }
@@ -99,7 +108,23 @@ def test_optional_transformers_reranker_is_typed_and_round_trippable(tmp_path):
     assert config.reranker.enabled
     assert config.reranker.backend == "transformers"
     assert config.reranker.negatives == 8
+    assert config.reranker.strategy == "teacher_weighted"
+    assert config.reranker.teacher_temperature == 0.07
+    assert config.reranker.teacher_weight_floor == 0.001
     assert parse_train_config(train_config_to_dict(config)) == config
+
+
+def test_reranker_rejects_invalid_teacher_weighting_parameters():
+    with pytest.raises(ValueError, match=r"reranker\.strategy"):
+        parse_train_config({"method": "atomic", "reranker": {"strategy": "mystery"}})
+    with pytest.raises(ValueError, match=r"reranker\.teacher_temperature"):
+        parse_train_config(
+            {"method": "atomic", "reranker": {"teacher_temperature": 0.0}}
+        )
+    with pytest.raises(ValueError, match=r"reranker\.teacher_weight_floor"):
+        parse_train_config(
+            {"method": "atomic", "reranker": {"teacher_weight_floor": 1.1}}
+        )
 
 
 def test_reranker_requires_a_memory_bank():

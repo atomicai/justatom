@@ -71,7 +71,8 @@ implemented with ordinary PyTorch operations and works on CUDA, MPS, and CPU.
 The projected ATOMIC implementation remains the default and does not require a
 reranker. Setting `reranker.enabled: true` adds a frozen teacher only to memory
 candidate selection; it does not replace InfoNCE, change the projection, or add
-anything to the deployable encoder.
+anything to the deployable encoder. `strategy: filter` preserves the original
+hard false-negative filter.
 
 For every query, the student first selects hard and random candidates from the
 FIFO bank. The teacher scores the labelled positive and those candidates. A
@@ -111,11 +112,23 @@ reranker:
   prefilter_random_negatives: 8
   negatives: 12
   min_score_gap: 0.1
+  strategy: filter  # filter | teacher_weighted
+  teacher_temperature: 0.05
+  teacher_weight_floor: 0.0001
   cache:
     mode: read-write  # off | read-write | read-only
     path: .cache/justatom/reranker.sqlite
     on_miss: score    # score | error | skip
 ```
+
+`strategy: teacher_weighted` is an ablation that replaces the binary admission
+decision with a smooth teacher confidence
+`sigmoid((positive_score - candidate_score - min_score_gap) / teacher_temperature)`.
+The student selects final negatives by its temperature-scaled similarity plus
+the log teacher confidence, and the same log confidence weights those negatives
+inside InfoNCE. This creates semi-hard negatives without deleting the existing
+filter strategy. `teacher_weight_floor` keeps logits finite for candidates that
+the teacher considers likely false negatives.
 
 The Transformers backend and cache are created only when the option is enabled,
 and the model weights are loaded lazily on the first cache miss. With

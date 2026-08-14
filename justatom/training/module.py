@@ -59,7 +59,11 @@ class ContrastiveTrainingModule(L.LightningModule):
         embedding_dim = int(getattr(encoder, "output_dims"))
         alpha_gate = QueryAlphaGate(embedding_dim, config.alpha_gate) if config.alpha_gate.enabled else None
         memory_bank = (
-            ContrastiveMemoryBank(config.memory_bank, reranker=build_reranker(config.reranker))
+            ContrastiveMemoryBank(
+                config.memory_bank,
+                reranker=build_reranker(config.reranker),
+                contrastive_temperature=config.objective.temperature,
+            )
             if config.memory_bank.enabled
             else None
         )

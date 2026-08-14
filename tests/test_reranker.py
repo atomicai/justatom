@@ -6,7 +6,11 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from justatom.training.config import MemoryBankConfig, RerankerCacheConfig, RerankerConfig
+from justatom.training.config import (
+    MemoryBankConfig,
+    RerankerCacheConfig,
+    RerankerConfig,
+)
 from justatom.training.memory_bank import ContrastiveMemoryBank
 from justatom.training.reranker import CachedTextReranker
 
@@ -118,6 +122,49 @@ def test_teacher_filters_ambiguous_candidates_then_keeps_hardest_safe_negative()
     assert selection.metrics["reranker/ambiguous_mean"] == 1.0
     assert selection.metrics["reranker/above_positive_mean"] == 1.0
     assert selection.metrics["memory/active_negatives_mean"] == 1.0
+
+
+def test_teacher_weighted_strategy_prefers_adjusted_semi_hard_negative():
+    config = reranker_config(
+        strategy="teacher_weighted",
+        teacher_temperature=0.05,
+        teacher_weight_floor=1e-4,
+    )
+    backend = FakePairScorer(
+        {
+            "positive": 0.9,
+            "student-hard-low-margin": 0.8,
+            "semi-hard-high-margin": 0.3,
+            "easy": 0.1,
+        }
+    )
+    reranker = CachedTextReranker(config, backend=backend)
+    bank = ContrastiveMemoryBank(
+        MemoryBankConfig(enabled=True, size=3, mining="hard", hard_negatives=1),
+        reranker=reranker,
+        contrastive_temperature=0.05,
+    )
+    bank.enqueue(
+        F.normalize(torch.tensor([[1.0, 0.0], [0.98, 0.199], [0.0, 1.0]]), dim=-1),
+        {"doc_key_id": torch.tensor([1, 2, 3])},
+        document_texts=["student-hard-low-margin", "semi-hard-high-margin", "easy"],
+    )
+
+    selection = bank.select(
+        batch={"doc_key_id": torch.tensor([99])},
+        query_vectors=F.normalize(torch.tensor([[1.0, 0.0]]), dim=-1),
+        positive_vectors=F.normalize(torch.tensor([[1.0, 0.0]]), dim=-1),
+        step=0,
+        query_texts=["query"],
+        positive_texts=["positive"],
+    )
+
+    assert selection.active_mask is not None
+    assert selection.active_mask.tolist() == [[False, True, False]]
+    assert selection.log_weights is not None
+    assert float(selection.log_weights[0, 1]) < 0.0
+    assert selection.metrics["reranker/teacher_weight/min"] < 0.6
+    assert selection.metrics["reranker/selected_teacher_weight/mean"] > 0.99
 
 
 def test_disabled_reranker_keeps_original_bank_selection_without_text_metadata():
