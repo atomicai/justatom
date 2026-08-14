@@ -151,6 +151,19 @@ def test_alpha_mix_weight_uses_exact_linear_warmup():
     assert module.effective_alpha_mix_weight(20) == pytest.approx(0.3)
 
 
+def test_atom_gate_reports_effective_detached_auxiliary_weight():
+    module = ContrastiveTrainingModule.build(
+        TinyEncoder(),
+        canonical_method_config(TrainingMethod.ATOM_GATE),
+    )
+
+    output = module.compute_training_step(tiny_batch(), step=0)
+
+    assert output.metrics["alpha_aux_weight/mean"] == pytest.approx(1.0 - output.metrics["alpha/mean"])
+    assert output.metrics["alpha_aux_weight/min"] == pytest.approx(1.0 - output.metrics["alpha/max"])
+    assert output.metrics["alpha_aux_weight/max"] == pytest.approx(1.0 - output.metrics["alpha/min"])
+
+
 def test_compute_training_step_rejects_nonfinite_loss(monkeypatch):
     module = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.VANILLA))
     bad_output = ObjectiveOutput(

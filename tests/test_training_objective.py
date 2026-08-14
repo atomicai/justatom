@@ -23,12 +23,13 @@ def test_objective_vanilla_has_no_auxiliary_components():
     assert output.metrics["loss/memory_margin_regularization"] == 0.0
 
 
-def test_objective_atom_gate_uses_augment_formula():
+def test_objective_atom_gate_detaches_alpha_only_from_auxiliary_gradient():
     torch.manual_seed(1)
     objective = ContrastiveObjective(
         ObjectiveConfig(
             temperature=1.0,
             learnable_temperature=False,
+            decoupled=False,
             simcse_dropout_weight=0.1,
         )
     )
@@ -47,10 +48,63 @@ def test_objective_atom_gate_uses_augment_formula():
     )
 
     assert output.simcse_per_row is not None
-    expected = (output.main_per_row + (1.0 - alpha) * 0.1 * output.simcse_per_row).mean()
+    expected = (output.main_per_row + (1.0 - alpha.detach()) * 0.1 * output.simcse_per_row).mean()
     torch.testing.assert_close(output.loss, expected)
+
+    high_alpha = objective(
+        ObjectiveInputs(
+            queries=queries,
+            positives=positives,
+            query_alt=alternate_queries,
+            alpha=torch.full_like(alpha, 0.8),
+        )
+    )
+    low_alpha = objective(
+        ObjectiveInputs(
+            queries=queries,
+            positives=positives,
+            query_alt=alternate_queries,
+            alpha=torch.full_like(alpha, 0.2),
+        )
+    )
+    assert low_alpha.loss.detach() > high_alpha.loss.detach()
+
+    auxiliary_only = output.loss - output.main_per_row.mean()
+    auxiliary_only.backward()
+    assert alpha.grad is None
+    assert queries.grad is not None and float(queries.grad.abs().sum()) > 0.0
+    assert alternate_queries.grad is not None and float(alternate_queries.grad.abs().sum()) > 0.0
+
+
+def test_objective_atom_gate_keeps_alpha_live_for_pair_supervision():
+    objective = ContrastiveObjective(
+        ObjectiveConfig(
+            temperature=1.0,
+            learnable_temperature=False,
+            decoupled=False,
+        )
+    )
+    queries = F.normalize(torch.eye(2, 4), dim=-1)
+    positives = queries.clone()
+    alpha = torch.tensor([0.4, 0.6], requires_grad=True)
+    semantic = torch.tensor([[0.9, 0.1], [0.2, 0.8]])
+    lexical = torch.tensor([[0.1, 0.8], [0.9, 0.2]])
+
+    output = objective(
+        ObjectiveInputs(
+            queries=queries,
+            positives=positives,
+            alpha=alpha,
+            semantic_pair_scores=semantic,
+            lexical_pair_scores=lexical,
+            alpha_mix_weight=0.3,
+        )
+    )
     output.loss.backward()
-    assert alpha.grad is not None and float(alpha.grad.abs().sum()) > 0.0
+
+    assert alpha.grad is not None
+    assert torch.isfinite(alpha.grad).all()
+    assert float(alpha.grad.abs().sum()) > 0.0
 
 
 def test_objective_regularizes_raw_margin_to_constant_base():

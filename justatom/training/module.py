@@ -218,6 +218,7 @@ class ContrastiveTrainingModule(L.LightningModule):
             metrics.update(batch_retrieval_metrics(queries @ positives.T))
             if alpha is not None:
                 metrics.update(scalar_distribution("alpha", alpha))
+                metrics.update(scalar_distribution("alpha_aux_weight", 1.0 - alpha.detach()))
             if raw_margin is not None:
                 metrics.update(scalar_distribution("margin/raw", raw_margin))
             if margin is not None:

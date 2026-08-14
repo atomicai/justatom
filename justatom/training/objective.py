@@ -108,7 +108,8 @@ class ContrastiveObjective(nn.Module):
             alpha = inputs.alpha.view(-1)
             if alpha.shape != main.shape:
                 raise ValueError(f"alpha must have shape {tuple(main.shape)}, got {tuple(alpha.shape)}")
-            per_row = main + (1.0 - alpha) * auxiliary
+            auxiliary_weight = 1.0 - alpha.detach()
+            per_row = main + auxiliary_weight * auxiliary
         if memory_per_row is not None:
             per_row = per_row + memory_per_row
         loss = per_row.mean()
