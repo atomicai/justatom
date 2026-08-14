@@ -9,7 +9,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from justatom.training.alpha_gate import QueryAlphaGate
-from justatom.training.config import ExperimentConfig, ExperimentRole, MarginMode, TrainingMethod
+from justatom.training.config import ExperimentConfig, ExperimentRole, MarginMode, TrainingMethod, train_config_to_dict
 from justatom.training.methods import canonical_method_config
 from justatom.training.module import ContrastiveTrainingModule
 from justatom.training.objective import ObjectiveOutput
@@ -86,6 +86,34 @@ def test_module_constructs_only_components_required_by_method():
     assert atomic.alpha_gate is None and atomic.memory_bank is not None and atomic.margin_head is None
     assert atomic.config.gradient_projection.enabled
     assert atomic.automatic_optimization is False
+
+
+def test_load_schema_v1_checkpoint_migrates_historical_canonical_dcl_to_ablation(tmp_path):
+    config = canonical_method_config(TrainingMethod.ATOM_GATE)
+    original = ContrastiveTrainingModule.build(TinyEncoder(), config)
+    historical_config = train_config_to_dict(config)
+    historical_config["objective"]["decoupled"] = True
+    checkpoint = tmp_path / "historical-checkpoint.pt"
+    torch.save(
+        {
+            "schema_version": 1,
+            "resolved_config": historical_config,
+            "state_dict": original.state_dict(),
+            "optimizer_states": [],
+            "epoch": 0,
+            "global_step": 1,
+        },
+        checkpoint,
+    )
+
+    restored, optimizer_states = ContrastiveTrainingModule.load_research_checkpoint(
+        checkpoint,
+        encoder=TinyEncoder(),
+    )
+
+    assert restored.config.experiment.role is ExperimentRole.ABLATION
+    assert restored.config.objective.decoupled
+    assert optimizer_states == []
 
 
 def test_vanilla_bank_ablation_constructs_bank_without_gate_or_margin_head():

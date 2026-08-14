@@ -80,6 +80,13 @@ random candidates per query, and memory weight `1.0`. It does not construct
 the alpha gate or a query-margin head. Structural additions must be labeled as
 ablations:
 
+Run manifests record the resolved kernel and alpha gradient policy under
+`objective_contract`. Results produced before this contract was introduced
+used different canonical objectives and must not be pooled with or directly
+compared against new runs. Re-run matched methods with the same model, split,
+seed, batch size, optimizer, and epoch count before drawing method-level
+conclusions.
+
 ```bash
 python -m justatom.api.train \
   --config configs/train.yaml \

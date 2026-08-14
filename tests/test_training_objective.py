@@ -107,6 +107,32 @@ def test_objective_atom_gate_keeps_alpha_live_for_pair_supervision():
     assert float(alpha.grad.abs().sum()) > 0.0
 
 
+def test_objective_atom_gate_keeps_alpha_live_for_entropy_regularization():
+    objective = ContrastiveObjective(
+        ObjectiveConfig(
+            temperature=1.0,
+            learnable_temperature=False,
+            decoupled=False,
+        )
+    )
+    embeddings = F.normalize(torch.eye(2, 4), dim=-1)
+    alpha = torch.tensor([0.2, 0.7], requires_grad=True)
+
+    output = objective(
+        ObjectiveInputs(
+            queries=embeddings,
+            positives=embeddings,
+            alpha=alpha,
+            alpha_entropy_weight=0.1,
+        )
+    )
+    output.loss.backward()
+
+    assert alpha.grad is not None
+    assert torch.isfinite(alpha.grad).all()
+    assert float(alpha.grad.abs().sum()) > 0.0
+
+
 def test_objective_regularizes_raw_margin_to_constant_base():
     config = MarginConfig(
         mode=MarginMode.QUERY,

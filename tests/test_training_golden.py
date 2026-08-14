@@ -31,7 +31,7 @@ def golden_embeddings() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     return queries, positives, bank
 
 
-def test_golden_vanilla_matches_decoupled_closed_form():
+def test_golden_dcl_ablation_matches_decoupled_closed_form():
     queries, positives, _ = golden_embeddings()
     loss_fn = ContrastiveLoss(
         temperature=0.05,
@@ -65,19 +65,19 @@ def test_golden_atom_gate_uses_query_alpha_for_auxiliary_pressure():
     loss_fn = ContrastiveLoss(
         temperature=0.05,
         learnable_temperature=False,
-        decoupled=True,
+        decoupled=False,
     )
 
     main = loss_fn.info_nce(queries, positives, reduction="none")
     simcse = loss_fn.simcse_term(queries, alternate_queries, reduction="none")
-    actual = (main + (1.0 - alpha) * 0.1 * simcse).mean()
-    expected = torch.mean(main + (1.0 - torch.sigmoid(alpha_logits)) * 0.1 * simcse)
+    actual = (main + (1.0 - alpha.detach()) * 0.1 * simcse).mean()
+    expected = torch.mean(main + (1.0 - torch.sigmoid(alpha_logits).detach()) * 0.1 * simcse)
     torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
 
     actual.backward()
-    assert alpha_logits.grad is not None
-    assert torch.isfinite(alpha_logits.grad).all()
-    assert float(alpha_logits.grad.abs().sum()) > 0.0
+    assert alpha_logits.grad is None
+    assert queries.grad is not None and torch.isfinite(queries.grad).all()
+    assert alternate_queries.grad is not None and torch.isfinite(alternate_queries.grad).all()
 
 
 def test_golden_atomic_adds_weighted_bank_logits_and_live_margin_gradient():
@@ -89,7 +89,7 @@ def test_golden_atomic_adds_weighted_bank_logits_and_live_margin_gradient():
     loss_fn = ContrastiveLoss(
         temperature=0.05,
         learnable_temperature=False,
-        decoupled=True,
+        decoupled=False,
         reduction="none",
     )
 
@@ -111,14 +111,8 @@ def test_golden_atomic_adds_weighted_bank_logits_and_live_margin_gradient():
     bank_cosine = query_norm @ bank_norm.T
     admission = torch.sigmoid((positive_cosine - margin.view(-1, 1) - bank_cosine) / 0.05)
     bank_logits = bank_cosine / 0.05 + log_weights + torch.log(admission.clamp_min(1e-8))
-    negatives = torch.cat(
-        [
-            current.masked_fill(torch.eye(queries.shape[0], dtype=torch.bool), -1e9),
-            bank_logits,
-        ],
-        dim=1,
-    )
-    expected = -current.diagonal() + torch.logsumexp(negatives, dim=-1)
+    logits = torch.cat([current, bank_logits], dim=1)
+    expected = -current.diagonal() + torch.logsumexp(logits, dim=-1)
     torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
 
     actual.mean().backward()

@@ -29,7 +29,7 @@
 - Consumes: `canonical_method_config(method) -> TrainConfig` and `resolve_method(config) -> TrainConfig`.
 - Produces: a canonical method invariant where `config.objective.decoupled is False`; DCL is accepted only for `ExperimentRole.ABLATION`.
 
-- [ ] **Step 1: Write failing method-contract tests**
+- [x] **Step 1: Write failing method-contract tests**
 
 Extend the existing structural profile test with:
 
@@ -56,7 +56,7 @@ def test_canonical_methods_reject_dcl_but_ablation_allows_it(method):
 
 The production mutation caught here is either restoring DCL as a canonical default or allowing a canonical override to silently confound benchmark methods.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -66,7 +66,7 @@ conda run -n justatom pytest -q tests/test_training_methods.py
 
 Expected: failure because canonical `vanilla` and `atom_gate` still resolve to DCL, and their canonical DCL configurations are not rejected.
 
-- [ ] **Step 3: Implement the shared method invariant**
+- [x] **Step 3: Implement the shared method invariant**
 
 In `canonical_method_config`, construct a coupled base objective and reuse it:
 
@@ -90,7 +90,7 @@ if role is ExperimentRole.CANONICAL and config.objective.decoupled:
 
 Remove the now-duplicated ATOMIC-only DCL rejection.
 
-- [ ] **Step 4: Run focused configuration tests and verify GREEN**
+- [x] **Step 4: Run focused configuration tests and verify GREEN**
 
 Run:
 
@@ -103,7 +103,7 @@ conda run -n justatom pytest -q \
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit the method contract**
+- [x] **Step 5: Commit the method contract**
 
 ```bash
 git add tests/test_training_methods.py justatom/training/methods.py
@@ -124,7 +124,7 @@ git commit -m "fix(training): align canonical methods on InfoNCE"
 - Consumes: `ObjectiveInputs.alpha: Tensor[B]`, `ObjectiveInputs.query_alt`, and existing semantic/lexical pair score tensors.
 - Produces: SimCSE coefficient `1 - alpha.detach()` and telemetry keys `alpha_aux_weight/{mean,std,min,p05,p50,p95,max}`.
 
-- [ ] **Step 1: Write the failing auxiliary-gradient test**
+- [x] **Step 1: Write the failing auxiliary-gradient test**
 
 Replace the old alpha-gradient assertion in the augment-formula test with a focused contract:
 
@@ -151,7 +151,7 @@ Use two otherwise identical calls with alpha values `0.2` and `0.8` to assert th
 
 The mutation caught is removing `.detach()`, which would restore the shortcut gradient into the alpha head.
 
-- [ ] **Step 2: Write the failing pair-supervision gradient test**
+- [x] **Step 2: Write the failing pair-supervision gradient test**
 
 Use literal semantic and lexical score pairs with opposite preferences:
 
@@ -163,7 +163,7 @@ alpha = torch.tensor([0.4, 0.6], requires_grad=True)
 
 Pass both score matrices and `alpha_mix_weight=0.3`, backpropagate the full loss, and assert a finite, non-zero `alpha.grad`. This catches accidentally detaching alpha globally rather than only at the SimCSE coefficient.
 
-- [ ] **Step 3: Write the failing effective-weight telemetry test**
+- [x] **Step 3: Write the failing effective-weight telemetry test**
 
 Build a real `ATOM_GATE` module, execute `compute_training_step`, and assert:
 
@@ -181,7 +181,7 @@ assert output.metrics["alpha_aux_weight/max"] == pytest.approx(
 
 The mutation caught is losing observability of the effective query-conditioned regularization strength.
 
-- [ ] **Step 4: Run the focused tests and verify RED**
+- [x] **Step 4: Run the focused tests and verify RED**
 
 Run:
 
@@ -193,7 +193,7 @@ conda run -n justatom pytest -q \
 
 Expected: the auxiliary-gradient assertion fails because alpha currently receives a gradient, and the telemetry keys are absent.
 
-- [ ] **Step 5: Implement the local stop-gradient and telemetry**
+- [x] **Step 5: Implement the local stop-gradient and telemetry**
 
 In `ContrastiveObjective.forward`:
 
@@ -211,7 +211,7 @@ metrics.update(scalar_distribution("alpha", alpha))
 metrics.update(scalar_distribution("alpha_aux_weight", 1.0 - alpha.detach()))
 ```
 
-- [ ] **Step 6: Run focused objective and module tests and verify GREEN**
+- [x] **Step 6: Run focused objective and module tests and verify GREEN**
 
 Run:
 
@@ -225,7 +225,7 @@ conda run -n justatom pytest -q \
 
 Expected: all tests pass. If a golden expectation encodes the old live-gate gradient, update it only after confirming its forward values remain unchanged.
 
-- [ ] **Step 7: Commit detached control**
+- [x] **Step 7: Commit detached control**
 
 ```bash
 git add \
@@ -249,7 +249,7 @@ git commit -m "fix(training): detach alpha auxiliary control"
 - Consumes: resolved `TrainConfig.method` and `TrainConfig.objective.decoupled`.
 - Produces: top-level `RunManifest.objective_contract` with `contrastive_kernel` and `alpha_aux_gradient`; documents the exact canonical equations.
 
-- [ ] **Step 1: Write the failing run-manifest contract test**
+- [x] **Step 1: Write the failing run-manifest contract test**
 
 Extend the real YAML round-trip test with:
 
@@ -273,7 +273,7 @@ assert gate.objective_contract["alpha_aux_gradient"] == "detached"
 
 The production mutation caught is omitting the static detach policy from artifacts, which would make old and new runs indistinguishable without commit archaeology.
 
-- [ ] **Step 2: Run the manifest test and verify RED**
+- [x] **Step 2: Run the manifest test and verify RED**
 
 Run:
 
@@ -283,7 +283,7 @@ conda run -n justatom pytest -q tests/test_training_job.py::test_manifest_contai
 
 Expected: failure because `objective_contract` does not exist.
 
-- [ ] **Step 3: Implement objective-contract metadata**
+- [x] **Step 3: Implement objective-contract metadata**
 
 Add a pure helper in `job.py`:
 
@@ -301,7 +301,7 @@ def objective_contract(config: TrainConfig) -> dict[str, str]:
 
 Store its result in `RunManifest.from_config` and emit it from `to_dict`. Keep schema version `1` because this is an additive field and no strict manifest reader exists.
 
-- [ ] **Step 4: Update the public training documentation**
+- [x] **Step 4: Update the public training documentation**
 
 In `docs/training.md`:
 
@@ -311,7 +311,7 @@ In `docs/training.md`:
 - state that DCL is an ablation-only override;
 - remove wording that claims only ATOMIC uses coupled InfoNCE.
 
-- [ ] **Step 5: Run focused tests and documentation build**
+- [x] **Step 5: Run focused tests and documentation build**
 
 Run:
 
@@ -322,7 +322,7 @@ conda run -n justatom mkdocs build --strict
 
 Expected: tests and strict documentation build pass.
 
-- [ ] **Step 6: Commit metadata and documentation**
+- [x] **Step 6: Commit metadata and documentation**
 
 ```bash
 git add tests/test_training_job.py justatom/training/job.py docs/training.md
@@ -340,7 +340,7 @@ git commit -m "docs(training): record alpha objective contract"
 - Consumes: all prior task commits.
 - Produces: a verified branch and a draft pull request against `master`.
 
-- [ ] **Step 1: Run formatting and static checks configured by the repository**
+- [x] **Step 1: Run formatting and static checks configured by the repository**
 
 Inspect `pyproject.toml`/CI and run the exact local equivalents. At minimum:
 
@@ -349,7 +349,7 @@ conda run -n justatom black --check justatom tests
 conda run -n justatom isort --check-only justatom tests
 ```
 
-- [ ] **Step 2: Run the complete offline test suite**
+- [x] **Step 2: Run the complete offline test suite**
 
 ```bash
 conda run -n justatom pytest -q tests -m "not integration and not network"
@@ -357,7 +357,7 @@ conda run -n justatom pytest -q tests -m "not integration and not network"
 
 Expected: all selected tests pass with no new warnings attributable to this change.
 
-- [ ] **Step 3: Inspect the final diff and branch hygiene**
+- [x] **Step 3: Inspect the final diff and branch hygiene**
 
 ```bash
 git diff --check origin/master...HEAD

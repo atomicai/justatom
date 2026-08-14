@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from justatom.training.config import TrainingMethod
+from justatom.training.config import ExperimentRole, TrainingMethod
 from justatom.training.job import RunManifest, TrainingJob, artifact_paths, build_lightning_trainer, write_run_manifest
 from justatom.training.methods import canonical_method_config
 
@@ -40,6 +40,22 @@ def test_atom_gate_manifest_records_detached_auxiliary_control():
     assert manifest.objective_contract == {
         "contrastive_kernel": "coupled_infonce",
         "alpha_aux_gradient": "detached",
+    }
+
+
+def test_dcl_ablation_manifest_records_decoupled_kernel():
+    config = canonical_method_config(TrainingMethod.VANILLA)
+    config = replace(
+        config,
+        experiment=replace(config.experiment, role=ExperimentRole.ABLATION),
+        objective=replace(config.objective, decoupled=True),
+    )
+
+    manifest = RunManifest.from_config(config, git_commit="abc123", git_dirty=False)
+
+    assert manifest.objective_contract == {
+        "contrastive_kernel": "decoupled_infonce",
+        "alpha_aux_gradient": "not_applicable",
     }
 
 

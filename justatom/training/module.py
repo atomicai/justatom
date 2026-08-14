@@ -421,7 +421,13 @@ class ContrastiveTrainingModule(L.LightningModule):
         payload = torch.load(path, map_location=map_location)
         if payload.get("schema_version") != 1:
             raise ValueError(f"Unsupported research checkpoint schema: {payload.get('schema_version')!r}")
-        config = parse_train_config(payload["resolved_config"])
+        resolved_config = dict(payload["resolved_config"])
+        objective_config = dict(resolved_config.get("objective", {}))
+        experiment_config = dict(resolved_config.get("experiment", {}))
+        if objective_config.get("decoupled") is True and experiment_config.get("role") == "canonical":
+            experiment_config["role"] = "ablation"
+            resolved_config["experiment"] = experiment_config
+        config = parse_train_config(resolved_config)
         module = cls.build(encoder, config, lexical_lookup=lexical_lookup)
         module.load_state_dict(payload["state_dict"], strict=True)
         return module, list(payload.get("optimizer_states", []))
