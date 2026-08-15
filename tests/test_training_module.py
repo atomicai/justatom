@@ -39,6 +39,25 @@ class TinyEncoder(nn.Module):
         return torch.nn.functional.normalize(self.projection(batch["queries"]), dim=-1)
 
 
+class DirectionalEncoder(nn.Module):
+    output_dims = 2
+
+    def __init__(self):
+        super().__init__()
+        self.projection = nn.Linear(2, 2, bias=False)
+        with torch.no_grad():
+            self.projection.weight.copy_(torch.eye(2))
+
+    def encode_pair(self, batch):
+        return (
+            torch.nn.functional.normalize(self.projection(batch["queries"]), dim=-1),
+            torch.nn.functional.normalize(self.projection(batch["documents"]), dim=-1),
+        )
+
+    def encode_queries(self, batch):
+        return torch.nn.functional.normalize(self.projection(batch["queries"]), dim=-1)
+
+
 def tiny_batch():
     return {
         "queries": torch.eye(2, 4),
@@ -162,16 +181,53 @@ def test_load_schema_v1_checkpoint_preserves_canonical_coupled_methods(tmp_path,
     assert optimizer_states == []
 
 
-def test_research_checkpoint_uses_schema_v2(tmp_path):
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_old_enabled_bank_without_normalization_fields_loads_only_as_ablation(
+    tmp_path,
+    monkeypatch,
+    schema_version,
+):
+    config = canonical_method_config(TrainingMethod.ATOMIC)
+    original = ContrastiveTrainingModule.build(TinyEncoder(), config)
+    historical_config = train_config_to_dict(config)
+    historical_config["memory_bank"].pop("mass_ratio")
+    historical_config["memory_bank"].pop("mass_ramp_steps")
+    payload = {
+        "schema_version": schema_version,
+        "resolved_config": historical_config,
+        "state_dict": original.state_dict(),
+    }
+    monkeypatch.setattr("justatom.training.module.torch.load", lambda *_args, **_kwargs: payload)
+
+    restored, optimizer_states = ContrastiveTrainingModule.load_research_checkpoint(
+        tmp_path / f"schema-{schema_version}-unnormalized-bank.pt",
+        encoder=TinyEncoder(),
+    )
+
+    assert restored.config.experiment.role is ExperimentRole.ABLATION
+    assert restored.config.memory_bank.enabled
+    assert "mass_ratio" not in payload["resolved_config"]["memory_bank"]
+    assert "mass_ramp_steps" not in payload["resolved_config"]["memory_bank"]
+    assert optimizer_states == []
+
+
+def test_research_checkpoint_uses_schema_v3_and_round_trips_normalized_bank(tmp_path):
+    atomic = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(
+        atomic,
+        memory_bank=replace(atomic.memory_bank, mass_ratio=0.35, mass_ramp_steps=7),
+    )
     module = ContrastiveTrainingModule.build(
         TinyEncoder(),
-        canonical_method_config(TrainingMethod.VANILLA),
+        config,
     )
 
     checkpoint = module.save_research_checkpoint(tmp_path / "checkpoint.pt")
 
     payload = torch.load(checkpoint, weights_only=False)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
+    assert payload["resolved_config"]["memory_bank"]["mass_ratio"] == pytest.approx(0.35)
+    assert payload["resolved_config"]["memory_bank"]["mass_ramp_steps"] == 7
 
     restored, optimizer_states = ContrastiveTrainingModule.load_research_checkpoint(
         checkpoint,
@@ -179,6 +235,9 @@ def test_research_checkpoint_uses_schema_v2(tmp_path):
     )
 
     assert restored.config == module.config
+    assert restored.config.experiment.role is ExperimentRole.CANONICAL
+    assert restored.config.memory_bank.mass_ratio == pytest.approx(0.35)
+    assert restored.config.memory_bank.mass_ramp_steps == 7
     assert optimizer_states == []
 
 
@@ -405,6 +464,101 @@ def test_live_bank_objective_decomposes_for_ordinary_and_projected_controls(grad
     assert output.memory_loss is not None
     torch.testing.assert_close(output.loss, output.primary_loss + output.memory_loss)
     assert torch.isfinite(output.loss)
+
+
+@pytest.mark.parametrize(
+    ("documents", "expect_conflict"),
+    [
+        (torch.eye(2), True),
+        (torch.tensor([[0.0, 1.0], [1.0, 0.0]]), False),
+    ],
+    ids=["conflicting", "aligned"],
+)
+def test_projected_optimization_step_applies_live_bank_update_direction(
+    monkeypatch,
+    documents,
+    expect_conflict,
+):
+    atomic = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(
+        atomic,
+        objective=replace(atomic.objective, temperature=0.7, learnable_temperature=False),
+        memory_bank=replace(
+            atomic.memory_bank,
+            size=8,
+            warmup_steps=0,
+            random_negatives=2,
+            mass_ramp_steps=1,
+        ),
+    )
+    module = ContrastiveTrainingModule.build(DirectionalEncoder(), config)
+
+    def directional_batch(batch_documents, offset):
+        return {
+            "queries": torch.eye(2),
+            "documents": batch_documents,
+            "doc_key_id": torch.tensor([1, 2]) + offset,
+            "content_key_id": torch.tensor([11, 12]) + offset,
+            "query_key_id": torch.tensor([21, 22]) + offset,
+        }
+
+    module.compute_training_step(directional_batch(torch.eye(2), 0), step=0)
+    output = module.compute_training_step(directional_batch(documents, 100), step=1)
+    assert output.memory_loss is not None
+    assert module.memory_bank is not None and module.memory_bank.current_size == 4
+
+    learning_rate = 0.1
+    optimizer = torch.optim.SGD(module.parameters(), lr=learning_rate)
+    parameters = module._optimizer_parameters(optimizer)
+    primary_gradients = torch.autograd.grad(
+        output.primary_loss,
+        parameters,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    memory_gradients = torch.autograd.grad(
+        output.memory_loss,
+        parameters,
+        retain_graph=True,
+        allow_unused=True,
+    )
+
+    def flattened(gradients):
+        return torch.cat(
+            [
+                torch.zeros_like(parameter).reshape(-1) if gradient is None else gradient.detach().reshape(-1)
+                for parameter, gradient in zip(parameters, gradients)
+            ]
+        )
+
+    primary = flattened(primary_gradients)
+    memory = flattened(memory_gradients)
+    raw_dot = torch.dot(primary, memory)
+    before = [parameter.detach().clone() for parameter in parameters]
+    monkeypatch.setattr(module, "optimizers", lambda: optimizer)
+    monkeypatch.setattr(
+        module,
+        "manual_backward",
+        lambda loss, retain_graph=False: loss.backward(retain_graph=retain_graph),
+    )
+    monkeypatch.setattr(module, "should_step_optimizer", lambda _batch_idx: True)
+
+    metrics = module._projected_optimization_step(output, batch_idx=0)
+
+    applied = torch.cat(
+        [((old - parameter.detach()) / learning_rate).reshape(-1) for old, parameter in zip(before, parameters)]
+    )
+    assert metrics["gradient/conflict"] == float(expect_conflict)
+    if expect_conflict:
+        assert raw_dot < 0.0
+        projected_memory = applied - primary
+        assert torch.dot(primary, projected_memory).item() == pytest.approx(0.0, abs=1e-6)
+        assert torch.dot(primary, applied) > 0.0
+        assert not torch.allclose(applied, primary + memory)
+    else:
+        assert raw_dot > 0.0
+        torch.testing.assert_close(applied, primary + memory, atol=1e-6, rtol=1e-5)
+        assert torch.dot(primary, applied) > 0.0
 
 
 def test_lightning_atomic_manual_optimization_steps_with_live_bank(tmp_path):

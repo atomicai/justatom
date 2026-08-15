@@ -56,6 +56,17 @@ class ContrastiveObjective(nn.Module):
         *,
         margin_config: MarginConfig | None = None,
     ) -> ObjectiveOutput:
+        if inputs.queries.ndim != 2 or inputs.positives.ndim != 2:
+            raise ValueError("queries and positives must be 2D")
+        query_batch_size = int(inputs.queries.shape[0])
+        positive_batch_size = int(inputs.positives.shape[0])
+        if query_batch_size != positive_batch_size:
+            raise ValueError(
+                "queries and positives must have matching contrastive batch sizes, "
+                f"got {query_batch_size} vs {positive_batch_size}"
+            )
+        if query_batch_size < 2:
+            raise ValueError(f"contrastive batch size >= 2 is required, got {query_batch_size}")
         if inputs.alpha_logits is not None and inputs.query_alt is None and self.config.simcse_dropout_weight > 0.0:
             raise ValueError("alpha(q) requires query_alt when SimCSE auxiliary pressure is enabled")
 

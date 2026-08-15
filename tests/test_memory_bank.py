@@ -118,6 +118,49 @@ def test_memory_bank_selection_reports_collision_and_soft_hard_weight():
     assert int(selection.active_mask.sum()) == 4
 
 
+def test_random_selection_preserves_live_telemetry_after_normalization():
+    bank = ContrastiveMemoryBank(
+        MemoryBankConfig(
+            enabled=True,
+            size=4,
+            mining="random",
+            random_negatives=2,
+            mass_ratio=0.5,
+            mass_ramp_steps=1,
+        )
+    )
+    bank.enqueue(
+        F.normalize(
+            torch.tensor(
+                [[1.0, 0.0], [0.8, 0.2], [0.0, 1.0], [0.2, 0.8]],
+                dtype=torch.float32,
+            ),
+            dim=-1,
+        ),
+        {"doc_key_id": torch.tensor([1, 2, 3, 4])},
+    )
+    queries = torch.eye(2)
+
+    selection = bank.select(
+        batch={"doc_key_id": torch.tensor([10, 11])},
+        query_vectors=queries,
+        positive_vectors=queries,
+        step=0,
+    )
+
+    assert selection.active_mask is not None
+    assert bank.embeddings is not None
+    selected_similarities = (queries @ bank.embeddings.T)[selection.active_mask]
+    assert selection.metrics["memory/active_negatives_mean"] == pytest.approx(2.0)
+    assert selection.metrics["memory/active_count/mean"] == pytest.approx(2.0)
+    assert selection.metrics["memory/random_k"] == pytest.approx(2.0)
+    assert selection.metrics["memory/positive_similarity_mean"] == pytest.approx(1.0)
+    assert selection.metrics["memory/active_similarity/mean"] == pytest.approx(
+        float(selected_similarities.mean().item())
+    )
+    assert selection.metrics["memory/active_similarity/mean"] > 0.0
+
+
 def test_memory_bank_filters_same_document_ids():
     bank = ContrastiveMemoryBank(MemoryBankConfig(enabled=True, size=3, mining="all"))
     bank.enqueue(F.normalize(torch.eye(3), dim=-1), {"doc_key_id": torch.tensor([10, 20, 30])})

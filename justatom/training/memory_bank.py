@@ -229,13 +229,10 @@ class ContrastiveMemoryBank:
                     torch.zeros_like(normalized),
                 )
 
-        metrics = self._base_metrics()
-        metrics.update(
-            {
-                "memory/mass_ramp": self._mass_progress(step),
-                "memory/effective_mass_ratio": ratio,
-            }
-        )
+        metrics: dict[str, float | str] = {
+            "memory/mass_ramp": self._mass_progress(step),
+            "memory/effective_mass_ratio": ratio,
+        }
         metrics.update(scalar_distribution("memory/active_count", counts))
         metrics.update(scalar_distribution("memory/candidate_mass_weight", normalized[active].exp()))
         return normalized, metrics

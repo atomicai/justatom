@@ -20,6 +20,17 @@
 
 ---
 
+## Erratum: Autocast-Safe Alpha BCE
+
+The probability-form BCE snippets in Task 2 are superseded by the implemented
+logit interface. Replace `ObjectiveInputs.alpha` with
+`ObjectiveInputs.alpha_logits`, derive `alpha = sigmoid(alpha_logits)` only for
+the detached SimCSE weight, and replace
+`F.binary_cross_entropy(alpha, alpha_target, reduction="none")` with
+`F.binary_cross_entropy_with_logits(alpha_logits, alpha_target,
+reduction="none")`. The detached confidence target and encoder/head autograd
+boundaries are unchanged.
+
 ## File Map
 
 | File | Responsibility |

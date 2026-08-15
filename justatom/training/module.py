@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -334,7 +335,7 @@ class ContrastiveTrainingModule(L.LightningModule):
             optimizers = []
         torch.save(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "resolved_config": train_config_to_dict(self.config),
                 "state_dict": self.state_dict(),
                 "optimizer_states": [optimizer.state_dict() for optimizer in optimizers],
@@ -356,7 +357,7 @@ class ContrastiveTrainingModule(L.LightningModule):
     ) -> tuple[ContrastiveTrainingModule, list[dict[str, object]]]:
         payload = torch.load(path, map_location=map_location)
         schema_version = payload.get("schema_version")
-        if schema_version not in {1, 2}:
+        if schema_version not in {1, 2, 3}:
             raise ValueError(f"Unsupported research checkpoint schema: {payload.get('schema_version')!r}")
         resolved_config = dict(payload["resolved_config"])
         if schema_version == 1:
@@ -374,6 +375,24 @@ class ContrastiveTrainingModule(L.LightningModule):
             if resolved_config.get("method") == "atom_gate" or objective_config.get("decoupled") is True:
                 experiment_config["role"] = "ablation"
             resolved_config["experiment"] = experiment_config
+
+        if schema_version in {1, 2}:
+            memory_bank_config = resolved_config.get("memory_bank")
+            method_uses_bank = resolved_config.get("method") == "atomic"
+            if isinstance(memory_bank_config, Mapping):
+                bank_enabled = bool(memory_bank_config.get("enabled", method_uses_bank))
+                has_normalization_contract = {
+                    "mass_ratio",
+                    "mass_ramp_steps",
+                }.issubset(memory_bank_config)
+            else:
+                bank_enabled = method_uses_bank
+                has_normalization_contract = False
+            if bank_enabled and not has_normalization_contract:
+                # Old bank payloads remain loadable, but current defaults cannot make them canonical.
+                experiment_config = dict(resolved_config.get("experiment", {}))
+                experiment_config["role"] = "ablation"
+                resolved_config["experiment"] = experiment_config
         config = parse_train_config(resolved_config)
         module = cls.build(encoder, config)
         module.load_state_dict(payload["state_dict"], strict=True)

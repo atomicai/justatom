@@ -6,8 +6,13 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from justatom.training.config import MarginConfig, MarginMode, ObjectiveConfig
-from justatom.training.memory_bank import MemorySelection
+from justatom.training.config import (
+    MarginConfig,
+    MarginMode,
+    MemoryBankConfig,
+    ObjectiveConfig,
+)
+from justatom.training.memory_bank import ContrastiveMemoryBank, MemorySelection
 from justatom.training.objective import ContrastiveObjective, ObjectiveInputs
 
 
@@ -24,6 +29,79 @@ def test_objective_vanilla_has_no_auxiliary_components():
     assert output.simcse_per_row is None
     assert output.metrics["loss/alpha_aux"] == 0.0
     assert output.metrics["loss/memory_margin_regularization"] == 0.0
+
+
+def _assert_singleton_contrastive_batch_is_rejected(memory: MemorySelection | None) -> None:
+    objective = ContrastiveObjective(
+        ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False)
+    )
+    singleton = torch.tensor([[1.0, 0.0]])
+
+    with pytest.raises(ValueError, match="contrastive batch size >= 2"):
+        objective(ObjectiveInputs(queries=singleton, positives=singleton, memory=memory))
+
+
+def test_objective_rejects_singleton_plain_batch():
+    _assert_singleton_contrastive_batch_is_rejected(None)
+
+
+def test_objective_rejects_singleton_bank_warmup_batch():
+    bank = ContrastiveMemoryBank(
+        MemoryBankConfig(enabled=True, size=2, warmup_steps=1, mass_ramp_steps=1)
+    )
+    bank.enqueue(torch.eye(2), {"doc_key_id": torch.tensor([1, 2])})
+    singleton = torch.tensor([[1.0, 0.0]])
+    memory = bank.select(
+        {"doc_key_id": torch.tensor([10])},
+        query_vectors=singleton,
+        positive_vectors=singleton,
+        step=0,
+    )
+
+    _assert_singleton_contrastive_batch_is_rejected(memory)
+
+
+def test_objective_rejects_singleton_zero_mass_batch():
+    bank = ContrastiveMemoryBank(
+        MemoryBankConfig(enabled=True, size=2, mass_ratio=0.0, mass_ramp_steps=1)
+    )
+    bank.enqueue(torch.eye(2), {"doc_key_id": torch.tensor([1, 2])})
+    singleton = torch.tensor([[1.0, 0.0]])
+    memory = bank.select(
+        {"doc_key_id": torch.tensor([10])},
+        query_vectors=singleton,
+        positive_vectors=singleton,
+        step=0,
+    )
+
+    _assert_singleton_contrastive_batch_is_rejected(memory)
+
+
+def test_objective_rejects_singleton_active_bank_batch():
+    memory = MemorySelection(
+        embeddings=torch.tensor([[0.0, 1.0]]),
+        active_mask=torch.ones(1, 1, dtype=torch.bool),
+        log_weights=torch.zeros(1, 1),
+        collision_g=None,
+        hard_weights=None,
+        metrics={},
+    )
+
+    _assert_singleton_contrastive_batch_is_rejected(memory)
+
+
+def test_objective_rejects_mismatched_query_positive_batch_counts():
+    objective = ContrastiveObjective(
+        ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False)
+    )
+
+    with pytest.raises(ValueError, match="matching contrastive batch sizes"):
+        objective(
+            ObjectiveInputs(
+                queries=torch.eye(2),
+                positives=torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]),
+            )
+        )
 
 
 def test_objective_atom_gate_detaches_alpha_only_from_auxiliary_gradient():
@@ -197,15 +275,16 @@ def test_objective_atomic_forwards_bank_columns_and_live_margin():
     assert output.metrics["memory/active_negatives_mean"] == 3.0
 
 
-def test_normalized_bank_loss_is_invariant_to_duplicate_count():
+def test_normalized_bank_matches_closed_form_at_non_unit_temperature():
+    temperature = 0.5
     objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False)
+        ObjectiveConfig(temperature=temperature, learnable_temperature=False, decoupled=False)
     )
     q = F.normalize(torch.tensor([[1.0, 0.0], [0.0, 1.0]]), dim=-1)
     p = q.clone()
     vector = F.normalize(torch.tensor([[1.0, 1.0]]), dim=-1)
 
-    def output_for(count):
+    def output_for(count: int):
         weight = 0.5 * (q.shape[0] - 1) / count
         memory = MemorySelection(
             embeddings=vector.repeat(count, 1),
@@ -218,13 +297,51 @@ def test_normalized_bank_loss_is_invariant_to_duplicate_count():
         return objective(ObjectiveInputs(queries=q, positives=p, memory=memory))
 
     one, four = output_for(1), output_for(4)
+    batch_logits = (q @ p.T) / temperature
+    bank_logits = ((q @ vector.T) / temperature).squeeze(1)
+    denominator = batch_logits.exp().sum(dim=1) + 0.5 * (q.shape[0] - 1) * bank_logits.exp()
+    expected_augmented = -batch_logits.diagonal() + denominator.log()
 
     torch.testing.assert_close(one.loss, four.loss)
     torch.testing.assert_close(one.memory_per_row, four.memory_per_row)
+    torch.testing.assert_close(one.main_per_row + one.memory_per_row, expected_augmented)
+    torch.testing.assert_close(four.main_per_row + four.memory_per_row, expected_augmented)
     torch.testing.assert_close(one.loss, one.primary_loss + one.memory_loss)
     torch.testing.assert_close(four.loss, four.primary_loss + four.memory_loss)
     assert torch.isfinite(one.loss)
     assert torch.isfinite(four.loss)
+
+
+def test_augmented_gradient_equals_independent_primary_plus_memory_gradients():
+    objective = ContrastiveObjective(
+        ObjectiveConfig(temperature=0.5, learnable_temperature=False, decoupled=False)
+    )
+    positives = F.normalize(torch.tensor([[1.0, 0.2], [0.1, 1.0]]), dim=-1)
+    memory = MemorySelection(
+        embeddings=F.normalize(torch.tensor([[1.0, 1.0], [-1.0, 0.5]]), dim=-1),
+        active_mask=torch.tensor([[True, False], [True, True]]),
+        log_weights=torch.log(torch.tensor([[0.5, 1.0], [0.25, 0.25]])),
+        collision_g=None,
+        hard_weights=None,
+        metrics={},
+    )
+
+    augmented_queries = torch.tensor([[1.0, 0.1], [0.2, 1.0]], requires_grad=True)
+    augmented = objective(
+        ObjectiveInputs(queries=augmented_queries, positives=positives, memory=memory)
+    )
+    augmented_gradient = torch.autograd.grad(augmented.loss, augmented_queries)[0]
+
+    primary_queries = augmented_queries.detach().clone().requires_grad_()
+    primary = objective(ObjectiveInputs(queries=primary_queries, positives=positives, memory=memory))
+    primary_gradient = torch.autograd.grad(primary.primary_loss, primary_queries)[0]
+
+    memory_queries = augmented_queries.detach().clone().requires_grad_()
+    memory_output = objective(ObjectiveInputs(queries=memory_queries, positives=positives, memory=memory))
+    assert memory_output.memory_loss is not None
+    memory_gradient = torch.autograd.grad(memory_output.memory_loss, memory_queries)[0]
+
+    torch.testing.assert_close(augmented_gradient, primary_gradient + memory_gradient)
 
 
 def test_row_without_valid_bank_candidates_equals_main_loss():
