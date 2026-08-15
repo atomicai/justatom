@@ -240,9 +240,10 @@ def test_atom_gate_bce_updates_only_head_parameters():
     output.alpha_supervision_per_row.mean().backward()
 
     assert all(parameter.grad is None for parameter in module.encoder.parameters())
+    assert module.objective.kernel.log_tau.grad is None
     assert module.alpha_gate is not None
     assert any(
-        parameter.grad is not None and float(parameter.grad.abs().sum()) > 0.0
+        parameter.grad is not None and torch.isfinite(parameter.grad).all() and float(parameter.grad.abs().sum()) > 0.0
         for parameter in module.alpha_gate.parameters()
     )
 
@@ -260,15 +261,53 @@ def test_atom_gate_reports_calibration():
 
 
 def test_retrieval_metrics_are_bucketed_by_target_confidence():
-    scores = torch.tensor([[2.0, 0.0], [2.0, 1.0]])
-    confidence = torch.tensor([0.2, 0.8])
+    scores = torch.tensor([[3.0, 0.0, 0.0], [2.0, 1.0, 0.0], [0.0, 0.0, 3.0]])
+    confidence = torch.tensor([0.2, 0.5, 0.8])
 
     metrics = telemetry.retrieval_metrics_by_confidence(scores, confidence)
 
     assert metrics["alpha_target_bucket/low/count"] == 1.0
     assert metrics["alpha_target_bucket/low/hit_rate_at_1"] == 1.0
+    assert metrics["alpha_target_bucket/medium/count"] == 1.0
+    assert metrics["alpha_target_bucket/medium/hit_rate_at_1"] == 0.0
     assert metrics["alpha_target_bucket/high/count"] == 1.0
-    assert metrics["alpha_target_bucket/high/hit_rate_at_1"] == 0.0
+    assert metrics["alpha_target_bucket/high/hit_rate_at_1"] == 1.0
+
+
+def test_retrieval_metrics_report_nan_for_empty_confidence_bucket():
+    metrics = telemetry.retrieval_metrics_by_confidence(
+        torch.tensor([[2.0, 0.0], [0.0, 2.0]]),
+        torch.tensor([0.2, 0.25]),
+    )
+
+    for bucket in ("low", "medium", "high"):
+        assert f"alpha_target_bucket/{bucket}/count" in metrics
+        assert f"alpha_target_bucket/{bucket}/hit_rate_at_1" in metrics
+        assert f"alpha_target_bucket/{bucket}/mrr" in metrics
+    assert metrics["alpha_target_bucket/medium/count"] == 0.0
+    assert metrics["alpha_target_bucket/high/count"] == 0.0
+    assert torch.isnan(torch.tensor(metrics["alpha_target_bucket/medium/hit_rate_at_1"]))
+    assert torch.isnan(torch.tensor(metrics["alpha_target_bucket/medium/mrr"]))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+def test_atom_gate_alpha_supervision_runs_under_cuda_fp16_autocast():
+    module = ContrastiveTrainingModule.build(
+        TinyEncoder().to("cuda"),
+        canonical_method_config(TrainingMethod.ATOM_GATE),
+    ).to("cuda")
+    batch = {key: value.to("cuda") for key, value in tiny_batch().items()}
+
+    with torch.autocast(device_type="cuda", dtype=torch.float16):
+        output = module.compute_training_step(batch, step=0)
+        assert output.alpha_supervision_per_row is not None
+        output.alpha_supervision_per_row.mean().backward()
+
+    assert module.alpha_gate is not None
+    assert any(
+        parameter.grad is not None and torch.isfinite(parameter.grad).all()
+        for parameter in module.alpha_gate.parameters()
+    )
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")

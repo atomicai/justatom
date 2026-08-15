@@ -112,7 +112,8 @@ class ContrastiveTrainingModule(L.LightningModule):
 
     def compute_training_step(self, batch: dict[str, Any], *, step: int) -> ObjectiveOutput:
         queries, positives = self.encoder.encode_pair(batch)
-        alpha = None if self.alpha_gate is None else self.alpha_gate(queries.detach())
+        alpha_logits = None if self.alpha_gate is None else self.alpha_gate.logits(queries.detach())
+        alpha = None if alpha_logits is None else torch.sigmoid(alpha_logits)
         query_alt = self._encode_dropout_query_view(batch) if self.needs_simcse else None
         selection = (
             None
@@ -131,7 +132,7 @@ class ContrastiveTrainingModule(L.LightningModule):
                 queries=queries,
                 positives=positives,
                 query_alt=query_alt,
-                alpha=alpha,
+                alpha_logits=alpha_logits,
                 memory=selection,
                 raw_margin=raw_margin,
                 margin=margin,

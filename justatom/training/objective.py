@@ -16,7 +16,7 @@ class ObjectiveInputs:
     queries: torch.Tensor
     positives: torch.Tensor
     query_alt: torch.Tensor | None = None
-    alpha: torch.Tensor | None = None
+    alpha_logits: torch.Tensor | None = None
     memory: MemorySelection | None = None
     margin: torch.Tensor | None = None
     raw_margin: torch.Tensor | None = None
@@ -56,7 +56,7 @@ class ContrastiveObjective(nn.Module):
         *,
         margin_config: MarginConfig | None = None,
     ) -> ObjectiveOutput:
-        if inputs.alpha is not None and inputs.query_alt is None and self.config.simcse_dropout_weight > 0.0:
+        if inputs.alpha_logits is not None and inputs.query_alt is None and self.config.simcse_dropout_weight > 0.0:
             raise ValueError("alpha(q) requires query_alt when SimCSE auxiliary pressure is enabled")
 
         memory = inputs.memory
@@ -104,16 +104,17 @@ class ContrastiveObjective(nn.Module):
         per_row = main + auxiliary
         alpha_target = None
         alpha_supervision = None
-        if inputs.alpha is not None:
-            alpha = inputs.alpha.view(-1)
-            if alpha.shape != main.shape:
-                raise ValueError(f"alpha must have shape {tuple(main.shape)}, got {tuple(alpha.shape)}")
+        if inputs.alpha_logits is not None:
+            alpha_logits = inputs.alpha_logits.view(-1)
+            if alpha_logits.shape != main.shape:
+                raise ValueError(f"alpha logits must have shape {tuple(main.shape)}, got {tuple(alpha_logits.shape)}")
+            alpha = torch.sigmoid(alpha_logits)
             auxiliary_weight = 1.0 - alpha.detach()
             per_row = main + auxiliary_weight * auxiliary
             confidence_logits = inputs.queries.detach() @ inputs.positives.detach().T
             confidence_logits = confidence_logits / self.kernel.tau.detach()
             alpha_target = torch.softmax(confidence_logits, dim=-1).diagonal()
-            alpha_supervision = F.binary_cross_entropy(alpha, alpha_target, reduction="none")
+            alpha_supervision = F.binary_cross_entropy_with_logits(alpha_logits, alpha_target, reduction="none")
             if inputs.alpha_supervision_weight != 0.0:
                 per_row = per_row + inputs.alpha_supervision_weight * alpha_supervision
         if memory_per_row is not None:
