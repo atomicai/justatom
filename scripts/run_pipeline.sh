@@ -71,6 +71,8 @@ Component overrides:
   --alpha-gate-dropout P
   --memory-bank-size N
   --memory-bank-warmup-steps N
+  --memory-bank-mass-ratio VALUE
+  --memory-bank-mass-ramp-steps N
   --memory-bank-mining all|random|hard|mixed
   --memory-bank-hard-negatives N
   --memory-bank-random-negatives N
@@ -276,6 +278,8 @@ while [[ $# -gt 0 ]]; do
     --alpha-gate-dropout) EXPLICIT_OVERRIDES+=(--alpha-gate.head.dropout "$2"); shift 2 ;;
     --memory-bank-size) EXPLICIT_OVERRIDES+=(--memory-bank.size "$2"); shift 2 ;;
     --memory-bank-warmup-steps) EXPLICIT_OVERRIDES+=(--memory-bank.warmup-steps "$2"); shift 2 ;;
+    --memory-bank-mass-ratio) EXPLICIT_OVERRIDES+=(--memory-bank.mass-ratio "$2"); shift 2 ;;
+    --memory-bank-mass-ramp-steps) EXPLICIT_OVERRIDES+=(--memory-bank.mass-ramp-steps "$2"); shift 2 ;;
     --memory-bank-mining) EXPLICIT_OVERRIDES+=(--memory-bank.mining "$2"); shift 2 ;;
     --memory-bank-hard-negatives) EXPLICIT_OVERRIDES+=(--memory-bank.hard-negatives "$2"); shift 2 ;;
     --memory-bank-random-negatives) EXPLICIT_OVERRIDES+=(--memory-bank.random-negatives "$2"); shift 2 ;;

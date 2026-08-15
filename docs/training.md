@@ -52,6 +52,19 @@ L_primary = InfoNCE(Q, P)
 L_memory  = InfoNCE(Q, P, B) - InfoNCE(Q, P)
 ```
 
+For a query `i` with `K_i` selected bank candidates in a contrastive
+microbatch of `N` pairs, the augmented denominator is count-normalized:
+
+```text
+L_aug,i = -z_ii + log(
+  exp(z_ii) + A_batch,i + lambda(t) (N - 1) / K_i A_bank,i
+)
+```
+
+The selected-bank term is omitted when `K_i = 0`. `lambda(t)` applies the
+configured memory-mass ramp, so `mass_ratio` controls the normalized bank mass
+without changing its meaning when the number of selected candidates changes.
+
 Let `g_p` and `g_m` be their gradients over the trainable parameters. The
 primary gradient is protected. When the memory gradient conflicts with it,
 ATOMIC removes only the opposing component:
@@ -84,12 +97,17 @@ random candidates per query, and memory weight `1.0`. It does not construct
 the alpha gate or a query-margin head. Structural additions must be labeled as
 ablations:
 
-Run manifests record the resolved kernel and alpha gradient policy under
-`objective_contract`. Results produced before this contract was introduced
-used different canonical objectives and must not be pooled with or directly
-compared against new runs. Re-run matched methods with the same model, split,
-seed, batch size, optimizer, and epoch count before drawing method-level
-conclusions.
+Run manifests record the resolved kernel, alpha gradient policy, and memory
+mass policy under `objective_contract`; enabled banks declare
+`memory_mass: count_normalized`, while disabled banks declare
+`memory_mass: not_applicable`. Their `batch_contract` records the contrastive
+microbatch, gradient accumulation, and optimizer effective batch as
+`contrastive_microbatch`, `gradient_accumulation`, and
+`optimizer_effective_batch`, respectively. Results produced before this
+contract was introduced used different canonical objectives and must not be
+pooled with or directly compared against new runs. Re-run matched methods with
+the same model, split, seed, batch size, optimizer, and epoch count before
+drawing method-level conclusions.
 
 ```bash
 python -m justatom.api.train \

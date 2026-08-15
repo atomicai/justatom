@@ -77,6 +77,7 @@ def objective_contract(config: TrainConfig) -> dict[str, str]:
     contract = {
         "contrastive_kernel": ("decoupled_infonce" if config.objective.decoupled else "coupled_infonce"),
         "alpha_aux_gradient": ("detached" if config.method is TrainingMethod.ATOM_GATE else "not_applicable"),
+        "memory_mass": ("count_normalized" if config.memory_bank.enabled else "not_applicable"),
     }
     if config.method is TrainingMethod.ATOM_GATE:
         contract.update(
@@ -95,6 +96,7 @@ class RunManifest:
     git_commit: str | None
     git_dirty: bool | None
     objective_contract: dict[str, str]
+    batch_contract: dict[str, int]
     resolved_config: dict[str, Any]
 
     @classmethod
@@ -114,6 +116,13 @@ class RunManifest:
             git_commit=git_commit,
             git_dirty=git_dirty,
             objective_contract=objective_contract(config),
+            batch_contract={
+                "contrastive_microbatch": config.optimization.batch_size,
+                "gradient_accumulation": config.optimization.grad_acc_steps,
+                "optimizer_effective_batch": (
+                    config.optimization.batch_size * config.optimization.grad_acc_steps
+                ),
+            },
             resolved_config=payload,
         )
 
@@ -133,6 +142,7 @@ class RunManifest:
             "git_commit": self.git_commit,
             "git_dirty": self.git_dirty,
             "objective_contract": self.objective_contract,
+            "batch_contract": self.batch_contract,
             "resolved_config": self.resolved_config,
         }
 

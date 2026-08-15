@@ -73,6 +73,38 @@ class BenchmarkVariantTests(unittest.TestCase):
             self.assertNotIn("--memory-bank-size", commands)
 
     @unittest.skipIf(os.name == "nt", "benchmark shell tests require a Unix environment")
+    def test_benchmark_forwards_normalized_memory_mass_controls(self):
+        with TemporaryDirectory() as tmpdir:
+            bench_root = Path(tmpdir) / "bench"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/run_benchmark.sh",
+                    "--dataset-ids",
+                    "justatom",
+                    "--variants",
+                    "atomic",
+                    "--bench-root",
+                    str(bench_root),
+                    "--memory-bank-mass-ratio",
+                    "0.5",
+                    "--memory-bank-mass-ramp-steps",
+                    "20",
+                    "--dry-run",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            commands = (bench_root / "COMMANDS.md").read_text()
+            self.assertIn("--memory-bank-mass-ratio 0.5", commands)
+            self.assertIn("--memory-bank-mass-ramp-steps 20", commands)
+
+    @unittest.skipIf(os.name == "nt", "benchmark shell tests require a Unix environment")
     def test_retired_bank_variant_points_to_atomic(self):
         result = subprocess.run(
             [

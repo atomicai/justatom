@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 import yaml
 
 from justatom.training.config import ExperimentRole, TrainingMethod
@@ -18,6 +19,7 @@ from justatom.training.methods import canonical_method_config
 
 def test_manifest_contains_resolved_method_seed_and_git_state(tmp_path: Path):
     config = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(config, optimization=replace(config.optimization, batch_size=8, grad_acc_steps=4))
     manifest = RunManifest.from_config(config, git_commit="abc123", git_dirty=True)
 
     path = write_run_manifest(tmp_path, manifest)
@@ -31,9 +33,26 @@ def test_manifest_contains_resolved_method_seed_and_git_state(tmp_path: Path):
     assert loaded["objective_contract"] == {
         "contrastive_kernel": "coupled_infonce",
         "alpha_aux_gradient": "not_applicable",
+        "memory_mass": "count_normalized",
+    }
+    assert loaded["resolved_config"]["memory_bank"]["mass_ratio"] == pytest.approx(0.5)
+    assert loaded["batch_contract"] == {
+        "contrastive_microbatch": 8,
+        "gradient_accumulation": 4,
+        "optimizer_effective_batch": 32,
     }
     assert loaded["resolved_config"]["memory_bank"]["margin"]["mode"] == "off"
     assert loaded["resolved_config"]["gradient_projection"]["enabled"] is True
+
+
+def test_disabled_memory_bank_manifest_marks_mass_not_applicable():
+    manifest = RunManifest.from_config(
+        canonical_method_config(TrainingMethod.VANILLA),
+        git_commit="abc123",
+        git_dirty=False,
+    )
+
+    assert manifest.objective_contract["memory_mass"] == "not_applicable"
 
 
 def test_atom_gate_manifest_records_detached_auxiliary_control():
@@ -46,6 +65,7 @@ def test_atom_gate_manifest_records_detached_auxiliary_control():
     assert manifest.objective_contract == {
         "contrastive_kernel": "coupled_infonce",
         "alpha_aux_gradient": "detached",
+        "memory_mass": "not_applicable",
         "alpha_target": "detached_positive_softmax_confidence",
         "alpha_head_input_gradient": "detached",
     }
@@ -64,6 +84,7 @@ def test_dcl_ablation_manifest_records_decoupled_kernel():
     assert manifest.objective_contract == {
         "contrastive_kernel": "decoupled_infonce",
         "alpha_aux_gradient": "not_applicable",
+        "memory_mass": "not_applicable",
     }
 
 

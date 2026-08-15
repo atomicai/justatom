@@ -48,6 +48,8 @@ Options:
   --epochs N
   --grad-acc-steps N
   --temperature VALUE
+  --memory-bank-mass-ratio VALUE
+  --memory-bank-mass-ramp-steps N
   --nsamples N
   --bench-root DIR
   --output-root DIR
@@ -110,7 +112,7 @@ while [[ $# -gt 0 ]]; do
     --no-auto-e5-prefixes) AUTO_E5_PREFIXES=0; shift ;;
     --no-baseline) RUN_BASELINE=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
-    --memory-bank-size|--memory-bank-warmup-steps|--memory-bank-mining|--memory-bank-hard-negatives|--memory-bank-random-negatives|--memory-bank-hard-warmup-steps|--memory-bank-hard-ramp-steps|--memory-bank-collision-threshold|--memory-bank-collision-beta|--memory-bank-margin-mode|--memory-bank-margin-base|--memory-bank-margin-scale|--memory-bank-margin-min|--memory-bank-margin-max|--memory-bank-admission-beta|--memory-bank-margin-reg-weight|--alpha-gate-layers|--alpha-gate-hidden-dim|--alpha-gate-dropout|--experiment-role|--lr-encoder|--lr-heads|--weight-decay|--max-query-seq-len|--top-k|--index-batch-size)
+    --memory-bank-size|--memory-bank-warmup-steps|--memory-bank-mass-ratio|--memory-bank-mass-ramp-steps|--memory-bank-mining|--memory-bank-hard-negatives|--memory-bank-random-negatives|--memory-bank-hard-warmup-steps|--memory-bank-hard-ramp-steps|--memory-bank-collision-threshold|--memory-bank-collision-beta|--memory-bank-margin-mode|--memory-bank-margin-base|--memory-bank-margin-scale|--memory-bank-margin-min|--memory-bank-margin-max|--memory-bank-admission-beta|--memory-bank-margin-reg-weight|--alpha-gate-layers|--alpha-gate-hidden-dim|--alpha-gate-dropout|--experiment-role|--lr-encoder|--lr-heads|--weight-decay|--max-query-seq-len|--top-k|--index-batch-size)
       PIPELINE_OVERRIDES+=("$1" "$2"); shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
