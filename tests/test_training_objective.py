@@ -44,6 +44,7 @@ def test_objective_atom_gate_detaches_alpha_only_from_auxiliary_gradient():
             positives=positives,
             query_alt=alternate_queries,
             alpha=alpha,
+            alpha_supervision_weight=0.0,
         )
     )
 
@@ -57,6 +58,7 @@ def test_objective_atom_gate_detaches_alpha_only_from_auxiliary_gradient():
             positives=positives,
             query_alt=alternate_queries,
             alpha=torch.full_like(alpha, 0.8),
+            alpha_supervision_weight=0.0,
         )
     )
     low_alpha = objective(
@@ -65,6 +67,7 @@ def test_objective_atom_gate_detaches_alpha_only_from_auxiliary_gradient():
             positives=positives,
             query_alt=alternate_queries,
             alpha=torch.full_like(alpha, 0.2),
+            alpha_supervision_weight=0.0,
         )
     )
     assert low_alpha.loss.detach() > high_alpha.loss.detach()
@@ -76,61 +79,55 @@ def test_objective_atom_gate_detaches_alpha_only_from_auxiliary_gradient():
     assert alternate_queries.grad is not None and float(alternate_queries.grad.abs().sum()) > 0.0
 
 
-def test_objective_atom_gate_keeps_alpha_live_for_pair_supervision():
+def test_atom_gate_uses_detached_positive_confidence():
     objective = ContrastiveObjective(
-        ObjectiveConfig(
-            temperature=1.0,
-            learnable_temperature=False,
-            decoupled=False,
-        )
+        ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False)
     )
-    queries = F.normalize(torch.eye(2, 4), dim=-1)
-    positives = queries.clone()
-    alpha = torch.tensor([0.4, 0.6], requires_grad=True)
-    semantic = torch.tensor([[0.9, 0.1], [0.2, 0.8]])
-    lexical = torch.tensor([[0.1, 0.8], [0.9, 0.2]])
-
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.0, 1.0]]), dim=-1).requires_grad_()
+    p = F.normalize(torch.tensor([[1.0, 0.0], [0.6, 0.8]]), dim=-1).requires_grad_()
+    alpha = torch.tensor([0.4, 0.7], requires_grad=True)
     output = objective(
         ObjectiveInputs(
-            queries=queries,
-            positives=positives,
+            queries=q,
+            positives=p,
             alpha=alpha,
-            semantic_pair_scores=semantic,
-            lexical_pair_scores=lexical,
-            alpha_mix_weight=0.3,
+            alpha_supervision_weight=0.3,
         )
     )
-    output.loss.backward()
+    target = torch.softmax(q.detach() @ p.detach().T, dim=-1).diagonal()
+    bce = F.binary_cross_entropy(alpha, target, reduction="none")
+    torch.testing.assert_close(output.alpha_target, target)
+    torch.testing.assert_close(output.alpha_supervision_per_row, bce)
+    torch.testing.assert_close(output.loss, output.main_per_row.mean() + 0.3 * bce.mean())
 
-    assert alpha.grad is not None
-    assert torch.isfinite(alpha.grad).all()
-    assert float(alpha.grad.abs().sum()) > 0.0
 
-
-def test_objective_atom_gate_keeps_alpha_live_for_entropy_regularization():
+def test_alpha_bce_does_not_update_retrieval_embeddings():
     objective = ContrastiveObjective(
-        ObjectiveConfig(
-            temperature=1.0,
-            learnable_temperature=False,
-            decoupled=False,
-        )
+        ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False)
     )
-    embeddings = F.normalize(torch.eye(2, 4), dim=-1)
-    alpha = torch.tensor([0.2, 0.7], requires_grad=True)
-
+    q = F.normalize(torch.randn(3, 4), dim=-1).requires_grad_()
+    p = F.normalize(torch.randn(3, 4), dim=-1).requires_grad_()
+    alpha = torch.tensor([0.2, 0.5, 0.8], requires_grad=True)
     output = objective(
-        ObjectiveInputs(
-            queries=embeddings,
-            positives=embeddings,
-            alpha=alpha,
-            alpha_entropy_weight=0.1,
-        )
+        ObjectiveInputs(queries=q, positives=p, alpha=alpha, alpha_supervision_weight=1.0)
     )
-    output.loss.backward()
+    output.alpha_supervision_per_row.mean().backward()
+    assert alpha.grad is not None and float(alpha.grad.abs().sum()) > 0.0
+    assert q.grad is None and p.grad is None
 
-    assert alpha.grad is not None
-    assert torch.isfinite(alpha.grad).all()
-    assert float(alpha.grad.abs().sum()) > 0.0
+
+def test_alpha_bce_is_minimized_at_soft_target():
+    target = torch.tensor([0.2, 0.8])
+    at_target = F.binary_cross_entropy(target, target)
+    away_from_target = F.binary_cross_entropy(torch.tensor([0.4, 0.6]), target)
+    assert at_target < away_from_target
+
+
+def test_hard_row_receives_more_simcse_pressure_than_easy_row():
+    alpha = torch.tensor([0.2, 0.8])
+    simcse = torch.tensor([2.0, 2.0])
+    weighted = (1.0 - alpha.detach()) * simcse
+    torch.testing.assert_close(weighted, torch.tensor([1.6, 0.4]))
 
 
 def test_objective_regularizes_raw_margin_to_constant_base():
