@@ -74,6 +74,15 @@ def _optional_string(values: Mapping[str, Any], key: str) -> str | None:
     return value
 
 
+def _optional_prefix(values: Mapping[str, Any], key: str) -> str | None:
+    value = values.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigurationError(f"{key} must be a string when provided")
+    return value
+
+
 def _validate_positive_integer(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigurationError(f"{name} must be a positive integer")
@@ -144,8 +153,8 @@ def _validate_embedding(values: Mapping[str, Any]) -> dict[str, Any]:
 
     _validate_positive_integer(values.get("batch_size", 64), "batch_size")
     _validate_positive_integer(values.get("max_length", 512), "max_length")
-    _optional_string(values, "query_prefix")
-    _optional_string(values, "document_prefix")
+    _optional_prefix(values, "query_prefix")
+    _optional_prefix(values, "document_prefix")
 
     skip_prefix_if_present = values.get("skip_prefix_if_present", True)
     if not isinstance(skip_prefix_if_present, bool):

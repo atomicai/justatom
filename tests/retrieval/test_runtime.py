@@ -457,6 +457,39 @@ def test_builder_maps_local_and_remote_embedding_config(monkeypatch):
     asyncio.run(remote.close())
 
 
+def test_builder_allows_explicit_empty_embedding_prefixes(monkeypatch):
+    captures = []
+
+    def fake_local(**kwargs):
+        captures.append(kwargs)
+        return CloseableEmbedder()
+
+    async def fake_connect(*args, **kwargs):
+        return CloseableStore()
+
+    monkeypatch.setattr(runtime_module, "HuggingFaceEmbedder", fake_local, raising=False)
+    _patch_store_connect(monkeypatch, fake_connect)
+
+    runtime = asyncio.run(
+        runtime_module.build_runtime(
+            {
+                "mode": "vector",
+                "embedding": {
+                    "backend": "local",
+                    "model": "local-model",
+                    "query_prefix": "",
+                    "document_prefix": "",
+                },
+                "store": {"collection": "PrefixlessDocs"},
+            }
+        )
+    )
+
+    assert captures[0]["profile"].query_prefix == ""
+    assert captures[0]["profile"].document_prefix == ""
+    asyncio.run(runtime.close())
+
+
 @pytest.mark.parametrize(
     ("config", "message"),
     [
