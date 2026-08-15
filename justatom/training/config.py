@@ -134,6 +134,8 @@ class MemoryBankConfig:
     enabled: bool = False
     size: int = 0
     warmup_steps: int = 0
+    mass_ratio: float = 0.5
+    mass_ramp_steps: int = 20
     mining: str = "all"
     hard_negatives: int = 0
     random_negatives: int = 0
@@ -375,6 +377,8 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_bool(bank.enabled, "memory_bank.enabled")
     _require_int(bank.size, "memory_bank.size", 0)
     _require_int(bank.warmup_steps, "memory_bank.warmup_steps", 0)
+    _require_number(bank.mass_ratio, "memory_bank.mass_ratio", 0.0)
+    _require_int(bank.mass_ramp_steps, "memory_bank.mass_ramp_steps", 1)
     if bank.mining not in {"all", "random", "hard", "mixed"}:
         raise ValueError("memory_bank.mining must be one of: all, random, hard, mixed")
     _require_int(bank.hard_negatives, "memory_bank.hard_negatives", 0)

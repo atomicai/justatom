@@ -52,5 +52,7 @@ def test_qwen_lora_vanilla_bank_recipe_resolves():
     assert config.memory_bank.mining == "random"
     assert config.memory_bank.hard_negatives == 0
     assert config.memory_bank.random_negatives == 12
+    assert config.memory_bank.mass_ratio == pytest.approx(0.5)
+    assert config.memory_bank.mass_ramp_steps == 20
     assert not config.memory_bank.adaptive.enabled
     assert config.memory_bank.margin.mode.value == "off"

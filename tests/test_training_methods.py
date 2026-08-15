@@ -26,6 +26,8 @@ def test_canonical_profiles_have_exact_structural_components():
     assert not atomic.objective.decoupled
     assert atomic.memory_bank.mining == "random"
     assert atomic.memory_bank.random_negatives == 12
+    assert atomic.memory_bank.mass_ratio == pytest.approx(0.5)
+    assert atomic.memory_bank.mass_ramp_steps == 20
     assert not atomic.memory_bank.adaptive.enabled
     assert atomic.memory_bank.margin.mode is MarginMode.OFF
 

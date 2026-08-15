@@ -29,6 +29,8 @@ def canonical_method_config(method: TrainingMethod | str) -> TrainConfig:
         enabled=True,
         size=512,
         warmup_steps=50,
+        mass_ratio=0.5,
+        mass_ramp_steps=20,
         mining="random",
         hard_negatives=0,
         random_negatives=12,

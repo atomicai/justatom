@@ -20,6 +20,8 @@ def test_parse_train_config_builds_typed_atomic_config():
     assert config.experiment.seed == 42
     assert not config.alpha_gate.enabled
     assert config.memory_bank.enabled
+    assert config.memory_bank.mass_ratio == pytest.approx(0.5)
+    assert config.memory_bank.mass_ramp_steps == 20
     assert config.memory_bank.margin.mode is MarginMode.OFF
     assert config.gradient_projection.enabled
     assert not config.objective.decoupled
@@ -49,6 +51,17 @@ def test_alpha_supervision_weight_is_finite_and_non_negative(value):
         parse_train_config(
             {"method": "atom_gate", "alpha_gate": {"supervision_weight": value}}
         )
+
+
+@pytest.mark.parametrize("value", [-0.1, float("nan"), float("inf")])
+def test_memory_mass_ratio_is_finite_and_non_negative(value):
+    with pytest.raises(ValueError, match=r"memory_bank\.mass_ratio"):
+        parse_train_config({"method": "atomic", "memory_bank": {"mass_ratio": value}})
+
+
+def test_memory_mass_ramp_is_positive():
+    with pytest.raises(ValueError, match=r"memory_bank\.mass_ramp_steps"):
+        parse_train_config({"method": "atomic", "memory_bank": {"mass_ramp_steps": 0}})
 
 
 def test_parse_train_config_rejects_unknown_nested_field():
