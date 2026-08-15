@@ -5,7 +5,7 @@ Justatom has one production training path and three public methods.
 | Method | Primary objective | Auxiliary objective | Gradient control |
 | --- | --- | --- | --- |
 | `vanilla` | coupled InfoNCE | none | none |
-| `atom_gate` | coupled InfoNCE | query-controlled SimCSE and semantic/lexical pairs | stop-gradient on the SimCSE coefficient |
+| `atom_gate` | coupled InfoNCE | confidence-supervised query-controlled SimCSE | detached alpha target and head input |
 | `atomic` | coupled InfoNCE | detached online memory | one-sided orthogonal projection |
 
 ## Objective
@@ -23,18 +23,22 @@ All three canonical methods use the same coupled InfoNCE row loss:
 L_i = -S_ii / tau + log sum_j exp(S_ij / tau).
 ```
 
-`atom_gate` learns a query-only scalar `alpha_i = alpha(q_i)` and adds the
-SimCSE dropout-view pressure per query:
+`atom_gate` learns a query-only scalar from a detached query representation,
+with its target derived from the detached in-batch positive retrieval
+confidence:
 
 ```text
-L_i_gate = L_i + (1 - stop_gradient(alpha_i)) lambda_sc L_i_sc.
+t_i = stop_gradient(softmax(S / tau)_ii)
+alpha_i = sigmoid(MLP(stop_gradient(q_i)))
+L_i = L_InfoNCE,i
+    + (1 - stop_gradient(alpha_i)) lambda_sc L_SimCSE,i
+    + lambda_alpha BCE(alpha_i, t_i)
 ```
 
-When lexical metadata is available, the same gate also controls a pairwise
-semantic/lexical auxiliary term. Alpha remains live on that pair-supervision
-path, which trains the gate, but the gate cannot lower the current SimCSE loss
-by moving toward one. The gate is training-only; the saved encoder has the
-same inference interface as the source embedding model.
+The gate cannot lower the current SimCSE loss by moving toward one. Its BCE
+term trains the head against retrieval confidence while leaving the encoder
+path detached. The gate is training-only; the saved encoder has the same
+inference interface as the source embedding model.
 
 ## ATOMIC: protected online memory
 

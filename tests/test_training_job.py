@@ -46,6 +46,8 @@ def test_atom_gate_manifest_records_detached_auxiliary_control():
     assert manifest.objective_contract == {
         "contrastive_kernel": "coupled_infonce",
         "alpha_aux_gradient": "detached",
+        "alpha_target": "detached_positive_softmax_confidence",
+        "alpha_head_input_gradient": "detached",
     }
 
 

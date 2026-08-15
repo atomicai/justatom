@@ -79,23 +79,27 @@ def test_module_constructs_only_components_required_by_method():
     assert atomic.automatic_optimization is False
 
 
-def test_load_schema_v1_checkpoint_migrates_historical_canonical_dcl_to_ablation(tmp_path):
+def test_load_schema_v1_checkpoint_migrates_historical_canonical_dcl_to_ablation(tmp_path, monkeypatch):
     config = canonical_method_config(TrainingMethod.ATOM_GATE)
     original = ContrastiveTrainingModule.build(TinyEncoder(), config)
     historical_config = train_config_to_dict(config)
-    historical_config["objective"]["decoupled"] = True
-    checkpoint = tmp_path / "historical-checkpoint.pt"
-    torch.save(
-        {
-            "schema_version": 1,
-            "resolved_config": historical_config,
-            "state_dict": original.state_dict(),
-            "optimizer_states": [],
-            "epoch": 0,
-            "global_step": 1,
-        },
-        checkpoint,
+    historical_config["objective"].update(decoupled=True, pairwise_margin=0.2)
+    historical_config["alpha_gate"].pop("supervision_weight")
+    historical_config["alpha_gate"].update(
+        mix_weight=0.7,
+        mix_weight_warmup_steps=10,
+        entropy_weight=0.1,
     )
+    checkpoint = tmp_path / "historical-checkpoint.pt"
+    payload = {
+        "schema_version": 1,
+        "resolved_config": historical_config,
+        "state_dict": original.state_dict(),
+        "optimizer_states": [],
+        "epoch": 0,
+        "global_step": 1,
+    }
+    monkeypatch.setattr("justatom.training.module.torch.load", lambda *_args, **_kwargs: payload)
 
     restored, optimizer_states = ContrastiveTrainingModule.load_research_checkpoint(
         checkpoint,
@@ -104,6 +108,77 @@ def test_load_schema_v1_checkpoint_migrates_historical_canonical_dcl_to_ablation
 
     assert restored.config.experiment.role is ExperimentRole.ABLATION
     assert restored.config.objective.decoupled
+    assert restored.config.alpha_gate.supervision_weight == 0.7
+    assert "pairwise_margin" not in restored.config.objective.__dict__
+    assert payload["resolved_config"]["objective"]["pairwise_margin"] == 0.2
+    assert payload["resolved_config"]["alpha_gate"] == {
+        "enabled": True,
+        "head": {"layers": 1, "hidden_dim": None, "dropout": 0.0, "activation": "gelu"},
+        "mix_weight": 0.7,
+        "mix_weight_warmup_steps": 10,
+        "entropy_weight": 0.1,
+    }
+    for name, value in original.alpha_gate.state_dict().items():
+        torch.testing.assert_close(restored.alpha_gate.state_dict()[name], value)
+    assert optimizer_states == []
+
+
+def test_load_schema_v1_checkpoint_migrates_historical_atom_gate_to_ablation(tmp_path, monkeypatch):
+    config = canonical_method_config(TrainingMethod.ATOM_GATE)
+    original = ContrastiveTrainingModule.build(TinyEncoder(), config)
+    payload = {
+        "schema_version": 1,
+        "resolved_config": train_config_to_dict(config),
+        "state_dict": original.state_dict(),
+    }
+    monkeypatch.setattr("justatom.training.module.torch.load", lambda *_args, **_kwargs: payload)
+
+    restored, _ = ContrastiveTrainingModule.load_research_checkpoint(
+        tmp_path / "atom-gate-checkpoint.pt",
+        encoder=TinyEncoder(),
+    )
+
+    assert restored.config.experiment.role is ExperimentRole.ABLATION
+
+
+@pytest.mark.parametrize("method", [TrainingMethod.VANILLA, TrainingMethod.ATOMIC])
+def test_load_schema_v1_checkpoint_preserves_canonical_coupled_methods(tmp_path, monkeypatch, method):
+    config = canonical_method_config(method)
+    original = ContrastiveTrainingModule.build(TinyEncoder(), config)
+    payload = {
+        "schema_version": 1,
+        "resolved_config": train_config_to_dict(config),
+        "state_dict": original.state_dict(),
+    }
+    monkeypatch.setattr("justatom.training.module.torch.load", lambda *_args, **_kwargs: payload)
+
+    restored, optimizer_states = ContrastiveTrainingModule.load_research_checkpoint(
+        tmp_path / "canonical-checkpoint.pt",
+        encoder=TinyEncoder(),
+    )
+
+    assert restored.config.experiment.role is ExperimentRole.CANONICAL
+    assert not restored.config.objective.decoupled
+    assert optimizer_states == []
+
+
+def test_research_checkpoint_uses_schema_v2(tmp_path):
+    module = ContrastiveTrainingModule.build(
+        TinyEncoder(),
+        canonical_method_config(TrainingMethod.VANILLA),
+    )
+
+    checkpoint = module.save_research_checkpoint(tmp_path / "checkpoint.pt")
+
+    payload = torch.load(checkpoint, weights_only=False)
+    assert payload["schema_version"] == 2
+
+    restored, optimizer_states = ContrastiveTrainingModule.load_research_checkpoint(
+        checkpoint,
+        encoder=TinyEncoder(),
+    )
+
+    assert restored.config == module.config
     assert optimizer_states == []
 
 

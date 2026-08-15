@@ -333,7 +333,7 @@ class ContrastiveTrainingModule(L.LightningModule):
             optimizers = []
         torch.save(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "resolved_config": train_config_to_dict(self.config),
                 "state_dict": self.state_dict(),
                 "optimizer_states": [optimizer.state_dict() for optimizer in optimizers],
@@ -354,13 +354,24 @@ class ContrastiveTrainingModule(L.LightningModule):
         map_location: str | torch.device = "cpu",
     ) -> tuple[ContrastiveTrainingModule, list[dict[str, object]]]:
         payload = torch.load(path, map_location=map_location)
-        if payload.get("schema_version") != 1:
+        schema_version = payload.get("schema_version")
+        if schema_version not in {1, 2}:
             raise ValueError(f"Unsupported research checkpoint schema: {payload.get('schema_version')!r}")
         resolved_config = dict(payload["resolved_config"])
-        objective_config = dict(resolved_config.get("objective", {}))
-        experiment_config = dict(resolved_config.get("experiment", {}))
-        if objective_config.get("decoupled") is True and experiment_config.get("role") == "canonical":
-            experiment_config["role"] = "ablation"
+        if schema_version == 1:
+            objective_config = dict(resolved_config.get("objective", {}))
+            objective_config.pop("pairwise_margin", None)
+            resolved_config["objective"] = objective_config
+
+            alpha_gate_config = dict(resolved_config.get("alpha_gate", {}))
+            alpha_gate_config["supervision_weight"] = alpha_gate_config.pop("mix_weight", 0.3)
+            alpha_gate_config.pop("mix_weight_warmup_steps", None)
+            alpha_gate_config.pop("entropy_weight", None)
+            resolved_config["alpha_gate"] = alpha_gate_config
+
+            experiment_config = dict(resolved_config.get("experiment", {}))
+            if resolved_config.get("method") == "atom_gate" or objective_config.get("decoupled") is True:
+                experiment_config["role"] = "ablation"
             resolved_config["experiment"] = experiment_config
         config = parse_train_config(resolved_config)
         module = cls.build(encoder, config)

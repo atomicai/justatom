@@ -74,10 +74,16 @@ def _git_output(*args: str) -> str | None:
 
 
 def objective_contract(config: TrainConfig) -> dict[str, str]:
-    return {
+    contract = {
         "contrastive_kernel": ("decoupled_infonce" if config.objective.decoupled else "coupled_infonce"),
         "alpha_aux_gradient": ("detached" if config.method is TrainingMethod.ATOM_GATE else "not_applicable"),
     }
+    if config.method is TrainingMethod.ATOM_GATE:
+        contract.update(
+            alpha_target="detached_positive_softmax_confidence",
+            alpha_head_input_gradient="detached",
+        )
+    return contract
 
 
 @dataclass(frozen=True)
