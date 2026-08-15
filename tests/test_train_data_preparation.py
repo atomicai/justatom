@@ -31,14 +31,13 @@ def test_prepare_training_data_opens_loader_once(monkeypatch):
 
     monkeypatch.setattr(training_data.DatasetLoader, "read", fake_read)
 
-    frame, rows, lexical_lookup = training_data.prepare_training_data(
+    frame, rows = training_data.prepare_training_data(
         dataset_name_or_path="owner/data",
         num_samples=2,
         chunk_id_col="chunk_id",
     )
 
     assert frame.height == len(rows) == 2
-    assert all(row["content"] in lexical_lookup for row in rows)
     assert len(calls) == 1
     assert calls[0][1]["lazy"] is True
 
@@ -67,13 +66,13 @@ def test_reservoir_sampling_is_bounded_and_deterministic():
     source = [{"chunk_id": str(index), "content": f"doc-{index}", "queries": [f"q-{index}"]} for index in range(20)]
     path = _write_jsonl(source)
     try:
-        first, _ = training_data.sample_training_rows(
+        first = training_data.sample_training_rows(
             dataset_name_or_path=path,
             num_samples=5,
             seed=17,
             chunk_id_col="chunk_id",
         )
-        second, _ = training_data.sample_training_rows(
+        second = training_data.sample_training_rows(
             dataset_name_or_path=path,
             num_samples=5,
             seed=17,
@@ -94,7 +93,7 @@ def test_duplicate_content_keeps_distinct_chunk_identity():
         ]
     )
     try:
-        _, rows, lexical_lookup = training_data.prepare_training_data(
+        _, rows = training_data.prepare_training_data(
             dataset_name_or_path=path,
             num_samples=2,
             chunk_id_col="chunk_id",
@@ -103,7 +102,6 @@ def test_duplicate_content_keeps_distinct_chunk_identity():
         path.unlink(missing_ok=True)
 
     assert [row["chunk_id"] for row in rows] == ["a", "b"]
-    assert lexical_lookup == {"same-doc": "same-doc"}
 
 
 def test_rebalance_reduces_avoidable_within_batch_duplicates():
@@ -164,6 +162,6 @@ def test_iterable_source_supports_custom_fields(monkeypatch):
     )
 
     assert rows == [
-        {"content": "doc-a", "queries": "q1", "lexical_text": "doc-a"},
-        {"content": "doc-b", "queries": "q2", "lexical_text": "doc-b"},
+        {"content": "doc-a", "queries": "q1"},
+        {"content": "doc-b", "queries": "q2"},
     ]

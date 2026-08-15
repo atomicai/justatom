@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pytorch_lightning as L
 import torch
@@ -15,8 +16,18 @@ from justatom.processing import ITokenizer, igniset
 from justatom.processing.loader import NamedDataLoader
 from justatom.processing.prime import TrainWithContrastiveProcessor
 from justatom.running.encoders import EncoderRunner
-from justatom.tooling.collections import build_collection_metadata, resolve_artifact_dirname, write_collection_metadata
-from justatom.training.config import LoraAdapterConfig, RuntimeConfig, TrainConfig, TrainingMethod, train_config_to_dict
+from justatom.tooling.collections import (
+    build_collection_metadata,
+    resolve_artifact_dirname,
+    write_collection_metadata,
+)
+from justatom.training.config import (
+    LoraAdapterConfig,
+    RuntimeConfig,
+    TrainConfig,
+    TrainingMethod,
+    train_config_to_dict,
+)
 from justatom.training.data import prepare_training_data_from_config
 from justatom.training.methods import resolve_method
 from justatom.training.module import ContrastiveTrainingModule
@@ -87,7 +98,7 @@ class RunManifest:
         *,
         git_commit: str | None,
         git_dirty: bool | None,
-    ) -> "RunManifest":
+    ) -> RunManifest:
         payload = train_config_to_dict(config)
         return cls(
             schema_version=1,
@@ -101,7 +112,7 @@ class RunManifest:
         )
 
     @classmethod
-    def capture(cls, config: TrainConfig) -> "RunManifest":
+    def capture(cls, config: TrainConfig) -> RunManifest:
         commit = _git_output("rev-parse", "HEAD")
         status = _git_output("status", "--porcelain")
         dirty = None if commit is None else bool(status)
@@ -147,7 +158,7 @@ def write_collection_metadata_from_config(run_dir: Path, config: TrainConfig) ->
 
 
 def build_training_loader(config: TrainConfig):
-    rows, lexical_lookup = prepare_training_data_from_config(config)
+    rows = prepare_training_data_from_config(config)
     tokenizer = ITokenizer.from_pretrained(config.model.name_or_path)
     processor = TrainWithContrastiveProcessor(
         tokenizer=tokenizer,
@@ -168,7 +179,7 @@ def build_training_loader(config: TrainConfig):
         tensor_names=tensor_names,
         batch_size=config.optimization.batch_size,
     )
-    return loader, processor, lexical_lookup
+    return loader, processor
 
 
 def resolve_torch_device(runtime: RuntimeConfig) -> str:
@@ -300,9 +311,9 @@ class TrainingJob:
         write_run_manifest(paths.root, RunManifest.capture(config))
         write_collection_metadata_from_config(paths.root, config)
 
-        loader, processor, lexical_lookup = self.loader_factory(config)
+        loader, processor = self.loader_factory(config)
         encoder = self.encoder_factory(config, processor)
-        module = self.module_factory(encoder, config, lexical_lookup=lexical_lookup)
+        module = self.module_factory(encoder, config)
         trainer = self.trainer_factory(config)
         trainer.fit(module, train_dataloaders=loader)
 

@@ -6,7 +6,13 @@ from pathlib import Path
 import yaml
 
 from justatom.training.config import ExperimentRole, TrainingMethod
-from justatom.training.job import RunManifest, TrainingJob, artifact_paths, build_lightning_trainer, write_run_manifest
+from justatom.training.job import (
+    RunManifest,
+    TrainingJob,
+    artifact_paths,
+    build_lightning_trainer,
+    write_run_manifest,
+)
 from justatom.training.methods import canonical_method_config
 
 
@@ -97,7 +103,6 @@ def test_training_job_writes_manifest_before_fit_and_returns_artifacts(tmp_path:
 
         def save_lora_adapter(self, destination):
             events.append("adapter")
-            return None
 
         def save_research_checkpoint(self, destination):
             events.append("checkpoint")
@@ -112,9 +117,9 @@ def test_training_job_writes_manifest_before_fit_and_returns_artifacts(tmp_path:
 
     job = TrainingJob(
         config,
-        loader_factory=lambda _: ("loader", "processor", {}),
+        loader_factory=lambda _: ("loader", "processor"),
         encoder_factory=lambda *_: "encoder",
-        module_factory=lambda *_args, **_kwargs: FakeModule(),
+        module_factory=lambda *_args: FakeModule(),
         trainer_factory=lambda _: FakeTrainer(),
     )
 

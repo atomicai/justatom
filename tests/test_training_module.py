@@ -8,8 +8,15 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from justatom.training import telemetry
 from justatom.training.alpha_gate import QueryAlphaGate
-from justatom.training.config import ExperimentConfig, ExperimentRole, MarginMode, TrainingMethod, train_config_to_dict
+from justatom.training.config import (
+    ExperimentConfig,
+    ExperimentRole,
+    MarginMode,
+    TrainingMethod,
+    train_config_to_dict,
+)
 from justatom.training.methods import canonical_method_config
 from justatom.training.module import ContrastiveTrainingModule
 from justatom.training.objective import ObjectiveOutput
@@ -30,24 +37,6 @@ class TinyEncoder(nn.Module):
 
     def encode_queries(self, batch):
         return torch.nn.functional.normalize(self.projection(batch["queries"]), dim=-1)
-
-
-class RecordingTokenizer:
-    def batch_decode(self, input_ids, *, skip_special_tokens):
-        assert skip_special_tokens is True
-        values = {
-            1: "query: alpha",
-            2: "query: beta",
-            3: "passage: alpha document",
-            4: "passage: beta document",
-        }
-        return [values[int(row[0])] for row in input_ids]
-
-
-class TokenizedTinyEncoder(TinyEncoder):
-    def __init__(self):
-        super().__init__()
-        self.processor = type("Processor", (), {"tokenizer": RecordingTokenizer()})()
 
 
 def tiny_batch():
@@ -72,6 +61,8 @@ def finite_output():
         memory_per_row=None,
         simcse_per_row=None,
         soft_fn_per_row=None,
+        alpha_target=None,
+        alpha_supervision_per_row=None,
         metrics={},
     )
 
@@ -151,8 +142,6 @@ def test_atomic_enqueues_documents_after_objective(monkeypatch):
     module = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.ATOMIC))
     events: list[str] = []
     monkeypatch.setattr(module, "_encode_dropout_query_view", lambda batch: module.encoder.encode_queries(batch))
-    monkeypatch.setattr(module, "_semantic_pair_scores", lambda q, p, batch: torch.ones(2, 2))
-    monkeypatch.setattr(module, "_lexical_pair_scores", lambda batch: torch.ones(2, 2))
     monkeypatch.setattr(
         module.objective,
         "forward",
@@ -165,18 +154,61 @@ def test_atomic_enqueues_documents_after_objective(monkeypatch):
     assert events == ["loss", "enqueue"]
 
 
-def test_alpha_mix_weight_uses_exact_linear_warmup():
-    config = canonical_method_config(TrainingMethod.ATOM_GATE)
-    config = replace(
-        config,
-        alpha_gate=replace(config.alpha_gate, mix_weight=0.3, mix_weight_warmup_steps=10),
+def test_atom_gate_bce_updates_only_head_parameters():
+    module = ContrastiveTrainingModule.build(
+        TinyEncoder(),
+        canonical_method_config(TrainingMethod.ATOM_GATE),
     )
-    module = ContrastiveTrainingModule.build(TinyEncoder(), config)
 
-    assert module.effective_alpha_mix_weight(0) == 0.0
-    assert module.effective_alpha_mix_weight(5) == pytest.approx(0.15)
-    assert module.effective_alpha_mix_weight(10) == pytest.approx(0.3)
-    assert module.effective_alpha_mix_weight(20) == pytest.approx(0.3)
+    output = module.compute_training_step(tiny_batch(), step=0)
+    assert output.alpha_supervision_per_row is not None
+    output.alpha_supervision_per_row.mean().backward()
+
+    assert all(parameter.grad is None for parameter in module.encoder.parameters())
+    assert module.alpha_gate is not None
+    assert any(
+        parameter.grad is not None and float(parameter.grad.abs().sum()) > 0.0
+        for parameter in module.alpha_gate.parameters()
+    )
+
+
+def test_atom_gate_reports_calibration():
+    module = ContrastiveTrainingModule.build(
+        TinyEncoder(),
+        canonical_method_config(TrainingMethod.ATOM_GATE),
+    )
+
+    output = module.compute_training_step(tiny_batch(), step=0)
+
+    assert 0.0 <= output.metrics["alpha_target/mean"] <= 1.0
+    assert output.metrics["alpha/absolute_error_mean"] >= 0.0
+
+
+def test_retrieval_metrics_are_bucketed_by_target_confidence():
+    scores = torch.tensor([[2.0, 0.0], [2.0, 1.0]])
+    confidence = torch.tensor([0.2, 0.8])
+
+    metrics = telemetry.retrieval_metrics_by_confidence(scores, confidence)
+
+    assert metrics["alpha_target_bucket/low/count"] == 1.0
+    assert metrics["alpha_target_bucket/low/hit_rate_at_1"] == 1.0
+    assert metrics["alpha_target_bucket/high/count"] == 1.0
+    assert metrics["alpha_target_bucket/high/hit_rate_at_1"] == 0.0
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")
+def test_atom_gate_two_steps_stay_finite_on_mps():
+    module = ContrastiveTrainingModule.build(
+        TinyEncoder().to("mps"),
+        canonical_method_config(TrainingMethod.ATOM_GATE),
+    ).to("mps")
+    for _ in range(2):
+        batch = {key: value.to("mps") for key, value in tiny_batch().items()}
+        output = module.compute_training_step(batch, step=0)
+        output.loss.backward()
+        assert torch.isfinite(output.loss)
+        assert output.alpha_target is not None and torch.isfinite(output.alpha_target).all()
+        module.zero_grad(set_to_none=True)
 
 
 def test_atom_gate_reports_effective_detached_auxiliary_weight():
@@ -202,34 +234,14 @@ def test_compute_training_step_rejects_nonfinite_loss(monkeypatch):
         memory_per_row=None,
         simcse_per_row=None,
         soft_fn_per_row=None,
+        alpha_target=None,
+        alpha_supervision_per_row=None,
         metrics={},
     )
     monkeypatch.setattr(module.objective, "forward", lambda *args, **kwargs: bad_output)
 
     with pytest.raises(RuntimeError, match="Non-finite loss"):
         module.compute_training_step(tiny_batch(), step=7)
-
-
-def test_alpha_lexical_scores_are_recovered_from_tokenized_batch():
-    module = ContrastiveTrainingModule.build(
-        TokenizedTinyEncoder(),
-        canonical_method_config(TrainingMethod.ATOM_GATE),
-        lexical_lookup={
-            "alpha document": "alpha",
-            "beta document": "beta",
-        },
-    )
-    batch = {
-        "input_ids": torch.tensor([[1], [2]]),
-        "pos_input_ids": torch.tensor([[3], [4]]),
-    }
-    module._last_negative_indices = torch.tensor([1, 0])
-
-    scores = module._lexical_pair_scores(batch)
-
-    assert scores is not None
-    assert scores[:, 0].tolist() == pytest.approx([1.0, 1.0])
-    assert scores[:, 1].tolist() == pytest.approx([0.0, 0.0])
 
 
 def test_lightning_automatic_optimization_keeps_tau_version_valid(tmp_path):

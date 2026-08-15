@@ -10,13 +10,26 @@ from torch import nn
 
 from justatom.logging.io import CSVLogger
 from justatom.training.alpha_gate import QueryAlphaGate
-from justatom.training.config import MarginMode, TrainConfig, parse_train_config, train_config_to_dict
+from justatom.training.config import (
+    MarginMode,
+    TrainConfig,
+    parse_train_config,
+    train_config_to_dict,
+)
 from justatom.training.gradient_projection import project_conflicting_gradients
 from justatom.training.memory_bank import ContrastiveMemoryBank, QueryMarginHead
 from justatom.training.methods import resolve_method
-from justatom.training.objective import ContrastiveObjective, ObjectiveInputs, ObjectiveOutput
-from justatom.training.sampling import inverse_idf_recall, sample_safe_negative_indices
-from justatom.training.telemetry import batch_retrieval_metrics, resolve_metric_tensors, scalar_distribution
+from justatom.training.objective import (
+    ContrastiveObjective,
+    ObjectiveInputs,
+    ObjectiveOutput,
+)
+from justatom.training.telemetry import (
+    batch_retrieval_metrics,
+    resolve_metric_tensors,
+    retrieval_metrics_by_confidence,
+    scalar_distribution,
+)
 
 
 class ContrastiveTrainingModule(L.LightningModule):
@@ -31,7 +44,6 @@ class ContrastiveTrainingModule(L.LightningModule):
         alpha_gate: QueryAlphaGate | None,
         memory_bank: ContrastiveMemoryBank | None,
         margin_head: QueryMarginHead | None,
-        lexical_lookup: dict[str, str | list[str]] | None = None,
     ):
         super().__init__()
         self.encoder = encoder
@@ -40,8 +52,6 @@ class ContrastiveTrainingModule(L.LightningModule):
         self.alpha_gate = alpha_gate
         self.memory_bank = memory_bank
         self.margin_head = margin_head
-        self.lexical_lookup = lexical_lookup
-        self._last_negative_indices: torch.Tensor | None = None
         self.metrics_path = None if config.telemetry.metrics_path is None else Path(config.telemetry.metrics_path)
         self.metrics_logger = CSVLogger(self.metrics_path) if self.metrics_path is not None else None
         self.automatic_optimization = not config.gradient_projection.enabled
@@ -51,11 +61,9 @@ class ContrastiveTrainingModule(L.LightningModule):
         cls,
         encoder: nn.Module,
         config: TrainConfig,
-        *,
-        lexical_lookup: dict[str, str | list[str]] | None = None,
-    ) -> "ContrastiveTrainingModule":
+    ) -> ContrastiveTrainingModule:
         config = resolve_method(config)
-        embedding_dim = int(getattr(encoder, "output_dims"))
+        embedding_dim = int(encoder.output_dims)
         alpha_gate = QueryAlphaGate(embedding_dim, config.alpha_gate) if config.alpha_gate.enabled else None
         memory_bank = ContrastiveMemoryBank(config.memory_bank) if config.memory_bank.enabled else None
         margin_head = (
@@ -70,20 +78,11 @@ class ContrastiveTrainingModule(L.LightningModule):
             alpha_gate=alpha_gate,
             memory_bank=memory_bank,
             margin_head=margin_head,
-            lexical_lookup=lexical_lookup,
         )
 
     @property
     def needs_simcse(self) -> bool:
         return self.config.objective.simcse_dropout_weight > 0.0
-
-    def effective_alpha_mix_weight(self, step: int) -> float:
-        target = float(self.config.alpha_gate.mix_weight)
-        warmup = int(self.config.alpha_gate.mix_weight_warmup_steps)
-        if warmup <= 0:
-            return target
-        progress = min(max(float(step), 0.0) / float(warmup), 1.0)
-        return target * progress
 
     def adjust_loss_for_accumulation(self, loss: torch.Tensor) -> torch.Tensor:
         return loss / max(int(self.config.optimization.grad_acc_steps), 1)
@@ -102,62 +101,6 @@ class ContrastiveTrainingModule(L.LightningModule):
     def _encode_dropout_query_view(self, batch: dict[str, Any]) -> torch.Tensor:
         return self.encoder.encode_queries(batch)
 
-    def _negative_indices(self, batch: dict[str, Any]) -> torch.Tensor:
-        if "doc_key_id" not in batch:
-            batch_size = int(batch["queries"].shape[0] if "queries" in batch else batch["input_ids"].shape[0])
-            indices = torch.arange(batch_size, device=self.device)
-            return torch.roll(indices, shifts=1)
-        indices, _ = sample_safe_negative_indices(
-            doc_key_ids=batch["doc_key_id"],
-            content_key_ids=batch.get("content_key_id"),
-            query_key_ids=batch.get("query_key_id"),
-        )
-        return indices
-
-    def _semantic_pair_scores(
-        self,
-        queries: torch.Tensor,
-        positives: torch.Tensor,
-        batch: dict[str, Any],
-    ) -> torch.Tensor:
-        self._last_negative_indices = self._negative_indices(batch)
-        positive_scores = (queries * positives).sum(dim=-1)
-        negative_scores = (queries * positives[self._last_negative_indices]).sum(dim=-1)
-        return torch.stack((positive_scores, negative_scores), dim=1)
-
-    def _lexical_pair_scores(self, batch: dict[str, Any]) -> torch.Tensor | None:
-        if self.lexical_lookup is None or self._last_negative_indices is None:
-            return None
-        queries = batch.get("query_text")
-        documents = batch.get("content_text")
-        if queries is None or documents is None:
-            tokenizer = getattr(getattr(self.encoder, "processor", None), "tokenizer", None)
-            if tokenizer is None or "input_ids" not in batch or "pos_input_ids" not in batch:
-                return None
-            queries = tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=True)
-            documents = tokenizer.batch_decode(batch["pos_input_ids"], skip_special_tokens=True)
-            queries = [self._remove_text_prefix(text, self.config.model.query_prefix) for text in queries]
-            documents = [self._remove_text_prefix(text, self.config.model.content_prefix) for text in documents]
-        documents = [self.lexical_lookup.get(str(document), str(document)) for document in documents]
-        negative_indices = self._last_negative_indices.detach().cpu().tolist()
-        positive_scores = [inverse_idf_recall(str(query), str(document)) for query, document in zip(queries, documents)]
-        negative_scores = [
-            inverse_idf_recall(str(query), str(documents[negative_idx])) for query, negative_idx in zip(queries, negative_indices)
-        ]
-        return torch.tensor(
-            list(zip(positive_scores, negative_scores)),
-            device=self.device,
-            dtype=torch.float32,
-        )
-
-    @staticmethod
-    def _remove_text_prefix(text: str, prefix: str) -> str:
-        value = str(text).strip()
-        normalized_prefix = str(prefix).strip()
-        if normalized_prefix and value.startswith(normalized_prefix):
-            return value[len(normalized_prefix) :].strip()
-        return value
-
     def _margin_values(self, queries: torch.Tensor) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         margin_config = self.config.memory_bank.margin
         if self.margin_head is not None:
@@ -169,7 +112,7 @@ class ContrastiveTrainingModule(L.LightningModule):
 
     def compute_training_step(self, batch: dict[str, Any], *, step: int) -> ObjectiveOutput:
         queries, positives = self.encoder.encode_pair(batch)
-        alpha = None if self.alpha_gate is None else self.alpha_gate(queries)
+        alpha = None if self.alpha_gate is None else self.alpha_gate(queries.detach())
         query_alt = self._encode_dropout_query_view(batch) if self.needs_simcse else None
         selection = (
             None
@@ -183,14 +126,6 @@ class ContrastiveTrainingModule(L.LightningModule):
         )
         raw_margin, margin = self._margin_values(queries)
 
-        semantic_pair_scores = None
-        lexical_pair_scores = None
-        if alpha is not None:
-            semantic_pair_scores = self._semantic_pair_scores(queries, positives, batch)
-            lexical_pair_scores = self._lexical_pair_scores(batch)
-            if lexical_pair_scores is None:
-                semantic_pair_scores = None
-
         output = self.objective(
             ObjectiveInputs(
                 queries=queries,
@@ -200,10 +135,7 @@ class ContrastiveTrainingModule(L.LightningModule):
                 memory=selection,
                 raw_margin=raw_margin,
                 margin=margin,
-                semantic_pair_scores=semantic_pair_scores,
-                lexical_pair_scores=lexical_pair_scores,
-                alpha_mix_weight=self.effective_alpha_mix_weight(step),
-                alpha_entropy_weight=self.config.alpha_gate.entropy_weight,
+                alpha_supervision_weight=self.config.alpha_gate.supervision_weight,
             ),
             margin_config=(self.config.memory_bank.margin if self.memory_bank is not None else None),
         )
@@ -219,6 +151,10 @@ class ContrastiveTrainingModule(L.LightningModule):
             if alpha is not None:
                 metrics.update(scalar_distribution("alpha", alpha))
                 metrics.update(scalar_distribution("alpha_aux_weight", 1.0 - alpha.detach()))
+            if output.alpha_target is not None:
+                metrics.update(scalar_distribution("alpha_target", output.alpha_target))
+                metrics["alpha/absolute_error_mean"] = float((alpha.detach() - output.alpha_target).abs().mean().item())
+                metrics.update(retrieval_metrics_by_confidence(queries @ positives.T, output.alpha_target))
             if raw_margin is not None:
                 metrics.update(scalar_distribution("margin/raw", raw_margin))
             if margin is not None:
@@ -376,7 +312,7 @@ class ContrastiveTrainingModule(L.LightningModule):
 
         model = getattr(getattr(self.encoder, "model", None), "model", None)
         if not isinstance(model, PeftModel):
-            raise RuntimeError("LoRA is enabled, but the encoder does not contain a PEFT model")
+            raise TypeError("LoRA is enabled, but the encoder does not contain a PEFT model")
         return model
 
     def save_lora_adapter(self, destination: Path) -> Path | None:
@@ -415,9 +351,8 @@ class ContrastiveTrainingModule(L.LightningModule):
         path: Path,
         *,
         encoder: nn.Module,
-        lexical_lookup: dict[str, str | list[str]] | None = None,
         map_location: str | torch.device = "cpu",
-    ) -> tuple["ContrastiveTrainingModule", list[dict[str, object]]]:
+    ) -> tuple[ContrastiveTrainingModule, list[dict[str, object]]]:
         payload = torch.load(path, map_location=map_location)
         if payload.get("schema_version") != 1:
             raise ValueError(f"Unsupported research checkpoint schema: {payload.get('schema_version')!r}")
@@ -428,6 +363,6 @@ class ContrastiveTrainingModule(L.LightningModule):
             experiment_config["role"] = "ablation"
             resolved_config["experiment"] = experiment_config
         config = parse_train_config(resolved_config)
-        module = cls.build(encoder, config, lexical_lookup=lexical_lookup)
+        module = cls.build(encoder, config)
         module.load_state_dict(payload["state_dict"], strict=True)
         return module, list(payload.get("optimizer_states", []))
