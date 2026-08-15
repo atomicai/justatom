@@ -96,6 +96,8 @@ class ContrastiveMemoryBank:
         metrics.update(scalar_distribution("memory/active_count", torch.zeros(1)))
         metrics.update(scalar_distribution("memory/active_similarity", torch.empty(0)))
         metrics.update(scalar_distribution("memory/candidate_mass_weight", torch.empty(0)))
+        metrics.update(scalar_distribution("memory/collision_g", torch.empty(0)))
+        metrics.update(scalar_distribution("memory/hard_weight", torch.empty(0)))
         return metrics
 
     def _noop_selection(self) -> MemorySelection:

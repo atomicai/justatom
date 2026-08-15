@@ -204,6 +204,27 @@ def test_metric_columns_are_stable_across_mass_warmup():
     assert set(before.metrics) == set(after.metrics)
 
 
+def test_adaptive_metric_columns_are_stable_across_mass_warmup():
+    bank = ContrastiveMemoryBank(
+        MemoryBankConfig(
+            enabled=True,
+            size=8,
+            warmup_steps=1,
+            mining="random",
+            random_negatives=2,
+            mass_ratio=0.5,
+            mass_ramp_steps=1,
+            adaptive=AdaptiveBankConfig(enabled=True),
+        )
+    )
+    vectors = F.normalize(torch.randn(4, 3), dim=-1)
+    bank.enqueue(vectors, {"doc_key_id": torch.arange(4)})
+    batch = {"doc_key_id": torch.tensor([10, 11])}
+    before = bank.select(batch, query_vectors=vectors[:2], positive_vectors=vectors[:2], step=0)
+    after = bank.select(batch, query_vectors=vectors[:2], positive_vectors=vectors[:2], step=1)
+    assert set(before.metrics) == set(after.metrics)
+
+
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")
 def test_normalized_weights_are_finite_on_mps():
     bank = ContrastiveMemoryBank(
