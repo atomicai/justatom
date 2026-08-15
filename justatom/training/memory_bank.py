@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -76,10 +77,13 @@ class ContrastiveMemoryBank:
         return 0 if self.embeddings is None else int(self.embeddings.shape[0])
 
     def _base_metrics(self) -> dict[str, float | str]:
-        return {
+        metrics: dict[str, float | str] = {
             "memory/capacity": float(self.config.size),
             "memory/size": float(self.current_size),
             "memory/warmup_steps": float(self.config.warmup_steps),
+            "memory/mass_ratio": float(self.config.mass_ratio),
+            "memory/mass_ramp": 0.0,
+            "memory/effective_mass_ratio": 0.0,
             "memory/mining": self.config.mining,
             "memory/hard_k": 0.0,
             "memory/random_k": 0.0,
@@ -87,7 +91,12 @@ class ContrastiveMemoryBank:
             "memory/active_negatives_mean": 0.0,
             "memory/active_hard_negatives_mean": 0.0,
             "memory/active_random_negatives_mean": 0.0,
+            "memory/positive_similarity_mean": float("nan"),
         }
+        metrics.update(scalar_distribution("memory/active_count", torch.zeros(1)))
+        metrics.update(scalar_distribution("memory/active_similarity", torch.empty(0)))
+        metrics.update(scalar_distribution("memory/candidate_mass_weight", torch.empty(0)))
+        return metrics
 
     def _noop_selection(self) -> MemorySelection:
         return MemorySelection(
@@ -99,6 +108,15 @@ class ContrastiveMemoryBank:
             metrics=self._base_metrics(),
         )
 
+    def _mass_progress(self, step: int) -> float:
+        if step < self.config.warmup_steps:
+            return 0.0
+        offset = int(step) - self.config.warmup_steps + 1
+        return min(max(offset / float(self.config.mass_ramp_steps), 0.0), 1.0)
+
+    def _effective_mass_ratio(self, step: int) -> float:
+        return float(self.config.mass_ratio) * self._mass_progress(step)
+
     @torch.no_grad()
     def select(
         self,
@@ -108,7 +126,9 @@ class ContrastiveMemoryBank:
         positive_vectors: torch.Tensor,
         step: int,
     ) -> MemorySelection:
-        if not self.enabled or self.embeddings is None or self.current_size == 0 or int(step) < self.config.warmup_steps:
+        if self._effective_mass_ratio(step) == 0.0:
+            return self._noop_selection()
+        if not self.enabled or self.embeddings is None or self.current_size == 0:
             return self._noop_selection()
         if query_vectors.ndim != 2 or positive_vectors.shape != query_vectors.shape:
             raise ValueError("query_vectors and positive_vectors must have matching [batch, dim] shapes")
@@ -145,11 +165,15 @@ class ContrastiveMemoryBank:
                 active |= random_active
             active &= valid
 
-        log_weights = None
+        candidate_log_weights = None
         if hard_weights is not None:
-            log_weights = torch.zeros_like(bank_similarities)
+            candidate_log_weights = torch.zeros_like(bank_similarities)
             row_weights = torch.log(hard_weights.clamp_min(1e-8)).view(-1, 1)
-            log_weights = torch.where(hard_active, row_weights.expand_as(log_weights), log_weights)
+            candidate_log_weights = torch.where(
+                hard_active,
+                row_weights.expand_as(candidate_log_weights),
+                candidate_log_weights,
+            )
 
         metrics = self._selection_metrics(
             valid=valid,
@@ -163,14 +187,56 @@ class ContrastiveMemoryBank:
             hard_k=hard_k,
             random_k=random_k,
         )
+        log_weights, mass_metrics = self._normalized_log_weights(active, candidate_log_weights, step=step)
+        metrics.update(mass_metrics)
         return MemorySelection(
             embeddings=embeddings,
             active_mask=active,
-            log_weights=log_weights,
+            log_weights=log_weights.to(dtype=query_vectors.dtype),
             collision_g=collision_g,
             hard_weights=hard_weights,
             metrics=metrics,
         )
+
+    def _normalized_log_weights(
+        self,
+        active: torch.Tensor,
+        candidate_log_weights: torch.Tensor | None,
+        *,
+        step: int,
+    ) -> tuple[torch.Tensor, dict[str, float | str]]:
+        batch_size = int(active.shape[0])
+        if batch_size < 2:
+            raise ValueError("memory bank requires contrastive batch size >= 2")
+        counts = active.sum(dim=1)
+        safe_counts = counts.clamp_min(1).float()
+        ratio = self._effective_mass_ratio(step)
+        if ratio == 0.0:
+            normalized = torch.zeros(active.shape, device=active.device, dtype=safe_counts.dtype)
+        else:
+            row_log_weight = math.log(ratio) + math.log(batch_size - 1) - safe_counts.log()
+            normalized = torch.where(
+                active,
+                row_log_weight.view(-1, 1).expand_as(active),
+                torch.zeros(active.shape, device=active.device, dtype=row_log_weight.dtype),
+            )
+            if candidate_log_weights is not None:
+                normalized = normalized + torch.where(
+                    active,
+                    candidate_log_weights.to(normalized),
+                    torch.zeros_like(normalized),
+                )
+
+        metrics = self._base_metrics()
+        metrics.update(
+            {
+                "memory/mass_ramp": self._mass_progress(step),
+                "memory/effective_mass_ratio": ratio,
+            }
+        )
+        metrics.update(scalar_distribution("memory/active_count", counts))
+        metrics.update(scalar_distribution("memory/candidate_mass_weight", normalized[active].exp()))
+        return normalized, metrics
 
     def _valid_identity_mask(
         self,
@@ -285,7 +351,7 @@ class ContrastiveMemoryBank:
             max((step - self.config.hard_warmup_steps) / float(self.config.hard_ramp_steps), 0.0),
             1.0,
         )
-        return int(round(float(self.config.hard_negatives) * progress))
+        return round(float(self.config.hard_negatives) * progress)
 
     @staticmethod
     def _topk_mask(scores: torch.Tensor, valid: torch.Tensor, k: int) -> torch.Tensor:
