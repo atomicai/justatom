@@ -469,7 +469,7 @@ def test_live_bank_objective_decomposes_for_ordinary_and_projected_controls(grad
 @pytest.mark.parametrize(
     ("documents", "expect_conflict"),
     [
-        (torch.eye(2), True),
+        (torch.tensor([[1.0, 0.0], [0.0, -1.0]]), True),
         (torch.tensor([[0.0, 1.0], [1.0, 0.0]]), False),
     ],
     ids=["conflicting", "aligned"],
@@ -549,16 +549,18 @@ def test_projected_optimization_step_applies_live_bank_update_direction(
         [((old - parameter.detach()) / learning_rate).reshape(-1) for old, parameter in zip(before, parameters)]
     )
     assert metrics["gradient/conflict"] == float(expect_conflict)
+    memory_weight = float(module.config.gradient_projection.memory_weight)
     if expect_conflict:
         assert raw_dot < 0.0
-        projected_memory = applied - primary
-        assert torch.dot(primary, projected_memory).item() == pytest.approx(0.0, abs=1e-6)
-        assert torch.dot(primary, applied) > 0.0
-        assert not torch.allclose(applied, primary + memory)
+        primary_squared_norm = torch.dot(primary, primary)
+        assert primary_squared_norm > 0.0
+        projected_memory = memory - (raw_dot / primary_squared_norm) * primary
+        assert torch.linalg.vector_norm(projected_memory) > 1e-4
+        expected_applied = primary + memory_weight * projected_memory
     else:
         assert raw_dot > 0.0
-        torch.testing.assert_close(applied, primary + memory, atol=1e-6, rtol=1e-5)
-        assert torch.dot(primary, applied) > 0.0
+        expected_applied = primary + memory_weight * memory
+    torch.testing.assert_close(applied, expected_applied, atol=1e-6, rtol=1e-5)
 
 
 def test_lightning_atomic_manual_optimization_steps_with_live_bank(tmp_path):
