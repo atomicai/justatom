@@ -380,6 +380,33 @@ def test_lightning_automatic_optimization_keeps_tau_version_valid(tmp_path):
     assert torch.isfinite(module.objective.kernel.log_tau)
 
 
+@pytest.mark.parametrize("gradient_projection", [False, True])
+def test_live_bank_objective_decomposes_for_ordinary_and_projected_controls(gradient_projection):
+    atomic = canonical_method_config(TrainingMethod.ATOMIC)
+    memory_bank = replace(atomic.memory_bank, size=8, warmup_steps=0, random_negatives=1)
+    if gradient_projection:
+        config = replace(atomic, memory_bank=memory_bank)
+    else:
+        vanilla = canonical_method_config(TrainingMethod.VANILLA)
+        config = replace(
+            vanilla,
+            experiment=ExperimentConfig(role=ExperimentRole.ABLATION, seed=42),
+            memory_bank=replace(memory_bank, margin=replace(memory_bank.margin, mode=MarginMode.OFF)),
+        )
+    module = ContrastiveTrainingModule.build(TinyEncoder(), config)
+    first = tiny_batch()
+    second = {key: value.clone() for key, value in first.items()}
+    for key in ("doc_key_id", "content_key_id", "query_key_id"):
+        second[key] += 100
+
+    module.compute_training_step(first, step=0)
+    output = module.compute_training_step(second, step=1)
+
+    assert output.memory_loss is not None
+    torch.testing.assert_close(output.loss, output.primary_loss + output.memory_loss)
+    assert torch.isfinite(output.loss)
+
+
 def test_lightning_atomic_manual_optimization_steps_with_live_bank(tmp_path):
     config = canonical_method_config(TrainingMethod.ATOMIC)
     config = replace(

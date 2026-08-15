@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+
+import pytest
 import torch
 import torch.nn.functional as F
 
@@ -192,6 +195,81 @@ def test_objective_atomic_forwards_bank_columns_and_live_margin():
 
     assert margin.grad is not None and float(margin.grad.abs().sum()) > 0.0
     assert output.metrics["memory/active_negatives_mean"] == 3.0
+
+
+def test_normalized_bank_loss_is_invariant_to_duplicate_count():
+    objective = ContrastiveObjective(
+        ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False)
+    )
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.0, 1.0]]), dim=-1)
+    p = q.clone()
+    vector = F.normalize(torch.tensor([[1.0, 1.0]]), dim=-1)
+
+    def output_for(count):
+        weight = 0.5 * (q.shape[0] - 1) / count
+        memory = MemorySelection(
+            embeddings=vector.repeat(count, 1),
+            active_mask=torch.ones(2, count, dtype=torch.bool),
+            log_weights=torch.full((2, count), math.log(weight)),
+            collision_g=None,
+            hard_weights=None,
+            metrics={},
+        )
+        return objective(ObjectiveInputs(queries=q, positives=p, memory=memory))
+
+    one, four = output_for(1), output_for(4)
+
+    torch.testing.assert_close(one.loss, four.loss)
+    torch.testing.assert_close(one.memory_per_row, four.memory_per_row)
+    torch.testing.assert_close(one.loss, one.primary_loss + one.memory_loss)
+    torch.testing.assert_close(four.loss, four.primary_loss + four.memory_loss)
+    assert torch.isfinite(one.loss)
+    assert torch.isfinite(four.loss)
+
+
+def test_row_without_valid_bank_candidates_equals_main_loss():
+    objective = ContrastiveObjective(
+        ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False)
+    )
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.0, 1.0]]), dim=-1)
+    p = q.clone()
+    memory = MemorySelection(
+        embeddings=F.normalize(torch.tensor([[1.0, 1.0]]), dim=-1),
+        active_mask=torch.zeros(2, 1, dtype=torch.bool),
+        log_weights=torch.zeros(2, 1),
+        collision_g=None,
+        hard_weights=None,
+        metrics={},
+    )
+
+    plain = objective(ObjectiveInputs(queries=q, positives=p))
+    empty = objective(ObjectiveInputs(queries=q, positives=p, memory=memory))
+
+    torch.testing.assert_close(empty.loss, plain.loss)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")
+def test_normalized_bank_objective_gradients_are_finite_on_mps():
+    objective = ContrastiveObjective(
+        ObjectiveConfig(temperature=0.05, learnable_temperature=True, decoupled=False)
+    ).to("mps")
+    q = F.normalize(torch.randn(2, 4, device="mps"), dim=-1).requires_grad_()
+    p = F.normalize(torch.randn(2, 4, device="mps"), dim=-1).requires_grad_()
+    memory = MemorySelection(
+        embeddings=F.normalize(torch.randn(3, 4, device="mps"), dim=-1),
+        active_mask=torch.tensor([[True, True, False], [True, False, True]], device="mps"),
+        log_weights=torch.full((2, 3), math.log(0.25), device="mps"),
+        collision_g=None,
+        hard_weights=None,
+        metrics={},
+    )
+
+    output = objective(ObjectiveInputs(queries=q, positives=p, memory=memory))
+    output.loss.backward()
+
+    assert torch.isfinite(output.loss)
+    assert q.grad is not None and torch.isfinite(q.grad).all()
+    assert p.grad is not None and torch.isfinite(p.grad).all()
 
 
 def test_objective_rejects_alpha_without_auxiliary_view():
