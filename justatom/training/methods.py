@@ -21,7 +21,7 @@ def canonical_method_config(method: TrainingMethod | str) -> TrainConfig:
         return TrainConfig(method=method, objective=objective)
 
     atom_gate_objective = replace(objective, simcse_dropout_weight=0.1)
-    alpha_gate = AlphaGateConfig(enabled=True, mix_weight=0.3)
+    alpha_gate = AlphaGateConfig(enabled=True, supervision_weight=0.3)
     if method is TrainingMethod.ATOM_GATE:
         return TrainConfig(method=method, objective=atom_gate_objective, alpha_gate=alpha_gate)
 

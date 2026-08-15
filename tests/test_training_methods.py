@@ -18,6 +18,9 @@ def test_canonical_profiles_have_exact_structural_components():
     assert not atomic.objective.decoupled
     assert not vanilla.alpha_gate.enabled and not vanilla.memory_bank.enabled
     assert gate.alpha_gate.enabled and not gate.memory_bank.enabled
+    assert gate.alpha_gate.supervision_weight == pytest.approx(0.3)
+    assert not hasattr(gate.alpha_gate, "mix_weight")
+    assert not hasattr(gate.objective, "pairwise_margin")
     assert not atomic.alpha_gate.enabled and atomic.memory_bank.enabled
     assert atomic.gradient_projection.enabled
     assert not atomic.objective.decoupled

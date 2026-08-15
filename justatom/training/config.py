@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
@@ -90,7 +91,6 @@ class ObjectiveConfig:
     temperature: float = 0.05
     learnable_temperature: bool = True
     decoupled: bool = True
-    pairwise_margin: float = 0.5
     simcse_dropout_weight: float = 0.0
     soft_fn_attract_weight: float = 0.0
     soft_fn_topk: int = 1
@@ -107,9 +107,7 @@ class AlphaHeadConfig:
 @dataclass(frozen=True)
 class AlphaGateConfig:
     enabled: bool = False
-    mix_weight: float = 0.3
-    mix_weight_warmup_steps: int = 0
-    entropy_weight: float = 0.0
+    supervision_weight: float = 0.3
     head: AlphaHeadConfig = field(default_factory=AlphaHeadConfig)
 
 
@@ -306,6 +304,8 @@ def _require_int(value: Any, path: str, minimum: int | None = None) -> None:
 def _require_number(value: Any, path: str, minimum: float | None = None, maximum: float | None = None) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{path} must be a number")
+    if not math.isfinite(float(value)):
+        raise ValueError(f"{path} must be finite")
     if minimum is not None and value < minimum:
         raise ValueError(f"{path} must be >= {minimum}")
     if maximum is not None and value > maximum:
@@ -358,15 +358,12 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_number(config.objective.temperature, "objective.temperature", 1e-12)
     _require_bool(config.objective.learnable_temperature, "objective.learnable_temperature")
     _require_bool(config.objective.decoupled, "objective.decoupled")
-    _require_number(config.objective.pairwise_margin, "objective.pairwise_margin", 0.0)
     _require_number(config.objective.simcse_dropout_weight, "objective.simcse_dropout_weight", 0.0)
     _require_number(config.objective.soft_fn_attract_weight, "objective.soft_fn_attract_weight", 0.0)
     _require_int(config.objective.soft_fn_topk, "objective.soft_fn_topk", 1)
 
     _require_bool(config.alpha_gate.enabled, "alpha_gate.enabled")
-    _require_number(config.alpha_gate.mix_weight, "alpha_gate.mix_weight", 0.0, 1.0)
-    _require_int(config.alpha_gate.mix_weight_warmup_steps, "alpha_gate.mix_weight_warmup_steps", 0)
-    _require_number(config.alpha_gate.entropy_weight, "alpha_gate.entropy_weight", 0.0)
+    _require_number(config.alpha_gate.supervision_weight, "alpha_gate.supervision_weight", 0.0)
     _require_int(config.alpha_gate.head.layers, "alpha_gate.head.layers", 1)
     if config.alpha_gate.head.hidden_dim is not None:
         _require_int(config.alpha_gate.head.hidden_dim, "alpha_gate.head.hidden_dim", 1)

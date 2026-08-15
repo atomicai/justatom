@@ -25,6 +25,32 @@ def test_parse_train_config_builds_typed_atomic_config():
     assert not config.objective.decoupled
 
 
+def test_alpha_supervision_schema_round_trips():
+    config = parse_train_config(
+        {"method": "atom_gate", "alpha_gate": {"supervision_weight": 0.4}}
+    )
+    payload = train_config_to_dict(config)
+
+    assert config.alpha_gate.supervision_weight == pytest.approx(0.4)
+    assert "mix_weight" not in payload["alpha_gate"]
+    assert "pairwise_margin" not in payload["objective"]
+    assert parse_train_config(payload) == config
+
+
+@pytest.mark.parametrize("field", ["mix_weight", "mix_weight_warmup_steps", "entropy_weight"])
+def test_retired_alpha_fields_are_rejected(field):
+    with pytest.raises(ValueError, match=rf"unknown configuration field: alpha_gate\.{field}"):
+        parse_train_config({"method": "atom_gate", "alpha_gate": {field: 0}})
+
+
+@pytest.mark.parametrize("value", [-0.1, float("nan"), float("inf")])
+def test_alpha_supervision_weight_is_finite_and_non_negative(value):
+    with pytest.raises(ValueError, match=r"alpha_gate\.supervision_weight"):
+        parse_train_config(
+            {"method": "atom_gate", "alpha_gate": {"supervision_weight": value}}
+        )
+
+
 def test_parse_train_config_rejects_unknown_nested_field():
     with pytest.raises(ValueError, match=r"memory_bank\.mystery"):
         parse_train_config(
