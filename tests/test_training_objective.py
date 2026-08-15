@@ -235,7 +235,7 @@ def test_row_without_valid_bank_candidates_equals_main_loss():
     p = q.clone()
     memory = MemorySelection(
         embeddings=F.normalize(torch.tensor([[1.0, 1.0]]), dim=-1),
-        active_mask=torch.zeros(2, 1, dtype=torch.bool),
+        active_mask=torch.tensor([[True], [False]]),
         log_weights=torch.zeros(2, 1),
         collision_g=None,
         hard_weights=None,
@@ -243,9 +243,15 @@ def test_row_without_valid_bank_candidates_equals_main_loss():
     )
 
     plain = objective(ObjectiveInputs(queries=q, positives=p))
-    empty = objective(ObjectiveInputs(queries=q, positives=p, memory=memory))
+    augmented = objective(ObjectiveInputs(queries=q, positives=p, memory=memory))
 
-    torch.testing.assert_close(empty.loss, plain.loss)
+    assert augmented.memory_per_row is not None
+    assert augmented.memory_per_row[0] > 0.0
+    assert torch.equal(augmented.memory_per_row[1], torch.zeros_like(augmented.memory_per_row[1]))
+    torch.testing.assert_close(
+        augmented.main_per_row[1] + augmented.memory_per_row[1],
+        plain.main_per_row[1],
+    )
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")
@@ -270,6 +276,7 @@ def test_normalized_bank_objective_gradients_are_finite_on_mps():
     assert torch.isfinite(output.loss)
     assert q.grad is not None and torch.isfinite(q.grad).all()
     assert p.grad is not None and torch.isfinite(p.grad).all()
+    assert objective.kernel.log_tau.grad is not None and torch.isfinite(objective.kernel.log_tau.grad).all()
 
 
 def test_objective_rejects_alpha_without_auxiliary_view():
