@@ -11,7 +11,14 @@ from torch import nn
 
 from justatom.logging.io import CSVLogger
 from justatom.training.alpha_gate import QueryAlphaGate
-from justatom.training.config import MarginMode, TrainConfig, parse_train_config, train_config_to_dict
+from justatom.training.auxiliary_gradient import control_auxiliary_gradients
+from justatom.training.config import (
+    AuxiliaryGradientMode,
+    MarginMode,
+    TrainConfig,
+    parse_train_config,
+    train_config_to_dict,
+)
 from justatom.training.gradient_projection import project_conflicting_gradients
 from justatom.training.memory_bank import ContrastiveMemoryBank, QueryMarginHead
 from justatom.training.methods import resolve_method
@@ -46,7 +53,9 @@ class ContrastiveTrainingModule(L.LightningModule):
         self.margin_head = margin_head
         self.metrics_path = None if config.telemetry.metrics_path is None else Path(config.telemetry.metrics_path)
         self.metrics_logger = CSVLogger(self.metrics_path) if self.metrics_path is not None else None
-        self.automatic_optimization = not config.gradient_projection.enabled
+        self.automatic_optimization = not (
+            config.gradient_projection.enabled or config.auxiliary_gradient.mode is not AuxiliaryGradientMode.OFF
+        )
 
     @classmethod
     def build(
@@ -214,6 +223,60 @@ class ContrastiveTrainingModule(L.LightningModule):
             self.objective.kernel.clamp_temperature_()
         return stats.metrics()
 
+    def _auxiliary_control_optimization_step(
+        self,
+        output: ObjectiveOutput,
+        batch_idx: int,
+    ) -> dict[str, float]:
+        optimizer = self.optimizers()
+        parameters = self._optimizer_parameters(optimizer)
+        accumulated = self._capture_gradients(parameters)
+        optimizer.zero_grad()
+
+        retrieval_loss = self.adjust_loss_for_accumulation(output.retrieval_loss)
+        if retrieval_loss.requires_grad:
+            self.manual_backward(retrieval_loss, retain_graph=True)
+        retrieval_gradients = self._capture_gradients(parameters)
+        optimizer.zero_grad()
+
+        auxiliary_loss = self.adjust_loss_for_accumulation(output.auxiliary_loss)
+        if auxiliary_loss.requires_grad:
+            self.manual_backward(auxiliary_loss)
+        auxiliary_gradients = self._capture_gradients(parameters)
+        optimizer.zero_grad()
+
+        head_loss = self.adjust_loss_for_accumulation(output.head_loss)
+        if head_loss.requires_grad:
+            self.manual_backward(head_loss)
+        head_gradients = self._capture_gradients(parameters)
+        optimizer.zero_grad()
+
+        controlled_auxiliary, stats = control_auxiliary_gradients(
+            retrieval_gradients,
+            auxiliary_gradients,
+            mode=self.config.auxiliary_gradient.mode,
+            max_norm_ratio=self.config.auxiliary_gradient.max_norm_ratio,
+            eps=self.config.auxiliary_gradient.eps,
+        )
+        for parameter, previous, retrieval, auxiliary, head in zip(
+            parameters,
+            accumulated,
+            retrieval_gradients,
+            controlled_auxiliary,
+            head_gradients,
+        ):
+            combined = previous
+            for gradient in (retrieval, auxiliary, head):
+                if gradient is not None:
+                    combined = gradient if combined is None else combined + gradient
+            parameter.grad = combined
+
+        if self.should_step_optimizer(batch_idx):
+            optimizer.step()
+            optimizer.zero_grad()
+            self.objective.kernel.clamp_temperature_()
+        return stats.metrics()
+
     def _log_training_metrics(self, metrics: dict[str, Any]) -> None:
         resolved = resolve_metric_tensors(metrics)
         numeric_metrics = {key: value for key, value in resolved.items() if isinstance(value, (int, float))}
@@ -233,6 +296,8 @@ class ContrastiveTrainingModule(L.LightningModule):
         metrics: dict[str, Any] = dict(output.metrics)
         if self.config.gradient_projection.enabled:
             metrics.update(self._projected_optimization_step(output, batch_idx))
+        elif self.config.auxiliary_gradient.mode is not AuxiliaryGradientMode.OFF:
+            metrics.update(self._auxiliary_control_optimization_step(output, batch_idx))
         self._log_training_metrics(metrics)
         return output.loss.detach() if not self.automatic_optimization else output.loss
 

@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from justatom.training.config import ExperimentRole, TrainingMethod
+from justatom.training.config import (
+    AuxiliaryGradientConfig,
+    AuxiliaryGradientMode,
+    ExperimentRole,
+    TrainingMethod,
+)
 from justatom.training.job import RunManifest, TrainingJob, artifact_paths, build_lightning_trainer, write_run_manifest
 from justatom.training.methods import canonical_method_config
 
@@ -105,14 +110,28 @@ def test_artifact_directories_are_distinct(tmp_path: Path):
     assert paths.manifest == tmp_path / "run_manifest.yaml"
 
 
-def test_atomic_trainer_delegates_gradient_accumulation_to_manual_optimization():
+def test_trainer_delegates_gradient_accumulation_to_either_manual_optimization_path():
     atomic = canonical_method_config(TrainingMethod.ATOMIC)
     atomic = replace(atomic, optimization=replace(atomic.optimization, grad_acc_steps=4))
     vanilla = canonical_method_config(TrainingMethod.VANILLA)
     vanilla = replace(vanilla, optimization=replace(vanilla.optimization, grad_acc_steps=4))
+    atom_gate = canonical_method_config(TrainingMethod.ATOM_GATE)
+    atom_gate = replace(atom_gate, optimization=replace(atom_gate.optimization, grad_acc_steps=4))
+    observe = replace(
+        atom_gate,
+        experiment=replace(atom_gate.experiment, role=ExperimentRole.ABLATION),
+        auxiliary_gradient=AuxiliaryGradientConfig(mode=AuxiliaryGradientMode.OBSERVE),
+    )
+    safe = replace(
+        observe,
+        auxiliary_gradient=AuxiliaryGradientConfig(mode=AuxiliaryGradientMode.SAFE),
+    )
 
     assert build_lightning_trainer(atomic).accumulate_grad_batches == 1
+    assert build_lightning_trainer(observe).accumulate_grad_batches == 1
+    assert build_lightning_trainer(safe).accumulate_grad_batches == 1
     assert build_lightning_trainer(vanilla).accumulate_grad_batches == 4
+    assert build_lightning_trainer(atom_gate).accumulate_grad_batches == 4
 
 
 def test_training_job_writes_manifest_before_fit_and_returns_artifacts(tmp_path: Path):

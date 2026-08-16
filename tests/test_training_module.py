@@ -10,7 +10,15 @@ from torch.utils.data import DataLoader
 
 from justatom.training import telemetry
 from justatom.training.alpha_gate import QueryAlphaGate
-from justatom.training.config import ExperimentConfig, ExperimentRole, MarginMode, TrainingMethod, train_config_to_dict
+from justatom.training.config import (
+    AuxiliaryGradientConfig,
+    AuxiliaryGradientMode,
+    ExperimentConfig,
+    ExperimentRole,
+    MarginMode,
+    TrainingMethod,
+    train_config_to_dict,
+)
 from justatom.training.methods import canonical_method_config
 from justatom.training.module import ContrastiveTrainingModule
 from justatom.training.objective import ObjectiveOutput
@@ -83,6 +91,81 @@ def finite_output():
     )
 
 
+def auxiliary_control_config(
+    mode: AuxiliaryGradientMode,
+    *,
+    max_norm_ratio: float = 0.25,
+    grad_acc_steps: int = 1,
+):
+    config = canonical_method_config(TrainingMethod.ATOM_GATE)
+    return replace(
+        config,
+        experiment=replace(config.experiment, role=ExperimentRole.ABLATION),
+        optimization=replace(config.optimization, grad_acc_steps=grad_acc_steps),
+        auxiliary_gradient=AuxiliaryGradientConfig(
+            mode=mode,
+            max_norm_ratio=max_norm_ratio,
+        ),
+    )
+
+
+def scalar_gradient_output(
+    shared: nn.Parameter,
+    head: nn.Parameter,
+    *,
+    retrieval_gradient: list[float],
+    auxiliary_gradient: list[float],
+    head_gradient: float,
+) -> ObjectiveOutput:
+    shared_features = shared.square()
+    retrieval_loss = torch.dot(shared_features, shared.new_tensor(retrieval_gradient) / 2.0)
+    auxiliary_loss = torch.dot(shared_features, shared.new_tensor(auxiliary_gradient) / 2.0)
+    head_loss = head.square().sum() * (head_gradient / 2.0)
+    primary_loss = retrieval_loss + auxiliary_loss + head_loss
+    return ObjectiveOutput(
+        loss=primary_loss,
+        primary_loss=primary_loss,
+        memory_loss=None,
+        retrieval_loss=retrieval_loss,
+        auxiliary_loss=auxiliary_loss,
+        head_loss=head_loss,
+        main_per_row=retrieval_loss.detach().view(1),
+        memory_per_row=None,
+        simcse_per_row=None,
+        soft_fn_per_row=None,
+        alpha_target=None,
+        alpha_supervision_per_row=None,
+        metrics={},
+    )
+
+
+def manual_gradient_module(
+    monkeypatch,
+    mode: AuxiliaryGradientMode,
+    *,
+    max_norm_ratio: float = 0.25,
+    grad_acc_steps: int = 1,
+):
+    module = ContrastiveTrainingModule.build(
+        TinyEncoder(),
+        auxiliary_control_config(
+            mode,
+            max_norm_ratio=max_norm_ratio,
+            grad_acc_steps=grad_acc_steps,
+        ),
+    )
+    shared = nn.Parameter(torch.ones(2))
+    head = nn.Parameter(torch.ones(1))
+    optimizer = torch.optim.SGD([shared, head], lr=0.1)
+    monkeypatch.setattr(module, "optimizers", lambda: optimizer)
+    monkeypatch.setattr(
+        module,
+        "manual_backward",
+        lambda loss, retain_graph=False: loss.backward(retain_graph=retain_graph),
+    )
+    return module, shared, head, optimizer
+
+
 def test_module_constructs_only_components_required_by_method():
     vanilla = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.VANILLA))
     gate = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.ATOM_GATE))
@@ -93,6 +176,20 @@ def test_module_constructs_only_components_required_by_method():
     assert atomic.alpha_gate is None and atomic.memory_bank is not None and atomic.margin_head is None
     assert atomic.config.gradient_projection.enabled
     assert atomic.automatic_optimization is False
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_automatic"),
+    [
+        (AuxiliaryGradientMode.OFF, True),
+        (AuxiliaryGradientMode.OBSERVE, False),
+        (AuxiliaryGradientMode.SAFE, False),
+    ],
+)
+def test_atom_gate_auxiliary_gradient_mode_selects_optimization_path(mode, expected_automatic):
+    module = ContrastiveTrainingModule.build(TinyEncoder(), auxiliary_control_config(mode))
+
+    assert module.automatic_optimization is expected_automatic
 
 
 def test_load_schema_v1_checkpoint_migrates_historical_canonical_dcl_to_ablation(tmp_path, monkeypatch):
@@ -581,6 +678,108 @@ def test_projected_optimization_step_applies_live_bank_update_direction(
         assert raw_dot > 0.0
         expected_applied = primary + memory_weight * memory
     torch.testing.assert_close(applied, expected_applied, atol=1e-6, rtol=1e-5)
+
+
+def test_auxiliary_control_step_caps_aligned_safe_gradient_and_preserves_head(
+    monkeypatch,
+):
+    module, shared, head, _optimizer = manual_gradient_module(monkeypatch, AuxiliaryGradientMode.SAFE)
+    monkeypatch.setattr(module, "should_step_optimizer", lambda _batch_idx: False)
+    output = scalar_gradient_output(
+        shared,
+        head,
+        retrieval_gradient=[1.0, 0.0],
+        auxiliary_gradient=[2.0, 0.0],
+        head_gradient=3.0,
+    )
+    monkeypatch.setattr(module, "compute_training_step", lambda _batch, step: output)
+    monkeypatch.setattr(module, "_log_training_metrics", lambda _metrics: None)
+
+    step_loss = module.training_step({}, batch_idx=0)
+
+    torch.testing.assert_close(shared.grad, torch.tensor([1.25, 0.0]))
+    torch.testing.assert_close(head.grad, torch.tensor([3.0]))
+    assert not step_loss.requires_grad
+
+
+def test_auxiliary_control_step_suppresses_conflict_and_preserves_head(
+    monkeypatch,
+):
+    module, shared, head, _optimizer = manual_gradient_module(monkeypatch, AuxiliaryGradientMode.SAFE)
+    monkeypatch.setattr(module, "should_step_optimizer", lambda _batch_idx: False)
+    output = scalar_gradient_output(
+        shared,
+        head,
+        retrieval_gradient=[1.0, 0.0],
+        auxiliary_gradient=[-2.0, 0.0],
+        head_gradient=3.0,
+    )
+
+    module._auxiliary_control_optimization_step(output, batch_idx=0)
+
+    torch.testing.assert_close(shared.grad, torch.tensor([1.0, 0.0]))
+    torch.testing.assert_close(head.grad, torch.tensor([3.0]))
+
+
+def test_auxiliary_control_step_observe_preserves_all_gradients(monkeypatch):
+    module, shared, head, _optimizer = manual_gradient_module(monkeypatch, AuxiliaryGradientMode.OBSERVE)
+    monkeypatch.setattr(module, "should_step_optimizer", lambda _batch_idx: False)
+    output = scalar_gradient_output(
+        shared,
+        head,
+        retrieval_gradient=[1.0, 2.0],
+        auxiliary_gradient=[3.0, -1.0],
+        head_gradient=4.0,
+    )
+
+    module._auxiliary_control_optimization_step(output, batch_idx=0)
+
+    torch.testing.assert_close(shared.grad, torch.tensor([4.0, 1.0]))
+    torch.testing.assert_close(head.grad, torch.tensor([4.0]))
+
+
+def test_auxiliary_control_step_accumulates_controlled_microbatches_before_one_step(
+    monkeypatch,
+):
+    module, shared, head, optimizer = manual_gradient_module(
+        monkeypatch,
+        AuxiliaryGradientMode.SAFE,
+        grad_acc_steps=2,
+    )
+    step_gradients: list[list[torch.Tensor | None]] = []
+
+    def record_step():
+        step_gradients.append(module._capture_gradients([shared, head]))
+
+    monkeypatch.setattr(optimizer, "step", record_step)
+
+    first = scalar_gradient_output(
+        shared,
+        head,
+        retrieval_gradient=[1.0, 0.0],
+        auxiliary_gradient=[2.0, 0.0],
+        head_gradient=3.0,
+    )
+    module._auxiliary_control_optimization_step(first, batch_idx=0)
+
+    assert step_gradients == []
+    torch.testing.assert_close(shared.grad, torch.tensor([0.625, 0.0]))
+    torch.testing.assert_close(head.grad, torch.tensor([1.5]))
+
+    second = scalar_gradient_output(
+        shared,
+        head,
+        retrieval_gradient=[1.0, 0.0],
+        auxiliary_gradient=[2.0, 0.0],
+        head_gradient=3.0,
+    )
+    module._auxiliary_control_optimization_step(second, batch_idx=1)
+
+    assert len(step_gradients) == 1
+    torch.testing.assert_close(step_gradients[0][0], torch.tensor([1.25, 0.0]))
+    torch.testing.assert_close(step_gradients[0][1], torch.tensor([3.0]))
+    assert shared.grad is None
+    assert head.grad is None
 
 
 def test_lightning_atomic_manual_optimization_steps_with_live_bank(tmp_path):

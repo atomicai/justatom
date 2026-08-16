@@ -22,6 +22,7 @@ from justatom.tooling.collections import (
     write_collection_metadata,
 )
 from justatom.training.config import (
+    AuxiliaryGradientMode,
     LoraAdapterConfig,
     RuntimeConfig,
     TrainConfig,
@@ -119,9 +120,7 @@ class RunManifest:
             batch_contract={
                 "contrastive_microbatch": config.optimization.batch_size,
                 "gradient_accumulation": config.optimization.grad_acc_steps,
-                "optimizer_effective_batch": (
-                    config.optimization.batch_size * config.optimization.grad_acc_steps
-                ),
+                "optimizer_effective_batch": (config.optimization.batch_size * config.optimization.grad_acc_steps),
             },
             resolved_config=payload,
         )
@@ -280,9 +279,12 @@ def build_lightning_trainer(config: TrainConfig) -> L.Trainer:
         accelerator=config.runtime.accelerator,
         devices=config.runtime.devices,
         precision=resolve_training_precision(config.runtime),
-        # ATOMIC performs gradient accumulation inside its manual optimization
-        # step so both objectives can be differentiated and projected first.
-        accumulate_grad_batches=(1 if config.method is TrainingMethod.ATOMIC else config.optimization.grad_acc_steps),
+        # Manual paths control each microbatch before accumulating its update.
+        accumulate_grad_batches=(
+            1
+            if (config.gradient_projection.enabled or config.auxiliary_gradient.mode is not AuxiliaryGradientMode.OFF)
+            else config.optimization.grad_acc_steps
+        ),
         logger=build_training_logger(config),
         log_every_n_steps=1,
         enable_checkpointing=False,
