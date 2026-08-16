@@ -31,6 +31,7 @@ NSAMPLES=""
 AUTO_E5_PREFIXES=0
 RUN_BASELINE=1
 SEARCH_MODE="${SEARCH_MODE:-}"
+TRAIN_CONFIG=""
 PIPELINE_OVERRIDES=()
 
 usage() {
@@ -48,6 +49,12 @@ Options:
   --epochs N
   --grad-acc-steps N
   --temperature VALUE
+  --train-config PATH
+  --aux-gradient-mode off|observe|safe
+  --aux-gradient-max-norm-ratio VALUE
+  --aux-gradient-eps VALUE
+  --memory-bank-mass-ratio VALUE
+  --memory-bank-mass-ramp-steps N
   --nsamples N
   --bench-root DIR
   --output-root DIR
@@ -97,6 +104,7 @@ while [[ $# -gt 0 ]]; do
     --epochs) EPOCHS="$2"; shift 2 ;;
     --grad-acc-steps) GRAD_ACC_STEPS="$2"; shift 2 ;;
     --temperature) TEMPERATURE="$2"; shift 2 ;;
+    --train-config) TRAIN_CONFIG="$2"; shift 2 ;;
     --eval-batch-size) EVAL_BATCH_SIZE="$2"; shift 2 ;;
     --nsamples) NSAMPLES="$2"; shift 2 ;;
     --bench-root) BENCH_ROOT="$2"; shift 2 ;;
@@ -110,7 +118,7 @@ while [[ $# -gt 0 ]]; do
     --no-auto-e5-prefixes) AUTO_E5_PREFIXES=0; shift ;;
     --no-baseline) RUN_BASELINE=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
-    --memory-bank-size|--memory-bank-warmup-steps|--memory-bank-mining|--memory-bank-hard-negatives|--memory-bank-random-negatives|--memory-bank-hard-warmup-steps|--memory-bank-hard-ramp-steps|--memory-bank-collision-threshold|--memory-bank-collision-beta|--memory-bank-margin-mode|--memory-bank-margin-base|--memory-bank-margin-scale|--memory-bank-margin-min|--memory-bank-margin-max|--memory-bank-admission-beta|--memory-bank-margin-reg-weight|--alpha-gate-layers|--alpha-gate-hidden-dim|--alpha-gate-dropout|--experiment-role|--lr-encoder|--lr-heads|--weight-decay|--max-query-seq-len|--top-k|--index-batch-size)
+    --memory-bank-size|--memory-bank-warmup-steps|--memory-bank-mass-ratio|--memory-bank-mass-ramp-steps|--memory-bank-mining|--memory-bank-hard-negatives|--memory-bank-random-negatives|--memory-bank-hard-warmup-steps|--memory-bank-hard-ramp-steps|--memory-bank-collision-threshold|--memory-bank-collision-beta|--memory-bank-margin-mode|--memory-bank-margin-base|--memory-bank-margin-scale|--memory-bank-margin-min|--memory-bank-margin-max|--memory-bank-admission-beta|--memory-bank-margin-reg-weight|--alpha-gate-layers|--alpha-gate-hidden-dim|--alpha-gate-dropout|--aux-gradient-mode|--aux-gradient-max-norm-ratio|--aux-gradient-eps|--experiment-role|--lr-encoder|--lr-heads|--weight-decay|--max-query-seq-len|--top-k|--index-batch-size)
       PIPELINE_OVERRIDES+=("$1" "$2"); shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -166,6 +174,7 @@ build_variant_command() {
     --output-root "$output_root"
     --table-results "$table_path"
   )
+  [[ -z "$TRAIN_CONFIG" ]] || command+=(--train-config "$TRAIN_CONFIG")
   [[ -z "$NSAMPLES" ]] || command+=(--nsamples "$NSAMPLES")
   [[ -z "$SEARCH_MODE" ]] || command+=(--search-mode "$SEARCH_MODE")
   [[ "$AUTO_E5_PREFIXES" == "0" ]] || command+=(--auto-e5-prefixes)

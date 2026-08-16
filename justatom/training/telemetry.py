@@ -49,6 +49,33 @@ def batch_retrieval_metrics(scores: torch.Tensor) -> dict[str, float]:
     }
 
 
+@torch.no_grad()
+def retrieval_metrics_by_confidence(
+    scores: torch.Tensor,
+    confidence: torch.Tensor,
+) -> dict[str, float]:
+    if scores.ndim != 2 or scores.shape[0] != scores.shape[1]:
+        raise ValueError(f"scores must be square, got {tuple(scores.shape)}")
+    confidence = confidence.detach().reshape(-1).to(scores.device)
+    if confidence.shape[0] != scores.shape[0]:
+        raise ValueError("confidence batch dimension must match scores")
+    targets = torch.arange(scores.shape[0], device=scores.device).unsqueeze(1)
+    ranks = (torch.argsort(scores, dim=1, descending=True) == targets).nonzero(as_tuple=False)[:, 1] + 1
+    result: dict[str, float] = {}
+    buckets = (
+        ("low", 0.0, 1.0 / 3.0, False),
+        ("medium", 1.0 / 3.0, 2.0 / 3.0, False),
+        ("high", 2.0 / 3.0, 1.0, True),
+    )
+    for name, lower, upper, include_upper in buckets:
+        mask = (confidence >= lower) & ((confidence <= upper) if include_upper else (confidence < upper))
+        prefix = f"alpha_target_bucket/{name}"
+        result[f"{prefix}/count"] = float(mask.sum().item())
+        result[f"{prefix}/hit_rate_at_1"] = float((ranks[mask] <= 1).float().mean().item()) if mask.any() else float("nan")
+        result[f"{prefix}/mrr"] = float((1.0 / ranks[mask].float()).mean().item()) if mask.any() else float("nan")
+    return result
+
+
 def grad_norm(parameters: Iterable[nn.Parameter]) -> float:
     gradients = [parameter.grad.detach().float().norm(2) for parameter in parameters if parameter.grad is not None]
     if not gradients:

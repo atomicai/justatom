@@ -42,6 +42,7 @@ WEIGHT_DECAY="${WEIGHT_DECAY:-0.01}"
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-512}"
 MAX_QUERY_SEQ_LEN=""
 EXPERIMENT_ROLE="canonical"
+TRAIN_CONFIG="${TRAIN_CONFIG:-configs/train.yaml}"
 
 EXPLICIT_OVERRIDES=()
 
@@ -59,6 +60,7 @@ Core options:
   --grad-acc-steps N
   --temperature VALUE
   --experiment-role canonical|ablation
+  --train-config PATH
   --nsamples N
   --output-root DIR
   --table-results PATH
@@ -69,8 +71,13 @@ Component overrides:
   --alpha-gate-layers N
   --alpha-gate-hidden-dim N
   --alpha-gate-dropout P
+  --aux-gradient-mode off|observe|safe
+  --aux-gradient-max-norm-ratio VALUE
+  --aux-gradient-eps VALUE
   --memory-bank-size N
   --memory-bank-warmup-steps N
+  --memory-bank-mass-ratio VALUE
+  --memory-bank-mass-ramp-steps N
   --memory-bank-mining all|random|hard|mixed
   --memory-bank-hard-negatives N
   --memory-bank-random-negatives N
@@ -251,6 +258,7 @@ while [[ $# -gt 0 ]]; do
     --max-seq-len) MAX_SEQ_LEN="$2"; shift 2 ;;
     --max-query-seq-len) MAX_QUERY_SEQ_LEN="$2"; shift 2 ;;
     --experiment-role) EXPERIMENT_ROLE="$2"; shift 2 ;;
+    --train-config) TRAIN_CONFIG="$2"; shift 2 ;;
     --nsamples) NSAMPLES="$2"; shift 2 ;;
     --output-root) OUTPUT_ROOT="$2"; shift 2 ;;
     --table-results) TABLE_RESULTS_PATH="$2"; shift 2 ;;
@@ -274,8 +282,13 @@ while [[ $# -gt 0 ]]; do
     --alpha-gate-layers) EXPLICIT_OVERRIDES+=(--alpha-gate.head.layers "$2"); shift 2 ;;
     --alpha-gate-hidden-dim) EXPLICIT_OVERRIDES+=(--alpha-gate.head.hidden-dim "$2"); shift 2 ;;
     --alpha-gate-dropout) EXPLICIT_OVERRIDES+=(--alpha-gate.head.dropout "$2"); shift 2 ;;
+    --aux-gradient-mode) EXPLICIT_OVERRIDES+=(--auxiliary-gradient.mode "$2"); shift 2 ;;
+    --aux-gradient-max-norm-ratio) EXPLICIT_OVERRIDES+=(--auxiliary-gradient.max-norm-ratio "$2"); shift 2 ;;
+    --aux-gradient-eps) EXPLICIT_OVERRIDES+=(--auxiliary-gradient.eps "$2"); shift 2 ;;
     --memory-bank-size) EXPLICIT_OVERRIDES+=(--memory-bank.size "$2"); shift 2 ;;
     --memory-bank-warmup-steps) EXPLICIT_OVERRIDES+=(--memory-bank.warmup-steps "$2"); shift 2 ;;
+    --memory-bank-mass-ratio) EXPLICIT_OVERRIDES+=(--memory-bank.mass-ratio "$2"); shift 2 ;;
+    --memory-bank-mass-ramp-steps) EXPLICIT_OVERRIDES+=(--memory-bank.mass-ramp-steps "$2"); shift 2 ;;
     --memory-bank-mining) EXPLICIT_OVERRIDES+=(--memory-bank.mining "$2"); shift 2 ;;
     --memory-bank-hard-negatives) EXPLICIT_OVERRIDES+=(--memory-bank.hard-negatives "$2"); shift 2 ;;
     --memory-bank-random-negatives) EXPLICIT_OVERRIDES+=(--memory-bank.random-negatives "$2"); shift 2 ;;
@@ -296,6 +309,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$DATASET_IDS_RAW" ]] || { echo "--dataset-ids is required" >&2; exit 2; }
+[[ -f "$TRAIN_CONFIG" ]] || { echo "training config does not exist: $TRAIN_CONFIG" >&2; exit 2; }
 case "$METHOD" in vanilla|atom_gate|atomic) ;; *) echo "invalid method: $METHOD" >&2; exit 2 ;; esac
 case "$EXPERIMENT_ROLE" in canonical|ablation) ;; *) echo "invalid experiment role: $EXPERIMENT_ROLE" >&2; exit 2 ;; esac
 case "$WANDB_MODE_VALUE" in disabled|offline|online) ;; *) echo "invalid wandb mode: $WANDB_MODE_VALUE" >&2; exit 2 ;; esac
@@ -356,7 +370,7 @@ for raw_id in "${DATASET_IDS[@]}"; do
   if [[ "$RUN_MODE" == "full" ]]; then
     train_args=(
       "$PYTHON_BIN" -m justatom.api.train
-      --config configs/train.yaml
+      --config "$TRAIN_CONFIG"
       --method "$METHOD"
       --dataset.id "$dataset_id"
       --model.name-or-path "$MODEL_NAME_OR_PATH"

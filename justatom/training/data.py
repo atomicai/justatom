@@ -18,33 +18,12 @@ def _row_passes_filters(row: dict[str, Any], filters: dict | None) -> bool:
     return not any(DatasetRecordAdapter._is_missing(row.get(field)) for field in filter_fields)
 
 
-def _normalize_lexical_text(
-    row: dict[str, Any],
-    *,
-    content_field: str,
-    keywords_or_phrases_field: str | None,
-    keywords_nested_col: str | None,
-    explanation_nested_col: str | None,
-) -> str | list[str]:
-    normalized_keywords = DatasetRecordAdapter.normalize_keywords(
-        row.get(keywords_or_phrases_field) if keywords_or_phrases_field else None,
-        keywords_nested_col=keywords_nested_col,
-        explanation_nested_col=explanation_nested_col,
-    )
-    if normalized_keywords:
-        return [str(item["keyword_or_phrase"]) for item in normalized_keywords]
-    return str(row.get(content_field, ""))
-
-
 def _iterate_from_raw_samples(
     samples: Iterable[dict[str, Any]],
     *,
     content_field: str,
     labels_field: str,
     chunk_id_col: str | None,
-    keywords_or_phrases_field: str | None,
-    keywords_nested_col: str | None,
-    explanation_nested_col: str | None,
     filters: dict | None,
 ) -> Generator[dict[str, Any], None, None]:
     for row in samples:
@@ -56,16 +35,9 @@ def _iterate_from_raw_samples(
         queries = DatasetRecordAdapter.normalize_queries(row.get(labels_field))
         if not queries:
             continue
-        lexical_text = _normalize_lexical_text(
-            row,
-            content_field=content_field,
-            keywords_or_phrases_field=keywords_or_phrases_field,
-            keywords_nested_col=keywords_nested_col,
-            explanation_nested_col=explanation_nested_col,
-        )
         chunk_id = None if chunk_id_col is None else row.get(chunk_id_col)
         for query in queries:
-            payload = {"queries": query, "content": content, "lexical_text": lexical_text}
+            payload = {"queries": query, "content": content}
             if chunk_id is not None:
                 payload["chunk_id"] = str(chunk_id)
             yield payload
@@ -82,9 +54,6 @@ def iterate_training_rows(
     limit: int | None = None,
     drop_columns: tuple[str, ...] | list[str] | None = None,
     chunk_id_col: str | None = None,
-    keywords_or_phrases_field: str | None = None,
-    keywords_nested_col: str | None = None,
-    explanation_nested_col: str | None = None,
     filters: dict | None = None,
 ) -> Iterable[dict[str, Any]]:
     if dataset_name_or_path is None:
@@ -102,9 +71,6 @@ def iterate_training_rows(
         content_field=content_field,
         labels_field=labels_field,
         chunk_id_col=chunk_id_col,
-        keywords_or_phrases_field=keywords_or_phrases_field,
-        keywords_nested_col=keywords_nested_col,
-        explanation_nested_col=explanation_nested_col,
         filters=filters,
     )
     return rows if limit is None else islice(rows, int(limit))
@@ -186,11 +152,8 @@ def sample_training_rows(
     limit: int | None = None,
     drop_columns: tuple[str, ...] | list[str] | None = None,
     chunk_id_col: str | None = None,
-    keywords_or_phrases_field: str | None = None,
-    keywords_nested_col: str | None = None,
-    explanation_nested_col: str | None = None,
     filters: dict | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, str | list[str]]]:
+) -> list[dict[str, Any]]:
     rows = iterate_training_rows(
         dataset_name_or_path=dataset_name_or_path,
         content_field=content_field,
@@ -201,34 +164,25 @@ def sample_training_rows(
         limit=limit,
         drop_columns=drop_columns,
         chunk_id_col=chunk_id_col,
-        keywords_or_phrases_field=keywords_or_phrases_field,
-        keywords_nested_col=keywords_nested_col,
-        explanation_nested_col=explanation_nested_col,
         filters=filters,
     )
-    sampled = _reservoir_sample_rows(rows, int(num_samples), seed=seed)
-    lexical_lookup = {row["content"]: row["lexical_text"] for row in sampled if row.get("content")}
-    return sampled, lexical_lookup
+    return _reservoir_sample_rows(rows, int(num_samples), seed=seed)
 
 
 def prepare_training_data(
     **kwargs: Any,
-) -> tuple[pl.DataFrame, list[dict[str, Any]], dict[str, str | list[str]]]:
-    sampled, lexical_lookup = sample_training_rows(**kwargs)
-    frame = (
-        pl.from_dicts(sampled)
-        if sampled
-        else pl.DataFrame(schema={"queries": pl.Utf8, "content": pl.Utf8, "lexical_text": pl.Object})
-    )
-    return frame, sampled, lexical_lookup
+) -> tuple[pl.DataFrame, list[dict[str, Any]]]:
+    sampled = sample_training_rows(**kwargs)
+    frame = pl.from_dicts(sampled) if sampled else pl.DataFrame(schema={"queries": pl.Utf8, "content": pl.Utf8})
+    return frame, sampled
 
 
 def prepare_training_data_from_config(
     config: TrainConfig,
-) -> tuple[list[dict[str, Any]], dict[str, str | list[str]]]:
+) -> list[dict[str, Any]]:
     if config.dataset.name_or_path is None:
         raise ValueError("dataset.name_or_path is required")
-    rows, lexical_lookup = sample_training_rows(
+    rows = sample_training_rows(
         dataset_name_or_path=config.dataset.name_or_path,
         num_samples=config.optimization.num_samples,
         seed=config.experiment.seed,
@@ -240,10 +194,6 @@ def prepare_training_data_from_config(
         limit=config.dataset.limit,
         drop_columns=config.dataset.drop_columns,
         chunk_id_col=config.dataset.chunk_id_col,
-        keywords_or_phrases_field=config.dataset.keywords_col,
-        keywords_nested_col=config.dataset.keywords_nested_col,
-        explanation_nested_col=config.dataset.explanation_nested_col,
         filters=None if config.filters.fields is None else {"fields": config.filters.fields},
     )
-    rows = rebalance_rows_by_content(rows, config.optimization.batch_size)
-    return rows, lexical_lookup
+    return rebalance_rows_by_content(rows, config.optimization.batch_size)

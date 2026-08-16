@@ -52,6 +52,7 @@ objective: {}
 alpha_gate: {}
 memory_bank: {}
 gradient_projection: {}
+auxiliary_gradient: {}
 
 telemetry:
   backend: csv

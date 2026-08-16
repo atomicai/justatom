@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import math
+
+import pytest
 import torch
 import torch.nn.functional as F
 
-from justatom.training.config import MarginConfig, MarginMode, ObjectiveConfig
-from justatom.training.memory_bank import MemorySelection
+from justatom.training.config import MarginConfig, MarginMode, MemoryBankConfig, ObjectiveConfig
+from justatom.training.memory_bank import ContrastiveMemoryBank, MemorySelection
 from justatom.training.objective import ContrastiveObjective, ObjectiveInputs
 
 
@@ -17,40 +20,347 @@ def test_objective_vanilla_has_no_auxiliary_components():
 
     assert output.loss.ndim == 0
     torch.testing.assert_close(output.primary_loss, output.loss)
+    torch.testing.assert_close(output.retrieval_loss, output.main_per_row.mean())
+    torch.testing.assert_close(output.auxiliary_loss, torch.zeros_like(output.loss))
+    torch.testing.assert_close(output.head_loss, torch.zeros_like(output.loss))
     assert output.memory_loss is None
     assert output.simcse_per_row is None
     assert output.metrics["loss/alpha_aux"] == 0.0
     assert output.metrics["loss/memory_margin_regularization"] == 0.0
+    assert "loss/alpha_aux_weighted" not in output.metrics
+    assert "loss/alpha_aux_to_main_ratio" not in output.metrics
+    assert "temperature/simcse" not in output.metrics
+    assert "temperature/alpha_target" not in output.metrics
 
 
-def test_objective_atom_gate_uses_augment_formula():
+def _assert_singleton_contrastive_batch_is_rejected(memory: MemorySelection | None) -> None:
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False))
+    singleton = torch.tensor([[1.0, 0.0]])
+
+    with pytest.raises(ValueError, match="contrastive batch size >= 2"):
+        objective(ObjectiveInputs(queries=singleton, positives=singleton, memory=memory))
+
+
+def test_objective_rejects_singleton_plain_batch():
+    _assert_singleton_contrastive_batch_is_rejected(None)
+
+
+def test_objective_rejects_singleton_bank_warmup_batch():
+    bank = ContrastiveMemoryBank(MemoryBankConfig(enabled=True, size=2, warmup_steps=1, mass_ramp_steps=1))
+    bank.enqueue(torch.eye(2), {"doc_key_id": torch.tensor([1, 2])})
+    singleton = torch.tensor([[1.0, 0.0]])
+    memory = bank.select(
+        {"doc_key_id": torch.tensor([10])},
+        query_vectors=singleton,
+        positive_vectors=singleton,
+        step=0,
+    )
+
+    _assert_singleton_contrastive_batch_is_rejected(memory)
+
+
+def test_objective_rejects_singleton_zero_mass_batch():
+    bank = ContrastiveMemoryBank(MemoryBankConfig(enabled=True, size=2, mass_ratio=0.0, mass_ramp_steps=1))
+    bank.enqueue(torch.eye(2), {"doc_key_id": torch.tensor([1, 2])})
+    singleton = torch.tensor([[1.0, 0.0]])
+    memory = bank.select(
+        {"doc_key_id": torch.tensor([10])},
+        query_vectors=singleton,
+        positive_vectors=singleton,
+        step=0,
+    )
+
+    _assert_singleton_contrastive_batch_is_rejected(memory)
+
+
+def test_objective_rejects_singleton_active_bank_batch():
+    memory = MemorySelection(
+        embeddings=torch.tensor([[0.0, 1.0]]),
+        active_mask=torch.ones(1, 1, dtype=torch.bool),
+        log_weights=torch.zeros(1, 1),
+        collision_g=None,
+        hard_weights=None,
+        metrics={},
+    )
+
+    _assert_singleton_contrastive_batch_is_rejected(memory)
+
+
+def test_objective_rejects_mismatched_query_positive_batch_counts():
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False))
+
+    with pytest.raises(ValueError, match="matching contrastive batch sizes"):
+        objective(
+            ObjectiveInputs(
+                queries=torch.eye(2),
+                positives=torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]),
+            )
+        )
+
+
+def test_objective_atom_gate_detaches_alpha_only_from_auxiliary_gradient():
     torch.manual_seed(1)
     objective = ContrastiveObjective(
         ObjectiveConfig(
             temperature=1.0,
             learnable_temperature=False,
+            decoupled=False,
             simcse_dropout_weight=0.1,
         )
     )
     queries = F.normalize(torch.randn(3, 4), dim=-1).requires_grad_()
     positives = F.normalize(torch.randn(3, 4), dim=-1).requires_grad_()
     alternate_queries = F.normalize(torch.randn(3, 4), dim=-1).requires_grad_()
-    alpha = torch.tensor([0.2, 0.5, 0.8], requires_grad=True)
+    alpha_logits = torch.tensor([-1.3862944, 0.0, 1.3862944], requires_grad=True)
 
     output = objective(
         ObjectiveInputs(
             queries=queries,
             positives=positives,
             query_alt=alternate_queries,
-            alpha=alpha,
+            alpha_logits=alpha_logits,
+            alpha_supervision_weight=0.3,
         )
     )
 
     assert output.simcse_per_row is not None
-    expected = (output.main_per_row + (1.0 - alpha) * 0.1 * output.simcse_per_row).mean()
-    torch.testing.assert_close(output.loss, expected)
-    output.loss.backward()
-    assert alpha.grad is not None and float(alpha.grad.abs().sum()) > 0.0
+    assert output.alpha_supervision_per_row is not None
+    expected_retrieval = output.main_per_row.mean()
+    expected_auxiliary = (0.1 * (1.0 - torch.sigmoid(alpha_logits).detach()) * output.simcse_per_row).mean()
+    expected_head = 0.3 * output.alpha_supervision_per_row.mean()
+    torch.testing.assert_close(output.retrieval_loss, expected_retrieval)
+    torch.testing.assert_close(output.auxiliary_loss, expected_auxiliary)
+    torch.testing.assert_close(output.head_loss, expected_head)
+    torch.testing.assert_close(
+        output.loss,
+        output.retrieval_loss + output.auxiliary_loss + output.head_loss,
+    )
+
+    high_alpha = objective(
+        ObjectiveInputs(
+            queries=queries,
+            positives=positives,
+            query_alt=alternate_queries,
+            alpha_logits=torch.full_like(alpha_logits, torch.logit(torch.tensor(0.8))),
+            alpha_supervision_weight=0.0,
+        )
+    )
+    low_alpha = objective(
+        ObjectiveInputs(
+            queries=queries,
+            positives=positives,
+            query_alt=alternate_queries,
+            alpha_logits=torch.full_like(alpha_logits, torch.logit(torch.tensor(0.2))),
+            alpha_supervision_weight=0.0,
+        )
+    )
+    assert low_alpha.loss.detach() > high_alpha.loss.detach()
+
+    retrieval_gradient = torch.autograd.grad(output.retrieval_loss, queries, retain_graph=True)[0]
+    retrieval_positive_gradient = torch.autograd.grad(output.retrieval_loss, positives, retain_graph=True)[0]
+    auxiliary_query_gradient = torch.autograd.grad(output.auxiliary_loss, queries, retain_graph=True)[0]
+    auxiliary_alternate_gradient = torch.autograd.grad(output.auxiliary_loss, alternate_queries, retain_graph=True)[0]
+    auxiliary_alpha_gradient = torch.autograd.grad(
+        output.auxiliary_loss,
+        alpha_logits,
+        allow_unused=True,
+        retain_graph=True,
+    )[0]
+    head_alpha_gradient = torch.autograd.grad(output.head_loss, alpha_logits, retain_graph=True)[0]
+    head_query_gradient = torch.autograd.grad(output.head_loss, queries, allow_unused=True)[0]
+
+    assert float(retrieval_gradient.abs().sum()) > 0.0
+    assert float(retrieval_positive_gradient.abs().sum()) > 0.0
+    assert float(auxiliary_query_gradient.abs().sum()) > 0.0
+    assert float(auxiliary_alternate_gradient.abs().sum()) > 0.0
+    assert auxiliary_alpha_gradient is None
+    assert float(head_alpha_gradient.abs().sum()) > 0.0
+    assert head_query_gradient is None
+
+
+def test_atom_gate_uses_detached_positive_confidence_with_learnable_temperature():
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=0.7, learnable_temperature=True, decoupled=False))
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.0, 1.0]]), dim=-1).requires_grad_()
+    p = F.normalize(torch.tensor([[1.0, 0.0], [0.6, 0.8]]), dim=-1).requires_grad_()
+    alpha_logits = torch.tensor([-0.4, 0.7], requires_grad=True)
+    output = objective(
+        ObjectiveInputs(
+            queries=q,
+            positives=p,
+            alpha_logits=alpha_logits,
+            alpha_supervision_weight=0.3,
+        )
+    )
+    target = torch.softmax((q.detach() @ p.detach().T) / objective.kernel.tau.detach(), dim=-1).diagonal()
+    bce = F.binary_cross_entropy_with_logits(alpha_logits, target, reduction="none")
+    torch.testing.assert_close(output.alpha_target, target)
+    torch.testing.assert_close(output.alpha_supervision_per_row, bce)
+    torch.testing.assert_close(output.loss, output.main_per_row.mean() + 0.3 * bce.mean())
+
+
+def test_fixed_alpha_target_temperature_changes_only_target_and_bce():
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=0.1, learnable_temperature=False, decoupled=False))
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.4, 0.9], [-0.6, 0.8]]), dim=-1)
+    p = F.normalize(torch.tensor([[0.9, 0.1], [0.2, 1.0], [-0.8, 0.4]]), dim=-1)
+    alpha_logits = torch.tensor([-0.5, 0.2, 0.8])
+
+    legacy = objective(
+        ObjectiveInputs(
+            queries=q,
+            positives=p,
+            alpha_logits=alpha_logits,
+            alpha_supervision_weight=0.3,
+        )
+    )
+    fixed = objective(
+        ObjectiveInputs(
+            queries=q,
+            positives=p,
+            alpha_logits=alpha_logits,
+            alpha_supervision_weight=0.3,
+            alpha_target_temperature=0.4,
+        )
+    )
+
+    expected_target = torch.softmax((q @ p.T) / 0.4, dim=-1).diagonal()
+    expected_bce = F.binary_cross_entropy_with_logits(alpha_logits, expected_target, reduction="none")
+    torch.testing.assert_close(fixed.main_per_row, legacy.main_per_row)
+    torch.testing.assert_close(fixed.alpha_target, expected_target)
+    torch.testing.assert_close(fixed.alpha_supervision_per_row, expected_bce)
+    assert not torch.allclose(fixed.alpha_target, legacy.alpha_target)
+
+
+def test_fixed_simcse_temperature_changes_only_auxiliary_loss():
+    legacy = ContrastiveObjective(
+        ObjectiveConfig(
+            temperature=0.1,
+            learnable_temperature=False,
+            decoupled=False,
+            simcse_dropout_weight=0.3,
+        )
+    )
+    fixed = ContrastiveObjective(
+        ObjectiveConfig(
+            temperature=0.1,
+            learnable_temperature=False,
+            decoupled=False,
+            simcse_dropout_weight=0.3,
+            simcse_temperature=0.4,
+        )
+    )
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.4, 0.9], [-0.6, 0.8]]), dim=-1)
+    p = F.normalize(torch.tensor([[0.9, 0.1], [0.2, 1.0], [-0.8, 0.4]]), dim=-1)
+    q_alt = F.normalize(torch.tensor([[0.8, 0.2], [0.6, 0.8], [-0.9, 0.1]]), dim=-1)
+
+    legacy_output = legacy(ObjectiveInputs(queries=q, positives=p, query_alt=q_alt))
+    fixed_output = fixed(ObjectiveInputs(queries=q, positives=p, query_alt=q_alt))
+
+    expected = F.cross_entropy((q @ q_alt.T) / 0.4, torch.arange(3), reduction="none")
+    torch.testing.assert_close(fixed_output.main_per_row, legacy_output.main_per_row)
+    torch.testing.assert_close(fixed_output.simcse_per_row, expected)
+    assert not torch.allclose(fixed_output.simcse_per_row, legacy_output.simcse_per_row)
+    assert fixed.simcse_kernel is not None
+    assert dict(fixed.simcse_kernel.named_parameters()) == {}
+
+
+def test_alpha_auxiliary_temperature_metrics_match_effective_objective():
+    objective = ContrastiveObjective(
+        ObjectiveConfig(
+            temperature=0.1,
+            learnable_temperature=False,
+            decoupled=False,
+            simcse_dropout_weight=0.3,
+            simcse_temperature=0.4,
+        )
+    )
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.4, 0.9], [-0.6, 0.8]]), dim=-1)
+    p = F.normalize(torch.tensor([[0.9, 0.1], [0.2, 1.0], [-0.8, 0.4]]), dim=-1)
+    q_alt = F.normalize(torch.tensor([[0.8, 0.2], [0.6, 0.8], [-0.9, 0.1]]), dim=-1)
+    alpha_logits = torch.tensor([-0.5, 0.2, 0.8])
+
+    output = objective(
+        ObjectiveInputs(
+            queries=q,
+            positives=p,
+            query_alt=q_alt,
+            alpha_logits=alpha_logits,
+            alpha_supervision_weight=0.3,
+            alpha_target_temperature=0.25,
+        )
+    )
+
+    weighted = 0.3 * (1.0 - torch.sigmoid(alpha_logits).detach()) * output.simcse_per_row
+    ratio = weighted.detach().mean() / output.main_per_row.detach().mean().abs().clamp_min(1e-12)
+    torch.testing.assert_close(output.metrics["loss/alpha_aux"], output.simcse_per_row.detach().mean())
+    torch.testing.assert_close(output.metrics["loss/alpha_aux_weighted"], weighted.detach().mean())
+    torch.testing.assert_close(output.metrics["loss/alpha_aux_to_main_ratio"], ratio)
+    torch.testing.assert_close(output.metrics["temperature"], torch.tensor(0.1))
+    torch.testing.assert_close(output.metrics["temperature/simcse"], torch.tensor(0.4))
+    torch.testing.assert_close(output.metrics["temperature/alpha_target"], torch.tensor(0.25))
+
+
+def test_alpha_auxiliary_to_main_ratio_preserves_dcl_sign(monkeypatch):
+    objective = ContrastiveObjective(
+        ObjectiveConfig(
+            temperature=0.1,
+            learnable_temperature=False,
+            decoupled=True,
+            simcse_dropout_weight=0.1,
+            simcse_temperature=0.2,
+        )
+    )
+    assert objective.simcse_kernel is not None
+    monkeypatch.setattr(
+        objective.kernel,
+        "info_nce",
+        lambda *_args, **_kwargs: torch.tensor([-2.0, -4.0]),
+    )
+    monkeypatch.setattr(
+        objective.simcse_kernel,
+        "simcse_term",
+        lambda *_args, **_kwargs: torch.tensor([-1.0, -2.0]),
+    )
+    embeddings = F.normalize(torch.eye(2), dim=-1)
+
+    output = objective(
+        ObjectiveInputs(
+            queries=embeddings,
+            positives=embeddings,
+            query_alt=embeddings,
+            alpha_logits=torch.zeros(2),
+        )
+    )
+
+    weighted = torch.tensor([-0.05, -0.1]).mean()
+    expected = weighted / torch.tensor([-2.0, -4.0]).mean()
+    torch.testing.assert_close(output.metrics["loss/alpha_aux_to_main_ratio"], expected)
+
+
+def test_alpha_bce_does_not_update_retrieval_embeddings_or_temperature():
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=0.7, learnable_temperature=True, decoupled=False))
+    q = F.normalize(torch.randn(3, 4), dim=-1).requires_grad_()
+    p = F.normalize(torch.randn(3, 4), dim=-1).requires_grad_()
+    alpha_logits = torch.tensor([-1.0, 0.0, 1.0], requires_grad=True)
+    output = objective(ObjectiveInputs(queries=q, positives=p, alpha_logits=alpha_logits, alpha_supervision_weight=1.0))
+    output.alpha_supervision_per_row.mean().backward()
+    assert alpha_logits.grad is not None and torch.isfinite(alpha_logits.grad).all()
+    assert float(alpha_logits.grad.abs().sum()) > 0.0
+    assert q.grad is None and p.grad is None
+    assert objective.kernel.log_tau.grad is None
+
+
+def test_alpha_bce_is_minimized_at_soft_target():
+    target = torch.tensor([0.2, 0.8])
+    at_target = F.binary_cross_entropy_with_logits(torch.logit(target), target)
+    away_from_target = F.binary_cross_entropy_with_logits(torch.logit(torch.tensor([0.4, 0.6])), target)
+    assert at_target < away_from_target
+
+
+def test_hard_row_receives_more_simcse_pressure_than_easy_row():
+    alpha = torch.tensor([0.2, 0.8])
+    simcse = torch.tensor([2.0, 2.0])
+    weighted = (1.0 - alpha.detach()) * simcse
+    torch.testing.assert_close(weighted, torch.tensor([1.6, 0.4]))
 
 
 def test_objective_regularizes_raw_margin_to_constant_base():
@@ -108,6 +418,7 @@ def test_objective_atomic_forwards_bank_columns_and_live_margin():
     )
     assert output.memory_loss is not None
     assert output.memory_per_row is not None
+    torch.testing.assert_close(output.primary_loss, output.retrieval_loss + output.auxiliary_loss + output.head_loss)
     torch.testing.assert_close(output.loss, output.primary_loss + output.memory_loss)
     output.loss.backward()
 
@@ -115,12 +426,125 @@ def test_objective_atomic_forwards_bank_columns_and_live_margin():
     assert output.metrics["memory/active_negatives_mean"] == 3.0
 
 
+def test_normalized_bank_matches_closed_form_at_non_unit_temperature():
+    temperature = 0.5
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=temperature, learnable_temperature=False, decoupled=False))
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.0, 1.0]]), dim=-1)
+    p = q.clone()
+    vector = F.normalize(torch.tensor([[1.0, 1.0]]), dim=-1)
+
+    def output_for(count: int):
+        weight = 0.5 * (q.shape[0] - 1) / count
+        memory = MemorySelection(
+            embeddings=vector.repeat(count, 1),
+            active_mask=torch.ones(2, count, dtype=torch.bool),
+            log_weights=torch.full((2, count), math.log(weight)),
+            collision_g=None,
+            hard_weights=None,
+            metrics={},
+        )
+        return objective(ObjectiveInputs(queries=q, positives=p, memory=memory))
+
+    one, four = output_for(1), output_for(4)
+    batch_logits = (q @ p.T) / temperature
+    bank_logits = ((q @ vector.T) / temperature).squeeze(1)
+    denominator = batch_logits.exp().sum(dim=1) + 0.5 * (q.shape[0] - 1) * bank_logits.exp()
+    expected_augmented = -batch_logits.diagonal() + denominator.log()
+
+    torch.testing.assert_close(one.loss, four.loss)
+    torch.testing.assert_close(one.memory_per_row, four.memory_per_row)
+    torch.testing.assert_close(one.main_per_row + one.memory_per_row, expected_augmented)
+    torch.testing.assert_close(four.main_per_row + four.memory_per_row, expected_augmented)
+    torch.testing.assert_close(one.loss, one.primary_loss + one.memory_loss)
+    torch.testing.assert_close(four.loss, four.primary_loss + four.memory_loss)
+    torch.testing.assert_close(one.primary_loss, one.retrieval_loss + one.auxiliary_loss + one.head_loss)
+    torch.testing.assert_close(four.primary_loss, four.retrieval_loss + four.auxiliary_loss + four.head_loss)
+    assert torch.isfinite(one.loss)
+    assert torch.isfinite(four.loss)
+
+
+def test_augmented_gradient_equals_independent_primary_plus_memory_gradients():
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=0.5, learnable_temperature=False, decoupled=False))
+    positives = F.normalize(torch.tensor([[1.0, 0.2], [0.1, 1.0]]), dim=-1)
+    memory = MemorySelection(
+        embeddings=F.normalize(torch.tensor([[1.0, 1.0], [-1.0, 0.5]]), dim=-1),
+        active_mask=torch.tensor([[True, False], [True, True]]),
+        log_weights=torch.log(torch.tensor([[0.5, 1.0], [0.25, 0.25]])),
+        collision_g=None,
+        hard_weights=None,
+        metrics={},
+    )
+
+    augmented_queries = torch.tensor([[1.0, 0.1], [0.2, 1.0]], requires_grad=True)
+    augmented = objective(ObjectiveInputs(queries=augmented_queries, positives=positives, memory=memory))
+    augmented_gradient = torch.autograd.grad(augmented.loss, augmented_queries)[0]
+
+    primary_queries = augmented_queries.detach().clone().requires_grad_()
+    primary = objective(ObjectiveInputs(queries=primary_queries, positives=positives, memory=memory))
+    primary_gradient = torch.autograd.grad(primary.primary_loss, primary_queries)[0]
+
+    memory_queries = augmented_queries.detach().clone().requires_grad_()
+    memory_output = objective(ObjectiveInputs(queries=memory_queries, positives=positives, memory=memory))
+    assert memory_output.memory_loss is not None
+    memory_gradient = torch.autograd.grad(memory_output.memory_loss, memory_queries)[0]
+
+    torch.testing.assert_close(augmented_gradient, primary_gradient + memory_gradient)
+
+
+def test_row_without_valid_bank_candidates_equals_main_loss():
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False))
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.0, 1.0]]), dim=-1)
+    p = q.clone()
+    memory = MemorySelection(
+        embeddings=F.normalize(torch.tensor([[1.0, 1.0]]), dim=-1),
+        active_mask=torch.tensor([[True], [False]]),
+        log_weights=torch.zeros(2, 1),
+        collision_g=None,
+        hard_weights=None,
+        metrics={},
+    )
+
+    plain = objective(ObjectiveInputs(queries=q, positives=p))
+    augmented = objective(ObjectiveInputs(queries=q, positives=p, memory=memory))
+
+    assert augmented.memory_per_row is not None
+    assert augmented.memory_per_row[0] > 0.0
+    assert torch.equal(augmented.memory_per_row[1], torch.zeros_like(augmented.memory_per_row[1]))
+    torch.testing.assert_close(
+        augmented.main_per_row[1] + augmented.memory_per_row[1],
+        plain.main_per_row[1],
+    )
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")
+def test_normalized_bank_objective_gradients_are_finite_on_mps():
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=0.05, learnable_temperature=True, decoupled=False)).to("mps")
+    q = F.normalize(torch.randn(2, 4, device="mps"), dim=-1).requires_grad_()
+    p = F.normalize(torch.randn(2, 4, device="mps"), dim=-1).requires_grad_()
+    memory = MemorySelection(
+        embeddings=F.normalize(torch.randn(3, 4, device="mps"), dim=-1),
+        active_mask=torch.tensor([[True, True, False], [True, False, True]], device="mps"),
+        log_weights=torch.full((2, 3), math.log(0.25), device="mps"),
+        collision_g=None,
+        hard_weights=None,
+        metrics={},
+    )
+
+    output = objective(ObjectiveInputs(queries=q, positives=p, memory=memory))
+    output.loss.backward()
+
+    assert torch.isfinite(output.loss)
+    assert q.grad is not None and torch.isfinite(q.grad).all()
+    assert p.grad is not None and torch.isfinite(p.grad).all()
+    assert objective.kernel.log_tau.grad is not None and torch.isfinite(objective.kernel.log_tau.grad).all()
+
+
 def test_objective_rejects_alpha_without_auxiliary_view():
     objective = ContrastiveObjective(ObjectiveConfig(temperature=1.0, learnable_temperature=False, simcse_dropout_weight=0.1))
     embeddings = F.normalize(torch.eye(3), dim=-1)
 
     try:
-        objective(ObjectiveInputs(queries=embeddings, positives=embeddings, alpha=torch.full((3,), 0.5)))
+        objective(ObjectiveInputs(queries=embeddings, positives=embeddings, alpha_logits=torch.zeros(3)))
     except ValueError as exc:
         assert "query_alt" in str(exc)
     else:

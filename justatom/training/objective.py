@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from justatom.training.config import MarginConfig, ObjectiveConfig
@@ -15,14 +16,12 @@ class ObjectiveInputs:
     queries: torch.Tensor
     positives: torch.Tensor
     query_alt: torch.Tensor | None = None
-    alpha: torch.Tensor | None = None
+    alpha_logits: torch.Tensor | None = None
     memory: MemorySelection | None = None
     margin: torch.Tensor | None = None
     raw_margin: torch.Tensor | None = None
-    semantic_pair_scores: torch.Tensor | None = None
-    lexical_pair_scores: torch.Tensor | None = None
-    alpha_mix_weight: float = 0.0
-    alpha_entropy_weight: float = 0.0
+    alpha_supervision_weight: float = 0.0
+    alpha_target_temperature: float | None = None
 
 
 @dataclass(frozen=True)
@@ -30,10 +29,15 @@ class ObjectiveOutput:
     loss: torch.Tensor
     primary_loss: torch.Tensor
     memory_loss: torch.Tensor | None
+    retrieval_loss: torch.Tensor
+    auxiliary_loss: torch.Tensor
+    head_loss: torch.Tensor
     main_per_row: torch.Tensor
     memory_per_row: torch.Tensor | None
     simcse_per_row: torch.Tensor | None
     soft_fn_per_row: torch.Tensor | None
+    alpha_target: torch.Tensor | None
+    alpha_supervision_per_row: torch.Tensor | None
     metrics: dict[str, float | torch.Tensor]
 
 
@@ -49,6 +53,16 @@ class ContrastiveObjective(nn.Module):
             learnable_temperature=config.learnable_temperature,
             decoupled=config.decoupled,
         )
+        self.simcse_kernel = (
+            None
+            if config.simcse_temperature is None
+            else ContrastiveLoss(
+                temperature=config.simcse_temperature,
+                reduction="none",
+                learnable_temperature=False,
+                decoupled=config.decoupled,
+            )
+        )
 
     def forward(
         self,
@@ -56,10 +70,19 @@ class ContrastiveObjective(nn.Module):
         *,
         margin_config: MarginConfig | None = None,
     ) -> ObjectiveOutput:
-        if inputs.alpha is not None and inputs.query_alt is None and self.config.simcse_dropout_weight > 0.0:
+        if inputs.queries.ndim != 2 or inputs.positives.ndim != 2:
+            raise ValueError("queries and positives must be 2D")
+        query_batch_size = int(inputs.queries.shape[0])
+        positive_batch_size = int(inputs.positives.shape[0])
+        if query_batch_size != positive_batch_size:
+            raise ValueError(
+                "queries and positives must have matching contrastive batch sizes, "
+                f"got {query_batch_size} vs {positive_batch_size}"
+            )
+        if query_batch_size < 2:
+            raise ValueError(f"contrastive batch size >= 2 is required, got {query_batch_size}")
+        if inputs.alpha_logits is not None and inputs.query_alt is None and self.config.simcse_dropout_weight > 0.0:
             raise ValueError("alpha(q) requires query_alt when SimCSE auxiliary pressure is enabled")
-        if (inputs.semantic_pair_scores is None) != (inputs.lexical_pair_scores is None):
-            raise ValueError("semantic_pair_scores and lexical_pair_scores must be supplied together")
 
         memory = inputs.memory
         main = self.kernel.info_nce(
@@ -89,11 +112,14 @@ class ContrastiveObjective(nn.Module):
             memory_per_row = augmented - main
 
         simcse = None
+        weighted_simcse = None
         soft_fn = None
         auxiliary = main.new_zeros(main.shape)
         if inputs.query_alt is not None and self.config.simcse_dropout_weight > 0.0:
-            simcse = self.kernel.simcse_term(inputs.queries, inputs.query_alt, reduction="none")
-            auxiliary = auxiliary + self.config.simcse_dropout_weight * simcse
+            simcse_kernel = self.kernel if self.simcse_kernel is None else self.simcse_kernel
+            simcse = simcse_kernel.simcse_term(inputs.queries, inputs.query_alt, reduction="none")
+            weighted_simcse = self.config.simcse_dropout_weight * simcse
+            auxiliary = auxiliary + weighted_simcse
         if self.config.soft_fn_attract_weight > 0.0 and inputs.queries.shape[0] > 1:
             soft_fn = self.kernel.soft_fn_term(
                 inputs.queries,
@@ -103,51 +129,75 @@ class ContrastiveObjective(nn.Module):
             )
             auxiliary = auxiliary + self.config.soft_fn_attract_weight * soft_fn
 
-        per_row = main + auxiliary
-        if inputs.alpha is not None:
-            alpha = inputs.alpha.view(-1)
-            if alpha.shape != main.shape:
-                raise ValueError(f"alpha must have shape {tuple(main.shape)}, got {tuple(alpha.shape)}")
-            per_row = main + (1.0 - alpha) * auxiliary
-        if memory_per_row is not None:
-            per_row = per_row + memory_per_row
-        loss = per_row.mean()
+        weighted_encoder_auxiliary = auxiliary
+        alpha_target = None
+        alpha_supervision = None
+        weighted_alpha_supervision = main.new_zeros(())
+        if inputs.alpha_logits is not None:
+            alpha_logits = inputs.alpha_logits.view(-1)
+            if alpha_logits.shape != main.shape:
+                raise ValueError(f"alpha logits must have shape {tuple(main.shape)}, got {tuple(alpha_logits.shape)}")
+            alpha = torch.sigmoid(alpha_logits)
+            auxiliary_weight = 1.0 - alpha.detach()
+            weighted_encoder_auxiliary = auxiliary_weight * auxiliary
+            if weighted_simcse is not None:
+                weighted_simcse = auxiliary_weight * weighted_simcse
+            confidence_logits = inputs.queries.detach() @ inputs.positives.detach().T
+            target_temperature = self.kernel.tau.detach()
+            if inputs.alpha_target_temperature is not None:
+                target_temperature = confidence_logits.new_tensor(float(inputs.alpha_target_temperature))
+            confidence_logits = confidence_logits / target_temperature
+            alpha_target = torch.softmax(confidence_logits, dim=-1).diagonal()
+            alpha_supervision = F.binary_cross_entropy_with_logits(alpha_logits, alpha_target, reduction="none")
+            if inputs.alpha_supervision_weight != 0.0:
+                weighted_alpha_supervision = inputs.alpha_supervision_weight * alpha_supervision
+
+        retrieval_loss = main.mean()
+        auxiliary_loss = weighted_encoder_auxiliary.mean()
+        head_loss = weighted_alpha_supervision.mean()
+        primary_loss = retrieval_loss + auxiliary_loss + head_loss
         memory_loss = None if memory_per_row is None else memory_per_row.mean()
+        loss = primary_loss if memory_loss is None else primary_loss + memory_loss
 
         active_negatives = 0.0
         if memory is not None and memory.active_mask is not None:
             active_negatives = float(memory.active_mask.float().sum(dim=1).mean().item())
+        weighted_simcse_mean = main.new_zeros(())
+        if weighted_simcse is not None:
+            weighted_simcse_mean = weighted_simcse.detach().mean()
+        main_mean = main.detach().mean()
         metrics: dict[str, float | torch.Tensor] = {
-            "loss/main": main.detach().mean(),
+            "loss/main": main_mean,
             "loss/memory": 0.0 if memory_per_row is None else memory_per_row.detach().mean(),
             "loss/alpha_aux": 0.0 if simcse is None else simcse.detach().mean(),
+            "loss/alpha_supervision": 0.0 if alpha_supervision is None else alpha_supervision.detach().mean(),
             "loss/soft_fn": 0.0 if soft_fn is None else soft_fn.detach().mean(),
-            "loss/lexical_mix": 0.0,
-            "loss/alpha_entropy_bonus": 0.0,
             "loss/memory_margin_regularization": 0.0,
             "memory/active_negatives_mean": active_negatives,
             "temperature": self.kernel.tau.detach(),
         }
-
-        if inputs.alpha is not None and inputs.semantic_pair_scores is not None and inputs.lexical_pair_scores is not None:
-            alpha_column = inputs.alpha.view(-1, 1)
-            mixed_pair = alpha_column * inputs.semantic_pair_scores + (1.0 - alpha_column) * inputs.lexical_pair_scores
-            if mixed_pair.ndim != 2 or mixed_pair.shape[1] != 2:
-                raise ValueError("pair scores must have shape [batch, 2] for positive and negative")
-            positive_distance = 1.0 - mixed_pair[:, 0]
-            negative_distance = 1.0 - mixed_pair[:, 1]
-            positive_loss = 0.5 * positive_distance.pow(2)
-            negative_loss = 0.5 * torch.relu(self.config.pairwise_margin - negative_distance).pow(2)
-            mix_loss = (positive_loss + negative_loss).mean()
-            loss = loss + inputs.alpha_mix_weight * mix_loss
-            metrics["loss/lexical_mix"] = mix_loss.detach()
-
-        if inputs.alpha is not None and inputs.alpha_entropy_weight > 0.0:
-            alpha_safe = inputs.alpha.clamp(1e-6, 1.0 - 1e-6)
-            entropy = -(alpha_safe * alpha_safe.log() + (1.0 - alpha_safe) * (1.0 - alpha_safe).log()).mean()
-            entropy_bonus = inputs.alpha_entropy_weight * entropy
-            loss = loss - entropy_bonus
-            metrics["loss/alpha_entropy_bonus"] = entropy_bonus.detach()
+        if simcse is not None:
+            simcse_temperature = self.kernel.tau.detach()
+            if self.simcse_kernel is not None:
+                simcse_temperature = self.simcse_kernel.tau.detach()
+            epsilon = main_mean.new_tensor(1e-12)
+            safe_main_mean = torch.where(
+                main_mean.abs() < epsilon,
+                torch.where(main_mean < 0.0, -epsilon, epsilon),
+                main_mean,
+            )
+            metrics.update(
+                {
+                    "loss/alpha_aux_weighted": weighted_simcse_mean,
+                    "loss/alpha_aux_to_main_ratio": weighted_simcse_mean / safe_main_mean,
+                    "temperature/simcse": simcse_temperature,
+                }
+            )
+        if alpha_target is not None:
+            alpha_target_temperature = self.kernel.tau.detach()
+            if inputs.alpha_target_temperature is not None:
+                alpha_target_temperature = main.new_tensor(float(inputs.alpha_target_temperature))
+            metrics["temperature/alpha_target"] = alpha_target_temperature
 
         if margin_config is not None and inputs.raw_margin is not None:
             regularization = margin_config.regularization_weight * (inputs.raw_margin - margin_config.base).pow(2).mean()
@@ -156,14 +206,18 @@ class ContrastiveObjective(nn.Module):
             metrics["loss/memory_margin_regularization"] = regularization.detach()
             metrics["loss/memory_margin_regularization_tensor"] = regularization
 
-        primary_loss = loss if memory_loss is None else loss - memory_loss
         return ObjectiveOutput(
             loss=loss,
             primary_loss=primary_loss,
             memory_loss=memory_loss,
+            retrieval_loss=retrieval_loss,
+            auxiliary_loss=auxiliary_loss,
+            head_loss=head_loss,
             main_per_row=main,
             memory_per_row=memory_per_row,
             simcse_per_row=simcse,
             soft_fn_per_row=soft_fn,
+            alpha_target=alpha_target,
+            alpha_supervision_per_row=alpha_supervision,
             metrics=metrics,
         )

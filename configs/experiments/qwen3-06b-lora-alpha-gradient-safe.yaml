@@ -1,4 +1,4 @@
-method: vanilla
+method: atom_gate
 
 experiment:
   role: ablation
@@ -34,24 +34,22 @@ optimization:
 
 objective:
   decoupled: false
-  simcse_dropout_weight: 0.0
+  temperature: 0.05
+  simcse_temperature: 0.2
+  simcse_dropout_weight: 0.03
+
+alpha_gate:
+  enabled: true
+  supervision_weight: 0.3
+  target_temperature: 0.2
+
+auxiliary_gradient:
+  mode: safe
+  max_norm_ratio: 0.25
+  eps: 1.0e-12
 
 memory_bank:
-  enabled: true
-  size: 512
-  warmup_steps: 50
-  mass_ratio: 0.5
-  mass_ramp_steps: 20
-  mining: random
-  hard_negatives: 0
-  random_negatives: 12
-  hard_warmup_steps: 0
-  hard_ramp_steps: 1
-  adaptive:
-    enabled: false
-  margin:
-    mode: "off"
-    regularization_weight: 0.0
+  enabled: false
 
 runtime:
   accelerator: auto

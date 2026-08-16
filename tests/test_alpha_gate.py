@@ -23,6 +23,15 @@ def test_query_alpha_gate_returns_one_value_per_query():
     assert torch.all((alpha > 0.0) & (alpha < 1.0))
 
 
+def test_query_alpha_gate_probabilities_are_sigmoid_of_logits():
+    gate = QueryAlphaGate(embedding_dim=4, config=AlphaGateConfig(enabled=True))
+    queries = torch.randn(3, 4)
+
+    probabilities = gate(queries)
+
+    torch.testing.assert_close(probabilities, torch.sigmoid(gate.logits(queries)))
+
+
 def test_query_alpha_gate_backpropagates_from_per_query_weights():
     torch.manual_seed(0)
     gate = QueryAlphaGate(embedding_dim=4, config=AlphaGateConfig(enabled=True))

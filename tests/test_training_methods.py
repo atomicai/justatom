@@ -4,7 +4,14 @@ from dataclasses import replace
 
 import pytest
 
-from justatom.training.config import ExperimentConfig, ExperimentRole, MarginMode, TrainingMethod
+from justatom.training.config import (
+    AuxiliaryGradientConfig,
+    AuxiliaryGradientMode,
+    ExperimentConfig,
+    ExperimentRole,
+    MarginMode,
+    TrainingMethod,
+)
 from justatom.training.methods import canonical_method_config, resolve_method
 
 
@@ -13,15 +20,35 @@ def test_canonical_profiles_have_exact_structural_components():
     gate = canonical_method_config(TrainingMethod.ATOM_GATE)
     atomic = canonical_method_config(TrainingMethod.ATOMIC)
 
+    assert not vanilla.objective.decoupled
+    assert not gate.objective.decoupled
+    assert not atomic.objective.decoupled
     assert not vanilla.alpha_gate.enabled and not vanilla.memory_bank.enabled
     assert gate.alpha_gate.enabled and not gate.memory_bank.enabled
+    assert gate.alpha_gate.supervision_weight == pytest.approx(0.3)
+    assert not hasattr(gate.alpha_gate, "mix_weight")
+    assert not hasattr(gate.objective, "pairwise_margin")
     assert not atomic.alpha_gate.enabled and atomic.memory_bank.enabled
     assert atomic.gradient_projection.enabled
     assert not atomic.objective.decoupled
     assert atomic.memory_bank.mining == "random"
     assert atomic.memory_bank.random_negatives == 12
+    assert atomic.memory_bank.mass_ratio == pytest.approx(0.5)
+    assert atomic.memory_bank.mass_ramp_steps == 20
     assert not atomic.memory_bank.adaptive.enabled
     assert atomic.memory_bank.margin.mode is MarginMode.OFF
+
+
+@pytest.mark.parametrize("method", list(TrainingMethod))
+def test_canonical_methods_reject_dcl_but_ablation_allows_it(method):
+    config = canonical_method_config(method)
+    dcl = replace(config, objective=replace(config.objective, decoupled=True))
+
+    with pytest.raises(ValueError, match="coupled InfoNCE.*experiment.role=ablation"):
+        resolve_method(dcl)
+
+    ablation = replace(dcl, experiment=ExperimentConfig(role=ExperimentRole.ABLATION, seed=42))
+    assert resolve_method(ablation).objective.decoupled
 
 
 def test_canonical_atom_gate_rejects_bank():
@@ -103,3 +130,26 @@ def test_vanilla_memory_bank_requires_ablation_role():
     assert resolved.memory_bank.size == 512
     assert not resolved.memory_bank.adaptive.enabled
     assert resolved.memory_bank.margin.mode is MarginMode.OFF
+
+
+@pytest.mark.parametrize("method", list(TrainingMethod))
+@pytest.mark.parametrize("mode", [AuxiliaryGradientMode.OBSERVE, AuxiliaryGradientMode.SAFE])
+def test_non_off_auxiliary_gradient_requires_atom_gate_ablation(method, mode):
+    config = replace(
+        canonical_method_config(method),
+        auxiliary_gradient=AuxiliaryGradientConfig(mode=mode),
+    )
+
+    with pytest.raises(ValueError, match="atom_gate.*ablation"):
+        resolve_method(config)
+
+
+@pytest.mark.parametrize("mode", [AuxiliaryGradientMode.OBSERVE, AuxiliaryGradientMode.SAFE])
+def test_atom_gate_ablation_accepts_non_off_auxiliary_gradient(mode):
+    config = replace(
+        canonical_method_config(TrainingMethod.ATOM_GATE),
+        experiment=ExperimentConfig(role=ExperimentRole.ABLATION, seed=42),
+        auxiliary_gradient=AuxiliaryGradientConfig(mode=mode),
+    )
+
+    assert resolve_method(config).auxiliary_gradient.mode is mode

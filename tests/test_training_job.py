@@ -3,15 +3,17 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 import yaml
 
-from justatom.training.config import TrainingMethod
+from justatom.training.config import AuxiliaryGradientConfig, AuxiliaryGradientMode, ExperimentRole, TrainingMethod
 from justatom.training.job import RunManifest, TrainingJob, artifact_paths, build_lightning_trainer, write_run_manifest
 from justatom.training.methods import canonical_method_config
 
 
 def test_manifest_contains_resolved_method_seed_and_git_state(tmp_path: Path):
     config = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(config, optimization=replace(config.optimization, batch_size=8, grad_acc_steps=4))
     manifest = RunManifest.from_config(config, git_commit="abc123", git_dirty=True)
 
     path = write_run_manifest(tmp_path, manifest)
@@ -22,8 +24,99 @@ def test_manifest_contains_resolved_method_seed_and_git_state(tmp_path: Path):
     assert loaded["experiment"]["seed"] == 42
     assert loaded["git_commit"] == "abc123"
     assert loaded["git_dirty"] is True
+    assert loaded["objective_contract"] == {
+        "contrastive_kernel": "coupled_infonce",
+        "alpha_aux_gradient": "not_applicable",
+        "memory_mass": "count_normalized",
+        "auxiliary_gradient": "off",
+        "auxiliary_norm": "unbounded",
+    }
+    assert loaded["resolved_config"]["memory_bank"]["mass_ratio"] == pytest.approx(0.5)
+    assert loaded["batch_contract"] == {
+        "contrastive_microbatch": 8,
+        "gradient_accumulation": 4,
+        "optimizer_effective_batch": 32,
+    }
     assert loaded["resolved_config"]["memory_bank"]["margin"]["mode"] == "off"
     assert loaded["resolved_config"]["gradient_projection"]["enabled"] is True
+
+
+def test_disabled_memory_bank_manifest_marks_mass_not_applicable():
+    manifest = RunManifest.from_config(
+        canonical_method_config(TrainingMethod.VANILLA),
+        git_commit="abc123",
+        git_dirty=False,
+    )
+
+    assert manifest.objective_contract["memory_mass"] == "not_applicable"
+
+
+def test_atom_gate_manifest_records_detached_auxiliary_control():
+    manifest = RunManifest.from_config(
+        canonical_method_config(TrainingMethod.ATOM_GATE),
+        git_commit="abc123",
+        git_dirty=False,
+    )
+
+    assert manifest.objective_contract == {
+        "contrastive_kernel": "coupled_infonce",
+        "alpha_aux_gradient": "detached",
+        "memory_mass": "not_applicable",
+        "auxiliary_gradient": "off",
+        "auxiliary_norm": "unbounded",
+        "alpha_target": "detached_positive_softmax_confidence",
+        "alpha_head_input_gradient": "detached",
+    }
+
+
+def test_manifest_records_auxiliary_gradient_control_contract():
+    off = canonical_method_config(TrainingMethod.ATOM_GATE)
+    safe = replace(
+        off,
+        experiment=replace(off.experiment, role=ExperimentRole.ABLATION),
+        auxiliary_gradient=AuxiliaryGradientConfig(mode=AuxiliaryGradientMode.SAFE),
+    )
+
+    off_manifest = RunManifest.from_config(off, git_commit="abc123", git_dirty=False)
+    safe_manifest = RunManifest.from_config(safe, git_commit="abc123", git_dirty=False)
+
+    assert off_manifest.objective_contract["auxiliary_gradient"] == "off"
+    assert off_manifest.objective_contract["auxiliary_norm"] == "unbounded"
+    assert safe_manifest.objective_contract["auxiliary_gradient"] == "cosine_safe"
+    assert safe_manifest.objective_contract["auxiliary_norm"] == "retrieval_relative"
+
+
+def test_manifest_records_resolved_auxiliary_temperatures():
+    config = canonical_method_config(TrainingMethod.ATOM_GATE)
+    config = replace(
+        config,
+        objective=replace(config.objective, simcse_temperature=0.2),
+        alpha_gate=replace(config.alpha_gate, target_temperature=0.3),
+    )
+
+    manifest = RunManifest.from_config(config, git_commit="abc123", git_dirty=False)
+
+    assert manifest.resolved_config["objective"]["simcse_temperature"] == pytest.approx(0.2)
+    assert manifest.resolved_config["alpha_gate"]["target_temperature"] == pytest.approx(0.3)
+
+
+def test_dcl_ablation_manifest_records_decoupled_kernel():
+    config = canonical_method_config(TrainingMethod.VANILLA)
+    config = replace(
+        config,
+        experiment=replace(config.experiment, role=ExperimentRole.ABLATION),
+        objective=replace(config.objective, decoupled=True),
+    )
+
+    manifest = RunManifest.from_config(config, git_commit="abc123", git_dirty=False)
+
+    assert manifest.objective_contract == {
+        "contrastive_kernel": "decoupled_infonce",
+        "alpha_aux_gradient": "not_applicable",
+        "memory_mass": "not_applicable",
+        "auxiliary_gradient": "off",
+        "auxiliary_norm": "unbounded",
+    }
 
 
 def test_artifact_directories_are_distinct(tmp_path: Path):
@@ -35,14 +128,28 @@ def test_artifact_directories_are_distinct(tmp_path: Path):
     assert paths.manifest == tmp_path / "run_manifest.yaml"
 
 
-def test_atomic_trainer_delegates_gradient_accumulation_to_manual_optimization():
+def test_trainer_delegates_gradient_accumulation_to_either_manual_optimization_path():
     atomic = canonical_method_config(TrainingMethod.ATOMIC)
     atomic = replace(atomic, optimization=replace(atomic.optimization, grad_acc_steps=4))
     vanilla = canonical_method_config(TrainingMethod.VANILLA)
     vanilla = replace(vanilla, optimization=replace(vanilla.optimization, grad_acc_steps=4))
+    atom_gate = canonical_method_config(TrainingMethod.ATOM_GATE)
+    atom_gate = replace(atom_gate, optimization=replace(atom_gate.optimization, grad_acc_steps=4))
+    observe = replace(
+        atom_gate,
+        experiment=replace(atom_gate.experiment, role=ExperimentRole.ABLATION),
+        auxiliary_gradient=AuxiliaryGradientConfig(mode=AuxiliaryGradientMode.OBSERVE),
+    )
+    safe = replace(
+        observe,
+        auxiliary_gradient=AuxiliaryGradientConfig(mode=AuxiliaryGradientMode.SAFE),
+    )
 
     assert build_lightning_trainer(atomic).accumulate_grad_batches == 1
+    assert build_lightning_trainer(observe).accumulate_grad_batches == 1
+    assert build_lightning_trainer(safe).accumulate_grad_batches == 1
     assert build_lightning_trainer(vanilla).accumulate_grad_batches == 4
+    assert build_lightning_trainer(atom_gate).accumulate_grad_batches == 4
 
 
 def test_training_job_writes_manifest_before_fit_and_returns_artifacts(tmp_path: Path):
@@ -64,7 +171,6 @@ def test_training_job_writes_manifest_before_fit_and_returns_artifacts(tmp_path:
 
         def save_lora_adapter(self, destination):
             events.append("adapter")
-            return None
 
         def save_research_checkpoint(self, destination):
             events.append("checkpoint")
@@ -79,9 +185,9 @@ def test_training_job_writes_manifest_before_fit_and_returns_artifacts(tmp_path:
 
     job = TrainingJob(
         config,
-        loader_factory=lambda _: ("loader", "processor", {}),
+        loader_factory=lambda _: ("loader", "processor"),
         encoder_factory=lambda *_: "encoder",
-        module_factory=lambda *_args, **_kwargs: FakeModule(),
+        module_factory=lambda *_args: FakeModule(),
         trainer_factory=lambda _: FakeTrainer(),
     )
 

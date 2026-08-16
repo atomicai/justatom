@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pytorch_lightning as L
 import torch
@@ -16,7 +17,14 @@ from justatom.processing.loader import NamedDataLoader
 from justatom.processing.prime import TrainWithContrastiveProcessor
 from justatom.running.encoders import EncoderRunner
 from justatom.tooling.collections import build_collection_metadata, resolve_artifact_dirname, write_collection_metadata
-from justatom.training.config import LoraAdapterConfig, RuntimeConfig, TrainConfig, TrainingMethod, train_config_to_dict
+from justatom.training.config import (
+    AuxiliaryGradientMode,
+    LoraAdapterConfig,
+    RuntimeConfig,
+    TrainConfig,
+    TrainingMethod,
+    train_config_to_dict,
+)
 from justatom.training.data import prepare_training_data_from_config
 from justatom.training.methods import resolve_method
 from justatom.training.module import ContrastiveTrainingModule
@@ -62,6 +70,27 @@ def _git_output(*args: str) -> str | None:
     return value if result.returncode == 0 and value else None
 
 
+def objective_contract(config: TrainConfig) -> dict[str, str]:
+    auxiliary_gradient, auxiliary_norm = {
+        AuxiliaryGradientMode.OFF: ("off", "unbounded"),
+        AuxiliaryGradientMode.OBSERVE: ("observe", "unbounded"),
+        AuxiliaryGradientMode.SAFE: ("cosine_safe", "retrieval_relative"),
+    }[config.auxiliary_gradient.mode]
+    contract = {
+        "contrastive_kernel": ("decoupled_infonce" if config.objective.decoupled else "coupled_infonce"),
+        "alpha_aux_gradient": ("detached" if config.method is TrainingMethod.ATOM_GATE else "not_applicable"),
+        "memory_mass": ("count_normalized" if config.memory_bank.enabled else "not_applicable"),
+        "auxiliary_gradient": auxiliary_gradient,
+        "auxiliary_norm": auxiliary_norm,
+    }
+    if config.method is TrainingMethod.ATOM_GATE:
+        contract.update(
+            alpha_target="detached_positive_softmax_confidence",
+            alpha_head_input_gradient="detached",
+        )
+    return contract
+
+
 @dataclass(frozen=True)
 class RunManifest:
     schema_version: int
@@ -70,6 +99,8 @@ class RunManifest:
     created_at: str
     git_commit: str | None
     git_dirty: bool | None
+    objective_contract: dict[str, str]
+    batch_contract: dict[str, int]
     resolved_config: dict[str, Any]
 
     @classmethod
@@ -79,7 +110,7 @@ class RunManifest:
         *,
         git_commit: str | None,
         git_dirty: bool | None,
-    ) -> "RunManifest":
+    ) -> RunManifest:
         payload = train_config_to_dict(config)
         return cls(
             schema_version=1,
@@ -88,11 +119,17 @@ class RunManifest:
             created_at=datetime.now(timezone.utc).isoformat(),
             git_commit=git_commit,
             git_dirty=git_dirty,
+            objective_contract=objective_contract(config),
+            batch_contract={
+                "contrastive_microbatch": config.optimization.batch_size,
+                "gradient_accumulation": config.optimization.grad_acc_steps,
+                "optimizer_effective_batch": (config.optimization.batch_size * config.optimization.grad_acc_steps),
+            },
             resolved_config=payload,
         )
 
     @classmethod
-    def capture(cls, config: TrainConfig) -> "RunManifest":
+    def capture(cls, config: TrainConfig) -> RunManifest:
         commit = _git_output("rev-parse", "HEAD")
         status = _git_output("status", "--porcelain")
         dirty = None if commit is None else bool(status)
@@ -106,6 +143,8 @@ class RunManifest:
             "created_at": self.created_at,
             "git_commit": self.git_commit,
             "git_dirty": self.git_dirty,
+            "objective_contract": self.objective_contract,
+            "batch_contract": self.batch_contract,
             "resolved_config": self.resolved_config,
         }
 
@@ -137,7 +176,7 @@ def write_collection_metadata_from_config(run_dir: Path, config: TrainConfig) ->
 
 
 def build_training_loader(config: TrainConfig):
-    rows, lexical_lookup = prepare_training_data_from_config(config)
+    rows = prepare_training_data_from_config(config)
     tokenizer = ITokenizer.from_pretrained(config.model.name_or_path)
     processor = TrainWithContrastiveProcessor(
         tokenizer=tokenizer,
@@ -158,7 +197,7 @@ def build_training_loader(config: TrainConfig):
         tensor_names=tensor_names,
         batch_size=config.optimization.batch_size,
     )
-    return loader, processor, lexical_lookup
+    return loader, processor
 
 
 def resolve_torch_device(runtime: RuntimeConfig) -> str:
@@ -243,9 +282,12 @@ def build_lightning_trainer(config: TrainConfig) -> L.Trainer:
         accelerator=config.runtime.accelerator,
         devices=config.runtime.devices,
         precision=resolve_training_precision(config.runtime),
-        # ATOMIC performs gradient accumulation inside its manual optimization
-        # step so both objectives can be differentiated and projected first.
-        accumulate_grad_batches=(1 if config.method is TrainingMethod.ATOMIC else config.optimization.grad_acc_steps),
+        # Manual paths control each microbatch before accumulating its update.
+        accumulate_grad_batches=(
+            1
+            if (config.gradient_projection.enabled or config.auxiliary_gradient.mode is not AuxiliaryGradientMode.OFF)
+            else config.optimization.grad_acc_steps
+        ),
         logger=build_training_logger(config),
         log_every_n_steps=1,
         enable_checkpointing=False,
@@ -290,9 +332,9 @@ class TrainingJob:
         write_run_manifest(paths.root, RunManifest.capture(config))
         write_collection_metadata_from_config(paths.root, config)
 
-        loader, processor, lexical_lookup = self.loader_factory(config)
+        loader, processor = self.loader_factory(config)
         encoder = self.encoder_factory(config, processor)
-        module = self.module_factory(encoder, config, lexical_lookup=lexical_lookup)
+        module = self.module_factory(encoder, config)
         trainer = self.trainer_factory(config)
         trainer.fit(module, train_dataloaders=loader)
 

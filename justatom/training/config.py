@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
@@ -21,6 +22,12 @@ class MarginMode(str, Enum):
     OFF = "off"
     CONSTANT = "constant"
     QUERY = "query"
+
+
+class AuxiliaryGradientMode(str, Enum):
+    OFF = "off"
+    OBSERVE = "observe"
+    SAFE = "safe"
 
 
 @dataclass(frozen=True)
@@ -90,8 +97,8 @@ class ObjectiveConfig:
     temperature: float = 0.05
     learnable_temperature: bool = True
     decoupled: bool = True
-    pairwise_margin: float = 0.5
     simcse_dropout_weight: float = 0.0
+    simcse_temperature: float | None = None
     soft_fn_attract_weight: float = 0.0
     soft_fn_topk: int = 1
 
@@ -107,9 +114,8 @@ class AlphaHeadConfig:
 @dataclass(frozen=True)
 class AlphaGateConfig:
     enabled: bool = False
-    mix_weight: float = 0.3
-    mix_weight_warmup_steps: int = 0
-    entropy_weight: float = 0.0
+    supervision_weight: float = 0.3
+    target_temperature: float | None = None
     head: AlphaHeadConfig = field(default_factory=AlphaHeadConfig)
 
 
@@ -136,6 +142,8 @@ class MemoryBankConfig:
     enabled: bool = False
     size: int = 0
     warmup_steps: int = 0
+    mass_ratio: float = 0.5
+    mass_ramp_steps: int = 20
     mining: str = "all"
     hard_negatives: int = 0
     random_negatives: int = 0
@@ -151,6 +159,13 @@ class GradientProjectionConfig:
 
     enabled: bool = False
     memory_weight: float = 1.0
+    eps: float = 1e-12
+
+
+@dataclass(frozen=True)
+class AuxiliaryGradientConfig:
+    mode: AuxiliaryGradientMode = AuxiliaryGradientMode.OFF
+    max_norm_ratio: float = 0.25
     eps: float = 1e-12
 
 
@@ -190,6 +205,7 @@ class TrainConfig:
     alpha_gate: AlphaGateConfig = field(default_factory=AlphaGateConfig)
     memory_bank: MemoryBankConfig = field(default_factory=MemoryBankConfig)
     gradient_projection: GradientProjectionConfig = field(default_factory=GradientProjectionConfig)
+    auxiliary_gradient: AuxiliaryGradientConfig = field(default_factory=AuxiliaryGradientConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     artifacts: ArtifactConfig = field(default_factory=ArtifactConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -306,6 +322,8 @@ def _require_int(value: Any, path: str, minimum: int | None = None) -> None:
 def _require_number(value: Any, path: str, minimum: float | None = None, maximum: float | None = None) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{path} must be a number")
+    if not math.isfinite(float(value)):
+        raise ValueError(f"{path} must be finite")
     if minimum is not None and value < minimum:
         raise ValueError(f"{path} must be >= {minimum}")
     if maximum is not None and value > maximum:
@@ -358,15 +376,16 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_number(config.objective.temperature, "objective.temperature", 1e-12)
     _require_bool(config.objective.learnable_temperature, "objective.learnable_temperature")
     _require_bool(config.objective.decoupled, "objective.decoupled")
-    _require_number(config.objective.pairwise_margin, "objective.pairwise_margin", 0.0)
     _require_number(config.objective.simcse_dropout_weight, "objective.simcse_dropout_weight", 0.0)
+    if config.objective.simcse_temperature is not None:
+        _require_number(config.objective.simcse_temperature, "objective.simcse_temperature", 1e-3, 1.0)
     _require_number(config.objective.soft_fn_attract_weight, "objective.soft_fn_attract_weight", 0.0)
     _require_int(config.objective.soft_fn_topk, "objective.soft_fn_topk", 1)
 
     _require_bool(config.alpha_gate.enabled, "alpha_gate.enabled")
-    _require_number(config.alpha_gate.mix_weight, "alpha_gate.mix_weight", 0.0, 1.0)
-    _require_int(config.alpha_gate.mix_weight_warmup_steps, "alpha_gate.mix_weight_warmup_steps", 0)
-    _require_number(config.alpha_gate.entropy_weight, "alpha_gate.entropy_weight", 0.0)
+    _require_number(config.alpha_gate.supervision_weight, "alpha_gate.supervision_weight", 0.0)
+    if config.alpha_gate.target_temperature is not None:
+        _require_number(config.alpha_gate.target_temperature, "alpha_gate.target_temperature", 1e-12)
     _require_int(config.alpha_gate.head.layers, "alpha_gate.head.layers", 1)
     if config.alpha_gate.head.hidden_dim is not None:
         _require_int(config.alpha_gate.head.hidden_dim, "alpha_gate.head.hidden_dim", 1)
@@ -378,6 +397,8 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_bool(bank.enabled, "memory_bank.enabled")
     _require_int(bank.size, "memory_bank.size", 0)
     _require_int(bank.warmup_steps, "memory_bank.warmup_steps", 0)
+    _require_number(bank.mass_ratio, "memory_bank.mass_ratio", 0.0)
+    _require_int(bank.mass_ramp_steps, "memory_bank.mass_ramp_steps", 1)
     if bank.mining not in {"all", "random", "hard", "mixed"}:
         raise ValueError("memory_bank.mining must be one of: all, random, hard, mixed")
     _require_int(bank.hard_negatives, "memory_bank.hard_negatives", 0)
@@ -398,6 +419,12 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_bool(projection.enabled, "gradient_projection.enabled")
     _require_number(projection.memory_weight, "gradient_projection.memory_weight", 0.0)
     _require_number(projection.eps, "gradient_projection.eps", 1e-30)
+
+    auxiliary = config.auxiliary_gradient
+    _require_number(auxiliary.max_norm_ratio, "auxiliary_gradient.max_norm_ratio", 0.0)
+    _require_number(auxiliary.eps, "auxiliary_gradient.eps")
+    if auxiliary.eps <= 0.0:
+        raise ValueError("auxiliary_gradient.eps must be > 0.0")
 
     if config.telemetry.backend not in {"csv", "wandb"}:
         raise ValueError("telemetry.backend must be one of: csv, wandb")

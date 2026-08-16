@@ -4,9 +4,9 @@ Justatom has one production training path and three public methods.
 
 | Method | Primary objective | Auxiliary objective | Gradient control |
 | --- | --- | --- | --- |
-| `vanilla` | InfoNCE | none | none |
-| `atom_gate` | InfoNCE | query-controlled SimCSE pressure | learned `alpha(q)` |
-| `atomic` | standard coupled InfoNCE | detached online memory | one-sided orthogonal projection |
+| `vanilla` | coupled InfoNCE | none | none |
+| `atom_gate` | coupled InfoNCE | confidence-supervised query-controlled SimCSE | detached alpha target and head input |
+| `atomic` | coupled InfoNCE | detached online memory | one-sided orthogonal projection |
 
 ## Objective
 
@@ -17,22 +17,114 @@ in-batch similarity matrix is
 S = Q P^T,       S_ij = cosine(q_i, p_j).
 ```
 
-The decoupled InfoNCE row loss is
+All three canonical methods use the same coupled InfoNCE row loss:
 
 ```text
-L_i = -S_ii / tau + log sum_{j != i} exp(S_ij / tau).
+L_i = -S_ii / tau + log sum_j exp(S_ij / tau).
 ```
 
-`atom_gate` learns a query-only scalar `alpha_i = alpha(q_i)` and adds the
-SimCSE dropout-view pressure per query:
+`atom_gate` learns a query-only scalar from a detached query representation,
+with its target derived from the detached in-batch positive retrieval
+confidence:
 
 ```text
-L_i_gate = L_i + (1 - alpha_i) lambda_sc L_i_sc.
+t_i = stop_gradient(softmax(S / tau_target)_ii)
+alpha_i = sigmoid(MLP(stop_gradient(q_i)))
+L_i = L_InfoNCE,i
+    + (1 - stop_gradient(alpha_i)) lambda_sc L_SimCSE,i
+    + lambda_alpha BCEWithLogits(alpha_logit_i, t_i)
 ```
 
-When lexical metadata is available, the same gate also controls a pairwise
-semantic/lexical auxiliary term. The gate is training-only; the saved encoder
-has the same inference interface as the source embedding model.
+The gate cannot lower the current SimCSE loss by moving toward one. Its BCE
+term trains the head against retrieval confidence while leaving the encoder
+path detached. The gate is training-only; the saved encoder has the same
+inference interface as the source embedding model.
+
+The retrieval, confidence-target, and SimCSE temperatures can be separated
+without changing the primary retrieval objective:
+
+```yaml
+objective:
+  temperature: 0.05
+  simcse_temperature: 0.2
+
+alpha_gate:
+  target_temperature: 0.2
+```
+
+Both auxiliary fields default to `null`. In that compatibility mode,
+`tau_target` and `tau_simcse` reuse the live retrieval temperature exactly.
+A non-null value is a fixed, non-learnable auxiliary temperature. The target
+temperature must be finite and greater than zero. The SimCSE temperature must
+also fit the contrastive kernel range `[1e-3, 1.0]`, so it is never silently
+clamped to a value different from the manifest. The dotted CLI overrides are
+`--objective.simcse-temperature 0.2` and
+`--alpha-gate.target-temperature 0.2`. The value `0.2` is an experimental
+setting for reducing target and SimCSE saturation, not a canonical method
+default.
+
+The alpha head still consumes `stop_gradient(q_i)`. The target is detached,
+and the auxiliary multiplier uses `stop_gradient(alpha_i)`, so gate BCE updates
+only the head while SimCSE updates both query views in the encoder. Training
+telemetry exposes `temperature/simcse`, `temperature/alpha_target`, the raw
+`loss/alpha_aux`, its actual contribution as `loss/alpha_aux_weighted`, and
+the signed contribution ratio `loss/alpha_aux_to_main_ratio`. These additional
+columns are emitted only when the corresponding alpha or SimCSE path is active.
+
+### Gradient-safe auxiliary ablation
+
+`atom_gate` ablations may control the encoder-side SimCSE gradient against the
+retrieval gradient for every contrastive microbatch. Let `g_r` be the retrieval
+gradient over shared encoder parameters and `g_a` the detached-alpha-weighted
+SimCSE gradient. In `safe` mode, the controller computes
+
+```text
+c = max(0, dot(g_r, g_a) / max(||g_r|| ||g_a||, eps))
+s = min(1, max_norm_ratio ||g_r|| / (c ||g_a|| + eps))
+g_a_safe = c s g_a
+```
+
+When `dot(g_r, g_a) <= 0` or either norm is at most `eps`, it sets both scales
+to zero. This bounds `||g_a_safe|| <= max_norm_ratio ||g_r||`; more importantly,
+the shared encoder update has the first-order boundary
+`dot(g_r, g_r + g_a_safe) >= ||g_r||^2`. The controller therefore never adds an
+auxiliary component that opposes the retrieval descent direction to first order.
+The alpha BCE/head gradient is retained unchanged on its separate parameters.
+
+`observe` performs the same per-microbatch manual capture and emits the same
+statistics, but applies the auxiliary gradient unchanged. Controller telemetry
+is `gradient/retrieval_norm`, `gradient/auxiliary_norm`,
+`gradient/auxiliary_controlled_norm`, `gradient/auxiliary_dot`,
+`gradient/auxiliary_cosine`, `gradient/auxiliary_compatible`,
+`gradient/auxiliary_cosine_scale`, `gradient/auxiliary_norm_scale`, and
+`gradient/auxiliary_total_scale`.
+
+Use `observe` before a safe run to collect the compatibility distribution:
+
+```bash
+bash scripts/run_pipeline.sh \
+  --train-config configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml \
+  --method atom_gate \
+  --experiment-role ablation \
+  --dataset-ids justatom \
+  --model Qwen/Qwen3-Embedding-0.6B \
+  --batch-size 8 \
+  --grad-acc-steps 4 \
+  --epochs 1 \
+  --nsamples 3000 \
+  --temperature 0.05 \
+  --aux-gradient-mode observe \
+  --aux-gradient-max-norm-ratio 0.25 \
+  --aux-gradient-eps 1e-12 \
+  --wandb-mode disabled
+```
+
+`--train-config` replaces only the pipeline's `--config configs/train.yaml`
+argument. Pipeline defaults and explicit shell options still override values in
+the selected YAML. Run manifests expose this decision under `objective_contract`:
+`auxiliary_gradient` is `off`, `observe`, or `cosine_safe`, while
+`auxiliary_norm` is `unbounded` except for `safe`, which records
+`retrieval_relative`.
 
 ## ATOMIC: protected online memory
 
@@ -45,6 +137,19 @@ loss. It decomposes the objective exactly into:
 L_primary = InfoNCE(Q, P)
 L_memory  = InfoNCE(Q, P, B) - InfoNCE(Q, P)
 ```
+
+For a query `i` with `K_i` selected bank candidates in a contrastive
+microbatch of `N` pairs, the augmented denominator is count-normalized:
+
+```text
+L_aug,i = -z_ii + log(
+  exp(z_ii) + A_batch,i + lambda(t) (N - 1) / K_i A_bank,i
+)
+```
+
+The selected-bank term is omitted when `K_i = 0`. `lambda(t)` applies the
+configured memory-mass ramp, so `mass_ratio` controls the normalized bank mass
+without changing its meaning when the number of selected candidates changes.
 
 Let `g_p` and `g_m` be their gradients over the trainable parameters. The
 primary gradient is protected. When the memory gradient conflicts with it,
@@ -69,10 +174,26 @@ implemented with ordinary PyTorch operations and works on CUDA, MPS, and CPU.
 ## Canonical Profiles
 
 Selecting a method applies its registered defaults before YAML and CLI
-overrides. Canonical `atomic` uses standard coupled InfoNCE, a 512-entry FIFO
-bank, 50 optimizer-step warmup, 12 random candidates per query, and memory
-weight `1.0`. It does not construct the old alpha gate or a query-margin head.
-Structural additions must be labeled as ablations:
+overrides. Canonical `vanilla`, `atom_gate`, and `atomic` share coupled
+InfoNCE so method comparisons do not change the primary contrastive kernel.
+Using decoupled InfoNCE requires `experiment.role: ablation` explicitly.
+
+Canonical `atomic` adds a 512-entry FIFO bank, 50 optimizer-step warmup, 12
+random candidates per query, and memory weight `1.0`. It does not construct
+the alpha gate or a query-margin head. Structural additions must be labeled as
+ablations:
+
+Run manifests record the resolved kernel, alpha gradient policy, and memory
+mass policy under `objective_contract`; enabled banks declare
+`memory_mass: count_normalized`, while disabled banks declare
+`memory_mass: not_applicable`. Their `batch_contract` records the contrastive
+microbatch, gradient accumulation, and optimizer effective batch as
+`contrastive_microbatch`, `gradient_accumulation`, and
+`optimizer_effective_batch`, respectively. Results produced before this
+contract was introduced used different canonical objectives and must not be
+pooled with or directly compared against new runs. Re-run matched methods with
+the same model, split, seed, batch size, optimizer, and epoch count before
+drawing method-level conclusions.
 
 ```bash
 python -m justatom.api.train \
@@ -193,6 +314,12 @@ The reproducible Qwen3 0.6B vanilla-plus-bank control is available at
 coupled InfoNCE, 3,000 sampled pairs, one epoch, and 12 random detached bank
 negatives per query. Override `dataset.id` and `artifacts.save_dir` on the
 command line to reuse the recipe.
+
+The matching gradient-safe `atom_gate` ablation is
+`configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml`. It keeps the
+same Qwen3 LoRA, data, optimization, and runtime values, disables the memory
+bank, and fixes `tau=0.05`, `tau_simcse=0.2`, `tau_target=0.2`,
+`lambda_sc=0.03`, and the `safe` controller ratio at `0.25`.
 
 ## Artifacts
 
