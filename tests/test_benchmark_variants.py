@@ -105,6 +105,74 @@ class BenchmarkVariantTests(unittest.TestCase):
             self.assertIn("--memory-bank-mass-ramp-steps 20", commands)
 
     @unittest.skipIf(os.name == "nt", "benchmark shell tests require a Unix environment")
+    def test_benchmark_forwards_train_config_and_auxiliary_gradient_controls(self):
+        with TemporaryDirectory() as tmpdir:
+            bench_root = Path(tmpdir) / "bench"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/run_benchmark.sh",
+                    "--dataset-ids",
+                    "justatom",
+                    "--variants",
+                    "atom_gate",
+                    "--bench-root",
+                    str(bench_root),
+                    "--train-config",
+                    "configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml",
+                    "--aux-gradient-mode",
+                    "safe",
+                    "--aux-gradient-max-norm-ratio",
+                    "0.25",
+                    "--aux-gradient-eps",
+                    "1e-12",
+                    "--dry-run",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            commands = (bench_root / "COMMANDS.md").read_text()
+            self.assertIn(
+                "--train-config configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml",
+                commands,
+            )
+            self.assertIn("--aux-gradient-mode safe", commands)
+            self.assertIn("--aux-gradient-max-norm-ratio 0.25", commands)
+            self.assertIn("--aux-gradient-eps 1e-12", commands)
+
+    @unittest.skipIf(os.name == "nt", "pipeline shell tests require a Unix environment")
+    def test_pipeline_rejects_missing_train_config_before_creating_run_root(self):
+        with TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir) / "runs"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "scripts/run_pipeline.sh",
+                    "--dataset-ids",
+                    "justatom",
+                    "--output-root",
+                    str(output_root),
+                    "--train-config",
+                    "configs/experiments/missing.yaml",
+                    "--eval-only",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("training config does not exist", result.stderr)
+            self.assertFalse(output_root.exists())
+
+    @unittest.skipIf(os.name == "nt", "benchmark shell tests require a Unix environment")
     def test_retired_bank_variant_points_to_atomic(self):
         result = subprocess.run(
             [

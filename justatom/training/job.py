@@ -75,10 +75,17 @@ def _git_output(*args: str) -> str | None:
 
 
 def objective_contract(config: TrainConfig) -> dict[str, str]:
+    auxiliary_gradient, auxiliary_norm = {
+        AuxiliaryGradientMode.OFF: ("off", "unbounded"),
+        AuxiliaryGradientMode.OBSERVE: ("observe", "unbounded"),
+        AuxiliaryGradientMode.SAFE: ("cosine_safe", "retrieval_relative"),
+    }[config.auxiliary_gradient.mode]
     contract = {
         "contrastive_kernel": ("decoupled_infonce" if config.objective.decoupled else "coupled_infonce"),
         "alpha_aux_gradient": ("detached" if config.method is TrainingMethod.ATOM_GATE else "not_applicable"),
         "memory_mass": ("count_normalized" if config.memory_bank.enabled else "not_applicable"),
+        "auxiliary_gradient": auxiliary_gradient,
+        "auxiliary_norm": auxiliary_norm,
     }
     if config.method is TrainingMethod.ATOM_GATE:
         contract.update(

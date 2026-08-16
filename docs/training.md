@@ -71,6 +71,61 @@ telemetry exposes `temperature/simcse`, `temperature/alpha_target`, the raw
 the signed contribution ratio `loss/alpha_aux_to_main_ratio`. These additional
 columns are emitted only when the corresponding alpha or SimCSE path is active.
 
+### Gradient-safe auxiliary ablation
+
+`atom_gate` ablations may control the encoder-side SimCSE gradient against the
+retrieval gradient for every contrastive microbatch. Let `g_r` be the retrieval
+gradient over shared encoder parameters and `g_a` the detached-alpha-weighted
+SimCSE gradient. In `safe` mode, the controller computes
+
+```text
+c = max(0, dot(g_r, g_a) / max(||g_r|| ||g_a||, eps))
+s = min(1, max_norm_ratio ||g_r|| / (c ||g_a|| + eps))
+g_a_safe = c s g_a
+```
+
+When `dot(g_r, g_a) <= 0` or either norm is at most `eps`, it sets both scales
+to zero. This bounds `||g_a_safe|| <= max_norm_ratio ||g_r||`; more importantly,
+the shared encoder update has the first-order boundary
+`dot(g_r, g_r + g_a_safe) >= ||g_r||^2`. The controller therefore never adds an
+auxiliary component that opposes the retrieval descent direction to first order.
+The alpha BCE/head gradient is retained unchanged on its separate parameters.
+
+`observe` performs the same per-microbatch manual capture and emits the same
+statistics, but applies the auxiliary gradient unchanged. Controller telemetry
+is `gradient/retrieval_norm`, `gradient/auxiliary_norm`,
+`gradient/auxiliary_controlled_norm`, `gradient/auxiliary_dot`,
+`gradient/auxiliary_cosine`, `gradient/auxiliary_compatible`,
+`gradient/auxiliary_cosine_scale`, `gradient/auxiliary_norm_scale`, and
+`gradient/auxiliary_total_scale`.
+
+Use `observe` before a safe run to collect the compatibility distribution:
+
+```bash
+bash scripts/run_pipeline.sh \
+  --train-config configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml \
+  --method atom_gate \
+  --experiment-role ablation \
+  --dataset-ids justatom \
+  --model Qwen/Qwen3-Embedding-0.6B \
+  --batch-size 8 \
+  --grad-acc-steps 4 \
+  --epochs 1 \
+  --nsamples 3000 \
+  --temperature 0.05 \
+  --aux-gradient-mode observe \
+  --aux-gradient-max-norm-ratio 0.25 \
+  --aux-gradient-eps 1e-12 \
+  --wandb-mode disabled
+```
+
+`--train-config` replaces only the pipeline's `--config configs/train.yaml`
+argument. Pipeline defaults and explicit shell options still override values in
+the selected YAML. Run manifests expose this decision under `objective_contract`:
+`auxiliary_gradient` is `off`, `observe`, or `cosine_safe`, while
+`auxiliary_norm` is `unbounded` except for `safe`, which records
+`retrieval_relative`.
+
 ## ATOMIC: protected online memory
 
 `atomic` keeps a FIFO queue `B` of detached document embeddings. The bank does
@@ -259,6 +314,12 @@ The reproducible Qwen3 0.6B vanilla-plus-bank control is available at
 coupled InfoNCE, 3,000 sampled pairs, one epoch, and 12 random detached bank
 negatives per query. Override `dataset.id` and `artifacts.save_dir` on the
 command line to reuse the recipe.
+
+The matching gradient-safe `atom_gate` ablation is
+`configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml`. It keeps the
+same Qwen3 LoRA, data, optimization, and runtime values, disables the memory
+bank, and fixes `tau=0.05`, `tau_simcse=0.2`, `tau_target=0.2`,
+`lambda_sc=0.03`, and the `safe` controller ratio at `0.25`.
 
 ## Artifacts
 

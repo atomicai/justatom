@@ -1,0 +1,58 @@
+method: atom_gate
+
+experiment:
+  role: ablation
+  seed: 42
+
+model:
+  name_or_path: Qwen/Qwen3-Embedding-0.6B
+  query_prefix: |-
+    Instruct: Given a web search query, retrieve relevant passages that answer the query
+    Query:
+  content_prefix: ""
+  max_query_seq_len: 128
+  max_seq_len: 512
+  lora:
+    enabled: true
+    rank: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: all-linear
+    use_rslora: true
+    bias: none
+
+dataset:
+  id: miracl-ru
+  limit: 10000
+
+optimization:
+  lr_encoder: 0.00002
+  batch_size: 8
+  grad_acc_steps: 4
+  epochs: 1
+  num_samples: 3000
+
+objective:
+  decoupled: false
+  temperature: 0.05
+  simcse_temperature: 0.2
+  simcse_dropout_weight: 0.03
+
+alpha_gate:
+  enabled: true
+  supervision_weight: 0.3
+  target_temperature: 0.2
+
+auxiliary_gradient:
+  mode: safe
+  max_norm_ratio: 0.25
+  eps: 1.0e-12
+
+memory_bank:
+  enabled: false
+
+runtime:
+  accelerator: auto
+  devices: 1
+  precision: auto
+  gradient_checkpointing: true

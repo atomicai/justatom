@@ -33,6 +33,8 @@ def test_manifest_contains_resolved_method_seed_and_git_state(tmp_path: Path):
         "contrastive_kernel": "coupled_infonce",
         "alpha_aux_gradient": "not_applicable",
         "memory_mass": "count_normalized",
+        "auxiliary_gradient": "off",
+        "auxiliary_norm": "unbounded",
     }
     assert loaded["resolved_config"]["memory_bank"]["mass_ratio"] == pytest.approx(0.5)
     assert loaded["batch_contract"] == {
@@ -65,9 +67,28 @@ def test_atom_gate_manifest_records_detached_auxiliary_control():
         "contrastive_kernel": "coupled_infonce",
         "alpha_aux_gradient": "detached",
         "memory_mass": "not_applicable",
+        "auxiliary_gradient": "off",
+        "auxiliary_norm": "unbounded",
         "alpha_target": "detached_positive_softmax_confidence",
         "alpha_head_input_gradient": "detached",
     }
+
+
+def test_manifest_records_auxiliary_gradient_control_contract():
+    off = canonical_method_config(TrainingMethod.ATOM_GATE)
+    safe = replace(
+        off,
+        experiment=replace(off.experiment, role=ExperimentRole.ABLATION),
+        auxiliary_gradient=AuxiliaryGradientConfig(mode=AuxiliaryGradientMode.SAFE),
+    )
+
+    off_manifest = RunManifest.from_config(off, git_commit="abc123", git_dirty=False)
+    safe_manifest = RunManifest.from_config(safe, git_commit="abc123", git_dirty=False)
+
+    assert off_manifest.objective_contract["auxiliary_gradient"] == "off"
+    assert off_manifest.objective_contract["auxiliary_norm"] == "unbounded"
+    assert safe_manifest.objective_contract["auxiliary_gradient"] == "cosine_safe"
+    assert safe_manifest.objective_contract["auxiliary_norm"] == "retrieval_relative"
 
 
 def test_manifest_records_resolved_auxiliary_temperatures():
@@ -98,6 +119,8 @@ def test_dcl_ablation_manifest_records_decoupled_kernel():
         "contrastive_kernel": "decoupled_infonce",
         "alpha_aux_gradient": "not_applicable",
         "memory_mass": "not_applicable",
+        "auxiliary_gradient": "off",
+        "auxiliary_norm": "unbounded",
     }
 
 
