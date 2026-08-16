@@ -20,6 +20,9 @@ def test_objective_vanilla_has_no_auxiliary_components():
 
     assert output.loss.ndim == 0
     torch.testing.assert_close(output.primary_loss, output.loss)
+    torch.testing.assert_close(output.retrieval_loss, output.main_per_row.mean())
+    torch.testing.assert_close(output.auxiliary_loss, torch.zeros_like(output.loss))
+    torch.testing.assert_close(output.head_loss, torch.zeros_like(output.loss))
     assert output.memory_loss is None
     assert output.simcse_per_row is None
     assert output.metrics["loss/alpha_aux"] == 0.0
@@ -116,13 +119,22 @@ def test_objective_atom_gate_detaches_alpha_only_from_auxiliary_gradient():
             positives=positives,
             query_alt=alternate_queries,
             alpha_logits=alpha_logits,
-            alpha_supervision_weight=0.0,
+            alpha_supervision_weight=0.3,
         )
     )
 
     assert output.simcse_per_row is not None
-    expected = (output.main_per_row + (1.0 - torch.sigmoid(alpha_logits).detach()) * 0.1 * output.simcse_per_row).mean()
-    torch.testing.assert_close(output.loss, expected)
+    assert output.alpha_supervision_per_row is not None
+    expected_retrieval = output.main_per_row.mean()
+    expected_auxiliary = (0.1 * (1.0 - torch.sigmoid(alpha_logits).detach()) * output.simcse_per_row).mean()
+    expected_head = 0.3 * output.alpha_supervision_per_row.mean()
+    torch.testing.assert_close(output.retrieval_loss, expected_retrieval)
+    torch.testing.assert_close(output.auxiliary_loss, expected_auxiliary)
+    torch.testing.assert_close(output.head_loss, expected_head)
+    torch.testing.assert_close(
+        output.loss,
+        output.retrieval_loss + output.auxiliary_loss + output.head_loss,
+    )
 
     high_alpha = objective(
         ObjectiveInputs(
@@ -144,11 +156,26 @@ def test_objective_atom_gate_detaches_alpha_only_from_auxiliary_gradient():
     )
     assert low_alpha.loss.detach() > high_alpha.loss.detach()
 
-    auxiliary_only = output.loss - output.main_per_row.mean()
-    auxiliary_only.backward()
-    assert alpha_logits.grad is None
-    assert queries.grad is not None and float(queries.grad.abs().sum()) > 0.0
-    assert alternate_queries.grad is not None and float(alternate_queries.grad.abs().sum()) > 0.0
+    retrieval_gradient = torch.autograd.grad(output.retrieval_loss, queries, retain_graph=True)[0]
+    retrieval_positive_gradient = torch.autograd.grad(output.retrieval_loss, positives, retain_graph=True)[0]
+    auxiliary_query_gradient = torch.autograd.grad(output.auxiliary_loss, queries, retain_graph=True)[0]
+    auxiliary_alternate_gradient = torch.autograd.grad(output.auxiliary_loss, alternate_queries, retain_graph=True)[0]
+    auxiliary_alpha_gradient = torch.autograd.grad(
+        output.auxiliary_loss,
+        alpha_logits,
+        allow_unused=True,
+        retain_graph=True,
+    )[0]
+    head_alpha_gradient = torch.autograd.grad(output.head_loss, alpha_logits, retain_graph=True)[0]
+    head_query_gradient = torch.autograd.grad(output.head_loss, queries, allow_unused=True)[0]
+
+    assert float(retrieval_gradient.abs().sum()) > 0.0
+    assert float(retrieval_positive_gradient.abs().sum()) > 0.0
+    assert float(auxiliary_query_gradient.abs().sum()) > 0.0
+    assert float(auxiliary_alternate_gradient.abs().sum()) > 0.0
+    assert auxiliary_alpha_gradient is None
+    assert float(head_alpha_gradient.abs().sum()) > 0.0
+    assert head_query_gradient is None
 
 
 def test_atom_gate_uses_detached_positive_confidence_with_learnable_temperature():
@@ -391,6 +418,7 @@ def test_objective_atomic_forwards_bank_columns_and_live_margin():
     )
     assert output.memory_loss is not None
     assert output.memory_per_row is not None
+    torch.testing.assert_close(output.primary_loss, output.retrieval_loss + output.auxiliary_loss + output.head_loss)
     torch.testing.assert_close(output.loss, output.primary_loss + output.memory_loss)
     output.loss.backward()
 
@@ -429,6 +457,8 @@ def test_normalized_bank_matches_closed_form_at_non_unit_temperature():
     torch.testing.assert_close(four.main_per_row + four.memory_per_row, expected_augmented)
     torch.testing.assert_close(one.loss, one.primary_loss + one.memory_loss)
     torch.testing.assert_close(four.loss, four.primary_loss + four.memory_loss)
+    torch.testing.assert_close(one.primary_loss, one.retrieval_loss + one.auxiliary_loss + one.head_loss)
+    torch.testing.assert_close(four.primary_loss, four.retrieval_loss + four.auxiliary_loss + four.head_loss)
     assert torch.isfinite(one.loss)
     assert torch.isfinite(four.loss)
 

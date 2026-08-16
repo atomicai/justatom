@@ -29,6 +29,9 @@ class ObjectiveOutput:
     loss: torch.Tensor
     primary_loss: torch.Tensor
     memory_loss: torch.Tensor | None
+    retrieval_loss: torch.Tensor
+    auxiliary_loss: torch.Tensor
+    head_loss: torch.Tensor
     main_per_row: torch.Tensor
     memory_per_row: torch.Tensor | None
     simcse_per_row: torch.Tensor | None
@@ -126,16 +129,17 @@ class ContrastiveObjective(nn.Module):
             )
             auxiliary = auxiliary + self.config.soft_fn_attract_weight * soft_fn
 
-        per_row = main + auxiliary
+        weighted_encoder_auxiliary = auxiliary
         alpha_target = None
         alpha_supervision = None
+        weighted_alpha_supervision = main.new_zeros(())
         if inputs.alpha_logits is not None:
             alpha_logits = inputs.alpha_logits.view(-1)
             if alpha_logits.shape != main.shape:
                 raise ValueError(f"alpha logits must have shape {tuple(main.shape)}, got {tuple(alpha_logits.shape)}")
             alpha = torch.sigmoid(alpha_logits)
             auxiliary_weight = 1.0 - alpha.detach()
-            per_row = main + auxiliary_weight * auxiliary
+            weighted_encoder_auxiliary = auxiliary_weight * auxiliary
             if weighted_simcse is not None:
                 weighted_simcse = auxiliary_weight * weighted_simcse
             confidence_logits = inputs.queries.detach() @ inputs.positives.detach().T
@@ -146,11 +150,14 @@ class ContrastiveObjective(nn.Module):
             alpha_target = torch.softmax(confidence_logits, dim=-1).diagonal()
             alpha_supervision = F.binary_cross_entropy_with_logits(alpha_logits, alpha_target, reduction="none")
             if inputs.alpha_supervision_weight != 0.0:
-                per_row = per_row + inputs.alpha_supervision_weight * alpha_supervision
-        if memory_per_row is not None:
-            per_row = per_row + memory_per_row
-        loss = per_row.mean()
+                weighted_alpha_supervision = inputs.alpha_supervision_weight * alpha_supervision
+
+        retrieval_loss = main.mean()
+        auxiliary_loss = weighted_encoder_auxiliary.mean()
+        head_loss = weighted_alpha_supervision.mean()
+        primary_loss = retrieval_loss + auxiliary_loss + head_loss
         memory_loss = None if memory_per_row is None else memory_per_row.mean()
+        loss = primary_loss if memory_loss is None else primary_loss + memory_loss
 
         active_negatives = 0.0
         if memory is not None and memory.active_mask is not None:
@@ -199,11 +206,13 @@ class ContrastiveObjective(nn.Module):
             metrics["loss/memory_margin_regularization"] = regularization.detach()
             metrics["loss/memory_margin_regularization_tensor"] = regularization
 
-        primary_loss = loss if memory_loss is None else loss - memory_loss
         return ObjectiveOutput(
             loss=loss,
             primary_loss=primary_loss,
             memory_loss=memory_loss,
+            retrieval_loss=retrieval_loss,
+            auxiliary_loss=auxiliary_loss,
+            head_loss=head_loss,
             main_per_row=main,
             memory_per_row=memory_per_row,
             simcse_per_row=simcse,
