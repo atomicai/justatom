@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 import pytorch_lightning as L
@@ -95,6 +96,7 @@ def auxiliary_control_config(
     mode: AuxiliaryGradientMode,
     *,
     max_norm_ratio: float = 0.25,
+    eps: float = 1e-12,
     grad_acc_steps: int = 1,
 ):
     config = canonical_method_config(TrainingMethod.ATOM_GATE)
@@ -105,6 +107,7 @@ def auxiliary_control_config(
         auxiliary_gradient=AuxiliaryGradientConfig(
             mode=mode,
             max_norm_ratio=max_norm_ratio,
+            eps=eps,
         ),
     )
 
@@ -157,6 +160,11 @@ def manual_gradient_module(
     shared = nn.Parameter(torch.ones(2))
     head = nn.Parameter(torch.ones(1))
     optimizer = torch.optim.SGD([shared, head], lr=0.1)
+    module.trainer = SimpleNamespace(
+        precision_plugin=SimpleNamespace(scaler=None),
+        global_step=0,
+        is_last_batch=False,
+    )
     monkeypatch.setattr(module, "optimizers", lambda: optimizer)
     monkeypatch.setattr(
         module,
@@ -164,6 +172,43 @@ def manual_gradient_module(
         lambda loss, retain_graph=False: loss.backward(retain_graph=retain_graph),
     )
     return module, shared, head, optimizer
+
+
+class SimulatedGradientScaler:
+    def __init__(self, scale: float):
+        self._scale = scale
+
+    def get_scale(self) -> float:
+        return self._scale
+
+    def scale(self, loss: torch.Tensor) -> torch.Tensor:
+        return loss * self._scale
+
+
+class SimulatedScaledOptimizer:
+    def __init__(self, optimizer: torch.optim.Optimizer, scaler: SimulatedGradientScaler):
+        self.optimizer = optimizer
+        self.scaler = scaler
+        self.scaled_step_gradients: list[list[torch.Tensor | None]] = []
+        self.unscaled_step_gradients: list[list[torch.Tensor | None]] = []
+
+    @property
+    def parameters(self) -> list[nn.Parameter]:
+        return [parameter for group in self.optimizer.param_groups for parameter in group["params"]]
+
+    def zero_grad(self) -> None:
+        self.optimizer.zero_grad()
+
+    def step(self) -> None:
+        self.scaled_step_gradients.append(
+            [None if parameter.grad is None else parameter.grad.detach().clone() for parameter in self.parameters]
+        )
+        for parameter in self.parameters:
+            if parameter.grad is not None:
+                parameter.grad.div_(self.scaler.get_scale())
+        self.unscaled_step_gradients.append(
+            [None if parameter.grad is None else parameter.grad.detach().clone() for parameter in self.parameters]
+        )
 
 
 def test_module_constructs_only_components_required_by_method():
@@ -778,6 +823,65 @@ def test_auxiliary_control_step_accumulates_controlled_microbatches_before_one_s
     assert len(step_gradients) == 1
     torch.testing.assert_close(step_gradients[0][0], torch.tensor([1.25, 0.0]))
     torch.testing.assert_close(step_gradients[0][1], torch.tensor([3.0]))
+    assert shared.grad is None
+    assert head.grad is None
+
+
+def test_auxiliary_control_step_uses_unscaled_controller_with_nonunit_scaler(
+    monkeypatch,
+):
+    scale = 8.0
+    config = auxiliary_control_config(
+        AuxiliaryGradientMode.SAFE,
+        eps=1e-3,
+        grad_acc_steps=2,
+    )
+    module = ContrastiveTrainingModule.build(TinyEncoder(), config)
+    shared = nn.Parameter(torch.ones(2))
+    head = nn.Parameter(torch.ones(1))
+    scaler = SimulatedGradientScaler(scale)
+    optimizer = SimulatedScaledOptimizer(
+        torch.optim.SGD([shared, head], lr=0.1),
+        scaler,
+    )
+    module.trainer = SimpleNamespace(
+        precision_plugin=SimpleNamespace(scaler=scaler),
+        global_step=0,
+        is_last_batch=False,
+    )
+    monkeypatch.setattr(module, "optimizers", lambda: optimizer)
+    monkeypatch.setattr(
+        module,
+        "manual_backward",
+        lambda loss, retain_graph=False: scaler.scale(loss).backward(retain_graph=retain_graph),
+    )
+
+    def output():
+        return scalar_gradient_output(
+            shared,
+            head,
+            retrieval_gradient=[5e-4, 0.0],
+            auxiliary_gradient=[1.0, 0.0],
+            head_gradient=3.0,
+        )
+
+    first_metrics = module._auxiliary_control_optimization_step(output(), batch_idx=0)
+
+    assert optimizer.scaled_step_gradients == []
+    torch.testing.assert_close(shared.grad, torch.tensor([0.002, 0.0]))
+    torch.testing.assert_close(head.grad, torch.tensor([12.0]))
+    assert first_metrics["gradient/retrieval_norm"] == pytest.approx(2.5e-4)
+    assert first_metrics["gradient/auxiliary_norm"] == pytest.approx(0.5)
+    assert first_metrics["gradient/auxiliary_controlled_norm"] == 0.0
+
+    second_metrics = module._auxiliary_control_optimization_step(output(), batch_idx=1)
+
+    assert len(optimizer.scaled_step_gradients) == 1
+    torch.testing.assert_close(optimizer.scaled_step_gradients[0][0], torch.tensor([0.004, 0.0]))
+    torch.testing.assert_close(optimizer.scaled_step_gradients[0][1], torch.tensor([24.0]))
+    torch.testing.assert_close(optimizer.unscaled_step_gradients[0][0], torch.tensor([5e-4, 0.0]))
+    torch.testing.assert_close(optimizer.unscaled_step_gradients[0][1], torch.tensor([3.0]))
+    assert second_metrics == first_metrics
     assert shared.grad is None
     assert head.grad is None
 

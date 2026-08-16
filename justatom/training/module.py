@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -178,6 +179,22 @@ class ContrastiveTrainingModule(L.LightningModule):
     def _capture_gradients(parameters: list[nn.Parameter]) -> list[torch.Tensor | None]:
         return [None if parameter.grad is None else parameter.grad.detach().clone() for parameter in parameters]
 
+    def _manual_gradient_scale(self) -> float:
+        try:
+            precision_plugin = self.trainer.precision_plugin
+        except RuntimeError:
+            return 1.0
+        scaler = getattr(precision_plugin, "scaler", None)
+        if scaler is None:
+            return 1.0
+        get_scale = getattr(scaler, "get_scale", None)
+        if not callable(get_scale):
+            raise RuntimeError("Precision scaler does not expose get_scale()")
+        scale = float(get_scale())
+        if not math.isfinite(scale) or scale <= 0.0:
+            raise RuntimeError(f"Invalid precision gradient scale: {scale}")
+        return scale
+
     def _projected_optimization_step(self, output: ObjectiveOutput, batch_idx: int) -> dict[str, float]:
         optimizer = self.optimizers()
         parameters = self._optimizer_parameters(optimizer)
@@ -230,26 +247,30 @@ class ContrastiveTrainingModule(L.LightningModule):
     ) -> dict[str, float]:
         optimizer = self.optimizers()
         parameters = self._optimizer_parameters(optimizer)
+        gradient_scale = self._manual_gradient_scale()
         accumulated = self._capture_gradients(parameters)
         optimizer.zero_grad()
 
         retrieval_loss = self.adjust_loss_for_accumulation(output.retrieval_loss)
         if retrieval_loss.requires_grad:
             self.manual_backward(retrieval_loss, retain_graph=True)
-        retrieval_gradients = self._capture_gradients(parameters)
+        scaled_retrieval_gradients = self._capture_gradients(parameters)
         optimizer.zero_grad()
 
         auxiliary_loss = self.adjust_loss_for_accumulation(output.auxiliary_loss)
         if auxiliary_loss.requires_grad:
             self.manual_backward(auxiliary_loss)
-        auxiliary_gradients = self._capture_gradients(parameters)
+        scaled_auxiliary_gradients = self._capture_gradients(parameters)
         optimizer.zero_grad()
 
         head_loss = self.adjust_loss_for_accumulation(output.head_loss)
         if head_loss.requires_grad:
             self.manual_backward(head_loss)
-        head_gradients = self._capture_gradients(parameters)
+        scaled_head_gradients = self._capture_gradients(parameters)
         optimizer.zero_grad()
+
+        retrieval_gradients = [None if gradient is None else gradient / gradient_scale for gradient in scaled_retrieval_gradients]
+        auxiliary_gradients = [None if gradient is None else gradient / gradient_scale for gradient in scaled_auxiliary_gradients]
 
         controlled_auxiliary, stats = control_auxiliary_gradients(
             retrieval_gradients,
@@ -261,12 +282,13 @@ class ContrastiveTrainingModule(L.LightningModule):
         for parameter, previous, retrieval, auxiliary, head in zip(
             parameters,
             accumulated,
-            retrieval_gradients,
+            scaled_retrieval_gradients,
             controlled_auxiliary,
-            head_gradients,
+            scaled_head_gradients,
         ):
             combined = previous
-            for gradient in (retrieval, auxiliary, head):
+            scaled_auxiliary = None if auxiliary is None else auxiliary * gradient_scale
+            for gradient in (retrieval, scaled_auxiliary, head):
                 if gradient is not None:
                     combined = gradient if combined is None else combined + gradient
             parameter.grad = combined
