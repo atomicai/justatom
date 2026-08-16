@@ -105,11 +105,13 @@ def test_load_schema_v1_checkpoint_migrates_historical_canonical_dcl_to_ablation
         mix_weight_warmup_steps=10,
         entropy_weight=0.1,
     )
+    historical_state_dict = original.state_dict()
+    assert not any(key.startswith("objective.simcse_kernel.") for key in historical_state_dict)
     checkpoint = tmp_path / "historical-checkpoint.pt"
     payload = {
         "schema_version": 1,
         "resolved_config": historical_config,
-        "state_dict": original.state_dict(),
+        "state_dict": historical_state_dict,
         "optimizer_states": [],
         "epoch": 0,
         "global_step": 1,

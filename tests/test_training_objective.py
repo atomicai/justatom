@@ -24,6 +24,10 @@ def test_objective_vanilla_has_no_auxiliary_components():
     assert output.simcse_per_row is None
     assert output.metrics["loss/alpha_aux"] == 0.0
     assert output.metrics["loss/memory_margin_regularization"] == 0.0
+    assert "loss/alpha_aux_weighted" not in output.metrics
+    assert "loss/alpha_aux_to_main_ratio" not in output.metrics
+    assert "temperature/simcse" not in output.metrics
+    assert "temperature/alpha_target" not in output.metrics
 
 
 def _assert_singleton_contrastive_batch_is_rejected(memory: MemorySelection | None) -> None:
@@ -266,6 +270,43 @@ def test_alpha_auxiliary_temperature_metrics_match_effective_objective():
     torch.testing.assert_close(output.metrics["temperature"], torch.tensor(0.1))
     torch.testing.assert_close(output.metrics["temperature/simcse"], torch.tensor(0.4))
     torch.testing.assert_close(output.metrics["temperature/alpha_target"], torch.tensor(0.25))
+
+
+def test_alpha_auxiliary_to_main_ratio_preserves_dcl_sign(monkeypatch):
+    objective = ContrastiveObjective(
+        ObjectiveConfig(
+            temperature=0.1,
+            learnable_temperature=False,
+            decoupled=True,
+            simcse_dropout_weight=0.1,
+            simcse_temperature=0.2,
+        )
+    )
+    assert objective.simcse_kernel is not None
+    monkeypatch.setattr(
+        objective.kernel,
+        "info_nce",
+        lambda *_args, **_kwargs: torch.tensor([-2.0, -4.0]),
+    )
+    monkeypatch.setattr(
+        objective.simcse_kernel,
+        "simcse_term",
+        lambda *_args, **_kwargs: torch.tensor([-1.0, -2.0]),
+    )
+    embeddings = F.normalize(torch.eye(2), dim=-1)
+
+    output = objective(
+        ObjectiveInputs(
+            queries=embeddings,
+            positives=embeddings,
+            query_alt=embeddings,
+            alpha_logits=torch.zeros(2),
+        )
+    )
+
+    weighted = torch.tensor([-0.05, -0.1]).mean()
+    expected = weighted / torch.tensor([-2.0, -4.0]).mean()
+    torch.testing.assert_close(output.metrics["loss/alpha_aux_to_main_ratio"], expected)
 
 
 def test_alpha_bce_does_not_update_retrieval_embeddings_or_temperature():

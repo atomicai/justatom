@@ -155,12 +155,6 @@ class ContrastiveObjective(nn.Module):
         active_negatives = 0.0
         if memory is not None and memory.active_mask is not None:
             active_negatives = float(memory.active_mask.float().sum(dim=1).mean().item())
-        simcse_temperature = self.kernel.tau.detach()
-        if self.simcse_kernel is not None:
-            simcse_temperature = self.simcse_kernel.tau.detach()
-        alpha_target_temperature = self.kernel.tau.detach()
-        if inputs.alpha_target_temperature is not None:
-            alpha_target_temperature = main.new_tensor(float(inputs.alpha_target_temperature))
         weighted_simcse_mean = main.new_zeros(())
         if weighted_simcse is not None:
             weighted_simcse_mean = weighted_simcse.detach().mean()
@@ -169,16 +163,34 @@ class ContrastiveObjective(nn.Module):
             "loss/main": main_mean,
             "loss/memory": 0.0 if memory_per_row is None else memory_per_row.detach().mean(),
             "loss/alpha_aux": 0.0 if simcse is None else simcse.detach().mean(),
-            "loss/alpha_aux_weighted": weighted_simcse_mean,
-            "loss/alpha_aux_to_main_ratio": weighted_simcse_mean / main_mean.abs().clamp_min(1e-12),
             "loss/alpha_supervision": 0.0 if alpha_supervision is None else alpha_supervision.detach().mean(),
             "loss/soft_fn": 0.0 if soft_fn is None else soft_fn.detach().mean(),
             "loss/memory_margin_regularization": 0.0,
             "memory/active_negatives_mean": active_negatives,
             "temperature": self.kernel.tau.detach(),
-            "temperature/simcse": simcse_temperature,
-            "temperature/alpha_target": alpha_target_temperature,
         }
+        if simcse is not None:
+            simcse_temperature = self.kernel.tau.detach()
+            if self.simcse_kernel is not None:
+                simcse_temperature = self.simcse_kernel.tau.detach()
+            epsilon = main_mean.new_tensor(1e-12)
+            safe_main_mean = torch.where(
+                main_mean.abs() < epsilon,
+                torch.where(main_mean < 0.0, -epsilon, epsilon),
+                main_mean,
+            )
+            metrics.update(
+                {
+                    "loss/alpha_aux_weighted": weighted_simcse_mean,
+                    "loss/alpha_aux_to_main_ratio": weighted_simcse_mean / safe_main_mean,
+                    "temperature/simcse": simcse_temperature,
+                }
+            )
+        if alpha_target is not None:
+            alpha_target_temperature = self.kernel.tau.detach()
+            if inputs.alpha_target_temperature is not None:
+                alpha_target_temperature = main.new_tensor(float(inputs.alpha_target_temperature))
+            metrics["temperature/alpha_target"] = alpha_target_temperature
 
         if margin_config is not None and inputs.raw_margin is not None:
             regularization = margin_config.regularization_weight * (inputs.raw_margin - margin_config.base).pow(2).mean()

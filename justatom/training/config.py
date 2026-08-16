@@ -364,7 +364,7 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_bool(config.objective.decoupled, "objective.decoupled")
     _require_number(config.objective.simcse_dropout_weight, "objective.simcse_dropout_weight", 0.0)
     if config.objective.simcse_temperature is not None:
-        _require_number(config.objective.simcse_temperature, "objective.simcse_temperature", 1e-12)
+        _require_number(config.objective.simcse_temperature, "objective.simcse_temperature", 1e-3, 1.0)
     _require_number(config.objective.soft_fn_attract_weight, "objective.soft_fn_attract_weight", 0.0)
     _require_int(config.objective.soft_fn_topk, "objective.soft_fn_topk", 1)
 

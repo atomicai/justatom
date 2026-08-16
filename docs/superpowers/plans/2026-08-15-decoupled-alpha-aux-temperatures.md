@@ -33,7 +33,7 @@ assert config.alpha_gate.target_temperature == pytest.approx(0.3)
 assert parse_train_config(train_config_to_dict(config)) == config
 ```
 
-Parameterize both fields over `0.0`, `-0.1`, `nan`, `inf`, and `-inf` and assert a `ValueError`. Also assert that omitted fields resolve to `None`.
+Parameterize both fields over `0.0`, `-0.1`, `nan`, `inf`, and `-inf` and assert a `ValueError`. Also assert that omitted fields resolve to `None`, and that fixed SimCSE values outside the kernel range `[1e-3, 1.0]` are rejected instead of silently clamped.
 
 **Step 2: Run the tests to verify RED**
 
@@ -57,7 +57,7 @@ class AlphaGateConfig:
     target_temperature: float | None = None
 ```
 
-Validate each non-null value as finite and strictly positive. Keep defaults at `None`; do not change method presets.
+Validate each non-null value as finite and strictly positive. Restrict the fixed SimCSE value to the effective `ContrastiveLoss` range `[1e-3, 1.0]`. Keep defaults at `None`; do not change method presets.
 
 **Step 4: Run the tests to verify GREEN**
 
@@ -136,6 +136,7 @@ loss/alpha_aux_to_main_ratio
 ```
 
 Keep `loss/alpha_aux` as raw mean SimCSE. Compute the ratio from detached means with a small denominator clamp.
+Emit each new metric only when its corresponding alpha or SimCSE path is active, and preserve the denominator sign in DCL ablations.
 
 **Step 4: Run the tests to verify GREEN**
 

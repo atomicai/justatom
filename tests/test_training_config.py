@@ -71,6 +71,18 @@ def test_auxiliary_temperatures_must_be_finite_and_positive(section, field, valu
         parse_train_config({"method": "atom_gate", section: {field: value}})
 
 
+@pytest.mark.parametrize("value", [1e-4, 1.01])
+def test_simcse_temperature_must_fit_the_contrastive_kernel_range(value):
+    with pytest.raises(ValueError, match=r"objective\.simcse_temperature"):
+        parse_train_config({"method": "atom_gate", "objective": {"simcse_temperature": value}})
+
+
+@pytest.mark.parametrize("value", [1e-3, 1.0])
+def test_simcse_temperature_accepts_contrastive_kernel_boundaries(value):
+    config = parse_train_config({"method": "atom_gate", "objective": {"simcse_temperature": value}})
+    assert config.objective.simcse_temperature == pytest.approx(value)
+
+
 @pytest.mark.parametrize("field", ["mix_weight", "mix_weight_warmup_steps", "entropy_weight"])
 def test_retired_alpha_fields_are_rejected(field):
     with pytest.raises(ValueError, match=rf"unknown configuration field: alpha_gate\.{field}"):

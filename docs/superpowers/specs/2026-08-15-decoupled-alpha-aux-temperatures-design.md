@@ -108,7 +108,10 @@ ObjectiveConfig.simcse_temperature: float | None = None
 AlphaGateConfig.target_temperature: float | None = None
 ```
 
-Non-null values must be finite and strictly positive. Dotted CLI overrides are:
+Non-null values must be finite and strictly positive. Because
+`ContrastiveLoss` defines its effective temperature range as `[1e-3, 1.0]`, a
+fixed SimCSE temperature outside that interval is rejected rather than silently
+clamped. Dotted CLI overrides are:
 
 ```text
 --objective.simcse-temperature 0.2
@@ -146,7 +149,9 @@ loss/alpha_aux_to_main_ratio
 `loss/alpha_aux` remains the unweighted SimCSE loss for backward compatibility.
 The weighted metric is the mean of
 `lambda_sc * (1 - alpha.detach()) * L_SimCSE`. The ratio uses a small numerical
-epsilon and is telemetry-only.
+epsilon, preserves the denominator sign for DCL ablations, and is
+telemetry-only. New metrics are emitted only when the corresponding alpha or
+SimCSE path is active.
 
 ## Compatibility
 

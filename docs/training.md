@@ -54,8 +54,10 @@ alpha_gate:
 
 Both auxiliary fields default to `null`. In that compatibility mode,
 `tau_target` and `tau_simcse` reuse the live retrieval temperature exactly.
-A non-null value is a fixed, non-learnable auxiliary temperature; it must be
-finite and greater than zero. The dotted CLI overrides are
+A non-null value is a fixed, non-learnable auxiliary temperature. The target
+temperature must be finite and greater than zero. The SimCSE temperature must
+also fit the contrastive kernel range `[1e-3, 1.0]`, so it is never silently
+clamped to a value different from the manifest. The dotted CLI overrides are
 `--objective.simcse-temperature 0.2` and
 `--alpha-gate.target-temperature 0.2`. The value `0.2` is an experimental
 setting for reducing target and SimCSE saturation, not a canonical method
@@ -66,7 +68,8 @@ and the auxiliary multiplier uses `stop_gradient(alpha_i)`, so gate BCE updates
 only the head while SimCSE updates both query views in the encoder. Training
 telemetry exposes `temperature/simcse`, `temperature/alpha_target`, the raw
 `loss/alpha_aux`, its actual contribution as `loss/alpha_aux_weighted`, and
-`loss/alpha_aux_to_main_ratio`.
+the signed contribution ratio `loss/alpha_aux_to_main_ratio`. These additional
+columns are emitted only when the corresponding alpha or SimCSE path is active.
 
 ## ATOMIC: protected online memory
 
