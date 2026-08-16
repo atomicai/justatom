@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from justatom.training.config import (
     AlphaGateConfig,
+    AuxiliaryGradientMode,
     ExperimentRole,
     GradientProjectionConfig,
     MarginMode,
@@ -48,6 +49,12 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
     role = config.experiment.role
     gate = config.alpha_gate
     bank = config.memory_bank
+    auxiliary = config.auxiliary_gradient
+
+    if auxiliary.mode is not AuxiliaryGradientMode.OFF and (
+        method is not TrainingMethod.ATOM_GATE or role is not ExperimentRole.ABLATION
+    ):
+        raise ValueError("auxiliary_gradient mode requires atom_gate with experiment.role=ablation")
 
     if role is ExperimentRole.CANONICAL and config.objective.decoupled:
         raise ValueError(f"canonical {method.value} requires coupled InfoNCE; use experiment.role=ablation for DCL")

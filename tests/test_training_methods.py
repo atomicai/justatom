@@ -4,7 +4,14 @@ from dataclasses import replace
 
 import pytest
 
-from justatom.training.config import ExperimentConfig, ExperimentRole, MarginMode, TrainingMethod
+from justatom.training.config import (
+    AuxiliaryGradientConfig,
+    AuxiliaryGradientMode,
+    ExperimentConfig,
+    ExperimentRole,
+    MarginMode,
+    TrainingMethod,
+)
 from justatom.training.methods import canonical_method_config, resolve_method
 
 
@@ -123,3 +130,26 @@ def test_vanilla_memory_bank_requires_ablation_role():
     assert resolved.memory_bank.size == 512
     assert not resolved.memory_bank.adaptive.enabled
     assert resolved.memory_bank.margin.mode is MarginMode.OFF
+
+
+@pytest.mark.parametrize("method", list(TrainingMethod))
+@pytest.mark.parametrize("mode", [AuxiliaryGradientMode.OBSERVE, AuxiliaryGradientMode.SAFE])
+def test_non_off_auxiliary_gradient_requires_atom_gate_ablation(method, mode):
+    config = replace(
+        canonical_method_config(method),
+        auxiliary_gradient=AuxiliaryGradientConfig(mode=mode),
+    )
+
+    with pytest.raises(ValueError, match="atom_gate.*ablation"):
+        resolve_method(config)
+
+
+@pytest.mark.parametrize("mode", [AuxiliaryGradientMode.OBSERVE, AuxiliaryGradientMode.SAFE])
+def test_atom_gate_ablation_accepts_non_off_auxiliary_gradient(mode):
+    config = replace(
+        canonical_method_config(TrainingMethod.ATOM_GATE),
+        experiment=ExperimentConfig(role=ExperimentRole.ABLATION, seed=42),
+        auxiliary_gradient=AuxiliaryGradientConfig(mode=mode),
+    )
+
+    assert resolve_method(config).auxiliary_gradient.mode is mode

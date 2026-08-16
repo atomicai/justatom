@@ -24,6 +24,12 @@ class MarginMode(str, Enum):
     QUERY = "query"
 
 
+class AuxiliaryGradientMode(str, Enum):
+    OFF = "off"
+    OBSERVE = "observe"
+    SAFE = "safe"
+
+
 @dataclass(frozen=True)
 class ExperimentConfig:
     role: ExperimentRole = ExperimentRole.CANONICAL
@@ -157,6 +163,13 @@ class GradientProjectionConfig:
 
 
 @dataclass(frozen=True)
+class AuxiliaryGradientConfig:
+    mode: AuxiliaryGradientMode = AuxiliaryGradientMode.OFF
+    max_norm_ratio: float = 0.25
+    eps: float = 1e-12
+
+
+@dataclass(frozen=True)
 class TelemetryConfig:
     backend: str = "csv"
     metrics_path: str | None = None
@@ -192,6 +205,7 @@ class TrainConfig:
     alpha_gate: AlphaGateConfig = field(default_factory=AlphaGateConfig)
     memory_bank: MemoryBankConfig = field(default_factory=MemoryBankConfig)
     gradient_projection: GradientProjectionConfig = field(default_factory=GradientProjectionConfig)
+    auxiliary_gradient: AuxiliaryGradientConfig = field(default_factory=AuxiliaryGradientConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     artifacts: ArtifactConfig = field(default_factory=ArtifactConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -405,6 +419,12 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_bool(projection.enabled, "gradient_projection.enabled")
     _require_number(projection.memory_weight, "gradient_projection.memory_weight", 0.0)
     _require_number(projection.eps, "gradient_projection.eps", 1e-30)
+
+    auxiliary = config.auxiliary_gradient
+    _require_number(auxiliary.max_norm_ratio, "auxiliary_gradient.max_norm_ratio", 0.0)
+    _require_number(auxiliary.eps, "auxiliary_gradient.eps")
+    if auxiliary.eps <= 0.0:
+        raise ValueError("auxiliary_gradient.eps must be > 0.0")
 
     if config.telemetry.backend not in {"csv", "wandb"}:
         raise ValueError("telemetry.backend must be one of: csv, wandb")

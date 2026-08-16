@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from justatom.training.config import ExperimentRole, MarginMode, TrainingMethod, parse_train_config, train_config_to_dict
+from justatom.training.config import (
+    AuxiliaryGradientMode,
+    ExperimentRole,
+    MarginMode,
+    TrainingMethod,
+    parse_train_config,
+    train_config_to_dict,
+)
 
 
 def test_parse_train_config_builds_typed_atomic_config():
@@ -56,6 +63,44 @@ def test_auxiliary_temperatures_are_optional_and_round_trip():
     assert payload["objective"]["simcse_temperature"] == pytest.approx(0.2)
     assert payload["alpha_gate"]["target_temperature"] == pytest.approx(0.3)
     assert parse_train_config(payload) == config
+
+
+def test_auxiliary_gradient_config_round_trips():
+    config = parse_train_config(
+        {
+            "method": "atom_gate",
+            "experiment": {"role": "ablation"},
+            "auxiliary_gradient": {
+                "mode": "safe",
+                "max_norm_ratio": 0.25,
+                "eps": 1e-10,
+            },
+        }
+    )
+
+    assert config.auxiliary_gradient.mode is AuxiliaryGradientMode.SAFE
+    assert config.auxiliary_gradient.max_norm_ratio == pytest.approx(0.25)
+    assert parse_train_config(train_config_to_dict(config)) == config
+
+
+@pytest.mark.parametrize("mode", ["invalid", "observee"])
+def test_auxiliary_gradient_mode_must_be_known(mode):
+    with pytest.raises(ValueError, match=r"auxiliary_gradient\.mode"):
+        parse_train_config({"method": "atom_gate", "auxiliary_gradient": {"mode": mode}})
+
+
+@pytest.mark.parametrize("value", [-0.1, float("nan"), float("inf")])
+def test_auxiliary_gradient_max_norm_ratio_must_be_finite_and_non_negative(value):
+    with pytest.raises(ValueError, match=r"auxiliary_gradient\.max_norm_ratio"):
+        parse_train_config(
+            {"method": "atom_gate", "auxiliary_gradient": {"max_norm_ratio": value}}
+        )
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf")])
+def test_auxiliary_gradient_eps_must_be_finite_and_positive(value):
+    with pytest.raises(ValueError, match=r"auxiliary_gradient\.eps"):
+        parse_train_config({"method": "atom_gate", "auxiliary_gradient": {"eps": value}})
 
 
 @pytest.mark.parametrize(
