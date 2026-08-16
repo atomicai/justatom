@@ -103,7 +103,9 @@ def test_load_schema_v1_checkpoint_migrates_historical_canonical_dcl_to_ablation
     original = ContrastiveTrainingModule.build(TinyEncoder(), config)
     historical_config = train_config_to_dict(config)
     historical_config["objective"].update(decoupled=True, pairwise_margin=0.2)
+    historical_config["objective"].pop("simcse_temperature")
     historical_config["alpha_gate"].pop("supervision_weight")
+    historical_config["alpha_gate"].pop("target_temperature")
     historical_config["alpha_gate"].update(
         mix_weight=0.7,
         mix_weight_warmup_steps=10,
@@ -127,7 +129,9 @@ def test_load_schema_v1_checkpoint_migrates_historical_canonical_dcl_to_ablation
 
     assert restored.config.experiment.role is ExperimentRole.ABLATION
     assert restored.config.objective.decoupled
+    assert restored.config.objective.simcse_temperature is None
     assert restored.config.alpha_gate.supervision_weight == 0.7
+    assert restored.config.alpha_gate.target_temperature is None
     assert "pairwise_margin" not in restored.config.objective.__dict__
     assert payload["resolved_config"]["objective"]["pairwise_margin"] == 0.2
     assert payload["resolved_config"]["alpha_gate"] == {
@@ -395,6 +399,25 @@ def test_atom_gate_reports_effective_detached_auxiliary_weight():
     assert output.metrics["alpha_aux_weight/mean"] == pytest.approx(1.0 - output.metrics["alpha/mean"])
     assert output.metrics["alpha_aux_weight/min"] == pytest.approx(1.0 - output.metrics["alpha/max"])
     assert output.metrics["alpha_aux_weight/max"] == pytest.approx(1.0 - output.metrics["alpha/min"])
+
+
+def test_atom_gate_forwards_auxiliary_temperatures_and_reports_weighted_loss():
+    config = canonical_method_config(TrainingMethod.ATOM_GATE)
+    config = replace(
+        config,
+        objective=replace(config.objective, simcse_temperature=0.4),
+        alpha_gate=replace(config.alpha_gate, target_temperature=0.25),
+    )
+    module = ContrastiveTrainingModule.build(TinyEncoder(), config)
+
+    output = module.compute_training_step(tiny_batch(), step=0)
+
+    assert float(output.metrics["temperature"]) == pytest.approx(0.05)
+    assert float(output.metrics["temperature/simcse"]) == pytest.approx(0.4)
+    assert float(output.metrics["temperature/alpha_target"]) == pytest.approx(0.25)
+    assert float(output.metrics["loss/alpha_aux"]) > 0.0
+    assert float(output.metrics["loss/alpha_aux_weighted"]) > 0.0
+    assert float(output.metrics["loss/alpha_aux_to_main_ratio"]) > 0.0
 
 
 def test_compute_training_step_rejects_nonfinite_loss(monkeypatch):

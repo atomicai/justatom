@@ -138,6 +138,7 @@ class ContrastiveTrainingModule(L.LightningModule):
                 raw_margin=raw_margin,
                 margin=margin,
                 alpha_supervision_weight=self.config.alpha_gate.supervision_weight,
+                alpha_target_temperature=self.config.alpha_gate.target_temperature,
             ),
             margin_config=(self.config.memory_bank.margin if self.memory_bank is not None else None),
         )

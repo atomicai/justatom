@@ -28,17 +28,45 @@ with its target derived from the detached in-batch positive retrieval
 confidence:
 
 ```text
-t_i = stop_gradient(softmax(S / tau)_ii)
+t_i = stop_gradient(softmax(S / tau_target)_ii)
 alpha_i = sigmoid(MLP(stop_gradient(q_i)))
 L_i = L_InfoNCE,i
     + (1 - stop_gradient(alpha_i)) lambda_sc L_SimCSE,i
-    + lambda_alpha BCE(alpha_i, t_i)
+    + lambda_alpha BCEWithLogits(alpha_logit_i, t_i)
 ```
 
 The gate cannot lower the current SimCSE loss by moving toward one. Its BCE
 term trains the head against retrieval confidence while leaving the encoder
 path detached. The gate is training-only; the saved encoder has the same
 inference interface as the source embedding model.
+
+The retrieval, confidence-target, and SimCSE temperatures can be separated
+without changing the primary retrieval objective:
+
+```yaml
+objective:
+  temperature: 0.05
+  simcse_temperature: 0.2
+
+alpha_gate:
+  target_temperature: 0.2
+```
+
+Both auxiliary fields default to `null`. In that compatibility mode,
+`tau_target` and `tau_simcse` reuse the live retrieval temperature exactly.
+A non-null value is a fixed, non-learnable auxiliary temperature; it must be
+finite and greater than zero. The dotted CLI overrides are
+`--objective.simcse-temperature 0.2` and
+`--alpha-gate.target-temperature 0.2`. The value `0.2` is an experimental
+setting for reducing target and SimCSE saturation, not a canonical method
+default.
+
+The alpha head still consumes `stop_gradient(q_i)`. The target is detached,
+and the auxiliary multiplier uses `stop_gradient(alpha_i)`, so gate BCE updates
+only the head while SimCSE updates both query views in the encoder. Training
+telemetry exposes `temperature/simcse`, `temperature/alpha_target`, the raw
+`loss/alpha_aux`, its actual contribution as `loss/alpha_aux_weighted`, and
+`loss/alpha_aux_to_main_ratio`.
 
 ## ATOMIC: protected online memory
 

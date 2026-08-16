@@ -71,6 +71,20 @@ def test_atom_gate_manifest_records_detached_auxiliary_control():
     }
 
 
+def test_manifest_records_resolved_auxiliary_temperatures():
+    config = canonical_method_config(TrainingMethod.ATOM_GATE)
+    config = replace(
+        config,
+        objective=replace(config.objective, simcse_temperature=0.2),
+        alpha_gate=replace(config.alpha_gate, target_temperature=0.3),
+    )
+
+    manifest = RunManifest.from_config(config, git_commit="abc123", git_dirty=False)
+
+    assert manifest.resolved_config["objective"]["simcse_temperature"] == pytest.approx(0.2)
+    assert manifest.resolved_config["alpha_gate"]["target_temperature"] == pytest.approx(0.3)
+
+
 def test_dcl_ablation_manifest_records_decoupled_kernel():
     config = canonical_method_config(TrainingMethod.VANILLA)
     config = replace(
