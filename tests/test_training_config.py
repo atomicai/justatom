@@ -39,6 +39,40 @@ def test_alpha_supervision_schema_round_trips():
     assert parse_train_config(payload) == config
 
 
+def test_auxiliary_temperatures_are_optional_and_round_trip():
+    legacy = parse_train_config({"method": "atom_gate"})
+    assert legacy.objective.simcse_temperature is None
+    assert legacy.alpha_gate.target_temperature is None
+
+    config = parse_train_config(
+        {
+            "method": "atom_gate",
+            "objective": {"simcse_temperature": 0.2},
+            "alpha_gate": {"target_temperature": 0.3},
+        }
+    )
+    payload = train_config_to_dict(config)
+
+    assert config.objective.simcse_temperature == pytest.approx(0.2)
+    assert config.alpha_gate.target_temperature == pytest.approx(0.3)
+    assert payload["objective"]["simcse_temperature"] == pytest.approx(0.2)
+    assert payload["alpha_gate"]["target_temperature"] == pytest.approx(0.3)
+    assert parse_train_config(payload) == config
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("objective", "simcse_temperature"),
+        ("alpha_gate", "target_temperature"),
+    ],
+)
+@pytest.mark.parametrize("value", [0.0, -0.1, float("nan"), float("inf"), float("-inf")])
+def test_auxiliary_temperatures_must_be_finite_and_positive(section, field, value):
+    with pytest.raises(ValueError, match=rf"{section}\.{field}"):
+        parse_train_config({"method": "atom_gate", section: {field: value}})
+
+
 @pytest.mark.parametrize("field", ["mix_weight", "mix_weight_warmup_steps", "entropy_weight"])
 def test_retired_alpha_fields_are_rejected(field):
     with pytest.raises(ValueError, match=rf"unknown configuration field: alpha_gate\.{field}"):

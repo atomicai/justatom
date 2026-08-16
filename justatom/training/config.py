@@ -92,6 +92,7 @@ class ObjectiveConfig:
     learnable_temperature: bool = True
     decoupled: bool = True
     simcse_dropout_weight: float = 0.0
+    simcse_temperature: float | None = None
     soft_fn_attract_weight: float = 0.0
     soft_fn_topk: int = 1
 
@@ -108,6 +109,7 @@ class AlphaHeadConfig:
 class AlphaGateConfig:
     enabled: bool = False
     supervision_weight: float = 0.3
+    target_temperature: float | None = None
     head: AlphaHeadConfig = field(default_factory=AlphaHeadConfig)
 
 
@@ -361,11 +363,15 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_bool(config.objective.learnable_temperature, "objective.learnable_temperature")
     _require_bool(config.objective.decoupled, "objective.decoupled")
     _require_number(config.objective.simcse_dropout_weight, "objective.simcse_dropout_weight", 0.0)
+    if config.objective.simcse_temperature is not None:
+        _require_number(config.objective.simcse_temperature, "objective.simcse_temperature", 1e-12)
     _require_number(config.objective.soft_fn_attract_weight, "objective.soft_fn_attract_weight", 0.0)
     _require_int(config.objective.soft_fn_topk, "objective.soft_fn_topk", 1)
 
     _require_bool(config.alpha_gate.enabled, "alpha_gate.enabled")
     _require_number(config.alpha_gate.supervision_weight, "alpha_gate.supervision_weight", 0.0)
+    if config.alpha_gate.target_temperature is not None:
+        _require_number(config.alpha_gate.target_temperature, "alpha_gate.target_temperature", 1e-12)
     _require_int(config.alpha_gate.head.layers, "alpha_gate.head.layers", 1)
     if config.alpha_gate.head.hidden_dim is not None:
         _require_int(config.alpha_gate.head.hidden_dim, "alpha_gate.head.hidden_dim", 1)
