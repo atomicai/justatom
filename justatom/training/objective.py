@@ -21,6 +21,7 @@ class ObjectiveInputs:
     margin: torch.Tensor | None = None
     raw_margin: torch.Tensor | None = None
     alpha_supervision_weight: float = 0.0
+    alpha_target_temperature: float | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,16 @@ class ContrastiveObjective(nn.Module):
             reduction="none",
             learnable_temperature=config.learnable_temperature,
             decoupled=config.decoupled,
+        )
+        self.simcse_kernel = (
+            None
+            if config.simcse_temperature is None
+            else ContrastiveLoss(
+                temperature=config.simcse_temperature,
+                reduction="none",
+                learnable_temperature=False,
+                decoupled=config.decoupled,
+            )
         )
 
     def forward(
@@ -98,11 +109,14 @@ class ContrastiveObjective(nn.Module):
             memory_per_row = augmented - main
 
         simcse = None
+        weighted_simcse = None
         soft_fn = None
         auxiliary = main.new_zeros(main.shape)
         if inputs.query_alt is not None and self.config.simcse_dropout_weight > 0.0:
-            simcse = self.kernel.simcse_term(inputs.queries, inputs.query_alt, reduction="none")
-            auxiliary = auxiliary + self.config.simcse_dropout_weight * simcse
+            simcse_kernel = self.kernel if self.simcse_kernel is None else self.simcse_kernel
+            simcse = simcse_kernel.simcse_term(inputs.queries, inputs.query_alt, reduction="none")
+            weighted_simcse = self.config.simcse_dropout_weight * simcse
+            auxiliary = auxiliary + weighted_simcse
         if self.config.soft_fn_attract_weight > 0.0 and inputs.queries.shape[0] > 1:
             soft_fn = self.kernel.soft_fn_term(
                 inputs.queries,
@@ -122,8 +136,13 @@ class ContrastiveObjective(nn.Module):
             alpha = torch.sigmoid(alpha_logits)
             auxiliary_weight = 1.0 - alpha.detach()
             per_row = main + auxiliary_weight * auxiliary
+            if weighted_simcse is not None:
+                weighted_simcse = auxiliary_weight * weighted_simcse
             confidence_logits = inputs.queries.detach() @ inputs.positives.detach().T
-            confidence_logits = confidence_logits / self.kernel.tau.detach()
+            target_temperature = self.kernel.tau.detach()
+            if inputs.alpha_target_temperature is not None:
+                target_temperature = confidence_logits.new_tensor(float(inputs.alpha_target_temperature))
+            confidence_logits = confidence_logits / target_temperature
             alpha_target = torch.softmax(confidence_logits, dim=-1).diagonal()
             alpha_supervision = F.binary_cross_entropy_with_logits(alpha_logits, alpha_target, reduction="none")
             if inputs.alpha_supervision_weight != 0.0:
@@ -136,15 +155,29 @@ class ContrastiveObjective(nn.Module):
         active_negatives = 0.0
         if memory is not None and memory.active_mask is not None:
             active_negatives = float(memory.active_mask.float().sum(dim=1).mean().item())
+        simcse_temperature = self.kernel.tau.detach()
+        if self.simcse_kernel is not None:
+            simcse_temperature = self.simcse_kernel.tau.detach()
+        alpha_target_temperature = self.kernel.tau.detach()
+        if inputs.alpha_target_temperature is not None:
+            alpha_target_temperature = main.new_tensor(float(inputs.alpha_target_temperature))
+        weighted_simcse_mean = main.new_zeros(())
+        if weighted_simcse is not None:
+            weighted_simcse_mean = weighted_simcse.detach().mean()
+        main_mean = main.detach().mean()
         metrics: dict[str, float | torch.Tensor] = {
-            "loss/main": main.detach().mean(),
+            "loss/main": main_mean,
             "loss/memory": 0.0 if memory_per_row is None else memory_per_row.detach().mean(),
             "loss/alpha_aux": 0.0 if simcse is None else simcse.detach().mean(),
+            "loss/alpha_aux_weighted": weighted_simcse_mean,
+            "loss/alpha_aux_to_main_ratio": weighted_simcse_mean / main_mean.abs().clamp_min(1e-12),
             "loss/alpha_supervision": 0.0 if alpha_supervision is None else alpha_supervision.detach().mean(),
             "loss/soft_fn": 0.0 if soft_fn is None else soft_fn.detach().mean(),
             "loss/memory_margin_regularization": 0.0,
             "memory/active_negatives_mean": active_negatives,
             "temperature": self.kernel.tau.detach(),
+            "temperature/simcse": simcse_temperature,
+            "temperature/alpha_target": alpha_target_temperature,
         }
 
         if margin_config is not None and inputs.raw_margin is not None:

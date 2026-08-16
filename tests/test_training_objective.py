@@ -182,6 +182,109 @@ def test_atom_gate_uses_detached_positive_confidence_with_learnable_temperature(
     torch.testing.assert_close(output.loss, output.main_per_row.mean() + 0.3 * bce.mean())
 
 
+def test_fixed_alpha_target_temperature_changes_only_target_and_bce():
+    objective = ContrastiveObjective(
+        ObjectiveConfig(temperature=0.1, learnable_temperature=False, decoupled=False)
+    )
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.4, 0.9], [-0.6, 0.8]]), dim=-1)
+    p = F.normalize(torch.tensor([[0.9, 0.1], [0.2, 1.0], [-0.8, 0.4]]), dim=-1)
+    alpha_logits = torch.tensor([-0.5, 0.2, 0.8])
+
+    legacy = objective(
+        ObjectiveInputs(
+            queries=q,
+            positives=p,
+            alpha_logits=alpha_logits,
+            alpha_supervision_weight=0.3,
+        )
+    )
+    fixed = objective(
+        ObjectiveInputs(
+            queries=q,
+            positives=p,
+            alpha_logits=alpha_logits,
+            alpha_supervision_weight=0.3,
+            alpha_target_temperature=0.4,
+        )
+    )
+
+    expected_target = torch.softmax((q @ p.T) / 0.4, dim=-1).diagonal()
+    expected_bce = F.binary_cross_entropy_with_logits(alpha_logits, expected_target, reduction="none")
+    torch.testing.assert_close(fixed.main_per_row, legacy.main_per_row)
+    torch.testing.assert_close(fixed.alpha_target, expected_target)
+    torch.testing.assert_close(fixed.alpha_supervision_per_row, expected_bce)
+    assert not torch.allclose(fixed.alpha_target, legacy.alpha_target)
+
+
+def test_fixed_simcse_temperature_changes_only_auxiliary_loss():
+    legacy = ContrastiveObjective(
+        ObjectiveConfig(
+            temperature=0.1,
+            learnable_temperature=False,
+            decoupled=False,
+            simcse_dropout_weight=0.3,
+        )
+    )
+    fixed = ContrastiveObjective(
+        ObjectiveConfig(
+            temperature=0.1,
+            learnable_temperature=False,
+            decoupled=False,
+            simcse_dropout_weight=0.3,
+            simcse_temperature=0.4,
+        )
+    )
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.4, 0.9], [-0.6, 0.8]]), dim=-1)
+    p = F.normalize(torch.tensor([[0.9, 0.1], [0.2, 1.0], [-0.8, 0.4]]), dim=-1)
+    q_alt = F.normalize(torch.tensor([[0.8, 0.2], [0.6, 0.8], [-0.9, 0.1]]), dim=-1)
+
+    legacy_output = legacy(ObjectiveInputs(queries=q, positives=p, query_alt=q_alt))
+    fixed_output = fixed(ObjectiveInputs(queries=q, positives=p, query_alt=q_alt))
+
+    expected = F.cross_entropy((q @ q_alt.T) / 0.4, torch.arange(3), reduction="none")
+    torch.testing.assert_close(fixed_output.main_per_row, legacy_output.main_per_row)
+    torch.testing.assert_close(fixed_output.simcse_per_row, expected)
+    assert not torch.allclose(fixed_output.simcse_per_row, legacy_output.simcse_per_row)
+    assert fixed.simcse_kernel is not None
+    assert dict(fixed.simcse_kernel.named_parameters()) == {}
+
+
+def test_alpha_auxiliary_temperature_metrics_match_effective_objective():
+    objective = ContrastiveObjective(
+        ObjectiveConfig(
+            temperature=0.1,
+            learnable_temperature=False,
+            decoupled=False,
+            simcse_dropout_weight=0.3,
+            simcse_temperature=0.4,
+        )
+    )
+    q = F.normalize(torch.tensor([[1.0, 0.0], [0.4, 0.9], [-0.6, 0.8]]), dim=-1)
+    p = F.normalize(torch.tensor([[0.9, 0.1], [0.2, 1.0], [-0.8, 0.4]]), dim=-1)
+    q_alt = F.normalize(torch.tensor([[0.8, 0.2], [0.6, 0.8], [-0.9, 0.1]]), dim=-1)
+    alpha_logits = torch.tensor([-0.5, 0.2, 0.8])
+
+    output = objective(
+        ObjectiveInputs(
+            queries=q,
+            positives=p,
+            query_alt=q_alt,
+            alpha_logits=alpha_logits,
+            alpha_supervision_weight=0.3,
+            alpha_target_temperature=0.25,
+        )
+    )
+
+    weighted = 0.3 * (1.0 - torch.sigmoid(alpha_logits).detach()) * output.simcse_per_row
+    ratio = weighted.detach().mean() / output.main_per_row.detach().mean().abs().clamp_min(1e-12)
+    torch.testing.assert_close(output.metrics["loss/alpha_aux"], output.simcse_per_row.detach().mean())
+    torch.testing.assert_close(output.metrics["loss/alpha_aux_weighted"], weighted.detach().mean())
+    torch.testing.assert_close(output.metrics["loss/alpha_aux_to_main_ratio"], ratio)
+    torch.testing.assert_close(output.metrics["temperature"], torch.tensor(0.1))
+    torch.testing.assert_close(output.metrics["temperature/simcse"], torch.tensor(0.4))
+    torch.testing.assert_close(output.metrics["temperature/alpha_target"], torch.tensor(0.25))
+
+
 def test_alpha_bce_does_not_update_retrieval_embeddings_or_temperature():
     objective = ContrastiveObjective(
         ObjectiveConfig(temperature=0.7, learnable_temperature=True, decoupled=False)
