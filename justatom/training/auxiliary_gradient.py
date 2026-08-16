@@ -107,6 +107,10 @@ def control_auxiliary_gradients(
     if not torch.isfinite(torch.stack((dot, primary_norm, auxiliary_norm, cosine))).all().item():
         raise ValueError("non-finite auxiliary gradient statistics")
 
+    if primary_norm.item() <= eps or auxiliary_norm.item() <= eps:
+        dot = zero.clone()
+        cosine = zero.clone()
+
     if mode in (AuxiliaryGradientMode.OFF, AuxiliaryGradientMode.OBSERVE):
         cosine_scale = 1.0
         norm_scale = 1.0

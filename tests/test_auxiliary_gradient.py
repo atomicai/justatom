@@ -92,6 +92,29 @@ def test_safe_gradient_suppresses_zero_norm_gradient(primary, auxiliary):
     assert stats.total_scale == 0.0
 
 
+@pytest.mark.parametrize(
+    ("primary", "auxiliary"),
+    [
+        ([torch.tensor([5e-4])], [torch.tensor([2.0])]),
+        ([torch.tensor([2.0])], [torch.tensor([5e-4])]),
+    ],
+    ids=["near-zero-primary", "near-zero-auxiliary"],
+)
+def test_near_zero_gradient_norms_zero_telemetry_compatibility(primary, auxiliary):
+    controlled, stats = control_auxiliary_gradients(
+        primary,
+        auxiliary,
+        mode=AuxiliaryGradientMode.SAFE,
+        max_norm_ratio=0.25,
+        eps=1e-3,
+    )
+
+    torch.testing.assert_close(controlled[0], torch.zeros_like(auxiliary[0]))
+    assert stats.dot == 0.0
+    assert stats.cosine == 0.0
+    assert stats.compatible is False
+
+
 def test_observe_returns_auxiliary_gradient_unchanged_and_reports_metrics():
     primary = [torch.tensor([1.0, 0.0])]
     auxiliary = [torch.tensor([2.0, 1.0])]
