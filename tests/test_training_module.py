@@ -10,13 +10,7 @@ from torch.utils.data import DataLoader
 
 from justatom.training import telemetry
 from justatom.training.alpha_gate import QueryAlphaGate
-from justatom.training.config import (
-    ExperimentConfig,
-    ExperimentRole,
-    MarginMode,
-    TrainingMethod,
-    train_config_to_dict,
-)
+from justatom.training.config import ExperimentConfig, ExperimentRole, MarginMode, TrainingMethod, train_config_to_dict
 from justatom.training.methods import canonical_method_config
 from justatom.training.module import ContrastiveTrainingModule
 from justatom.training.objective import ObjectiveOutput
@@ -367,10 +361,7 @@ def test_atom_gate_alpha_supervision_runs_under_cuda_fp16_autocast():
         output.alpha_supervision_per_row.mean().backward()
 
     assert module.alpha_gate is not None
-    assert any(
-        parameter.grad is not None and torch.isfinite(parameter.grad).all()
-        for parameter in module.alpha_gate.parameters()
-    )
+    assert any(parameter.grad is not None and torch.isfinite(parameter.grad).all() for parameter in module.alpha_gate.parameters())
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")
@@ -568,9 +559,7 @@ def test_projected_optimization_step_applies_live_bank_update_direction(
 
     metrics = module._projected_optimization_step(output, batch_idx=0)
 
-    applied = torch.cat(
-        [((old - parameter.detach()) / learning_rate).reshape(-1) for old, parameter in zip(before, parameters)]
-    )
+    applied = torch.cat([((old - parameter.detach()) / learning_rate).reshape(-1) for old, parameter in zip(before, parameters)])
     assert metrics["gradient/conflict"] == float(expect_conflict)
     memory_weight = float(module.config.gradient_projection.memory_weight)
     if expect_conflict:

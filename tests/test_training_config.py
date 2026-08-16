@@ -28,9 +28,7 @@ def test_parse_train_config_builds_typed_atomic_config():
 
 
 def test_alpha_supervision_schema_round_trips():
-    config = parse_train_config(
-        {"method": "atom_gate", "alpha_gate": {"supervision_weight": 0.4}}
-    )
+    config = parse_train_config({"method": "atom_gate", "alpha_gate": {"supervision_weight": 0.4}})
     payload = train_config_to_dict(config)
 
     assert config.alpha_gate.supervision_weight == pytest.approx(0.4)
@@ -82,9 +80,7 @@ def test_retired_alpha_fields_are_rejected(field):
 @pytest.mark.parametrize("value", [-0.1, float("nan"), float("inf")])
 def test_alpha_supervision_weight_is_finite_and_non_negative(value):
     with pytest.raises(ValueError, match=r"alpha_gate\.supervision_weight"):
-        parse_train_config(
-            {"method": "atom_gate", "alpha_gate": {"supervision_weight": value}}
-        )
+        parse_train_config({"method": "atom_gate", "alpha_gate": {"supervision_weight": value}})
 
 
 @pytest.mark.parametrize("value", [-0.1, float("nan"), float("inf")])

@@ -6,12 +6,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from justatom.training.config import (
-    MarginConfig,
-    MarginMode,
-    MemoryBankConfig,
-    ObjectiveConfig,
-)
+from justatom.training.config import MarginConfig, MarginMode, MemoryBankConfig, ObjectiveConfig
 from justatom.training.memory_bank import ContrastiveMemoryBank, MemorySelection
 from justatom.training.objective import ContrastiveObjective, ObjectiveInputs
 
@@ -32,9 +27,7 @@ def test_objective_vanilla_has_no_auxiliary_components():
 
 
 def _assert_singleton_contrastive_batch_is_rejected(memory: MemorySelection | None) -> None:
-    objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False)
-    )
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False))
     singleton = torch.tensor([[1.0, 0.0]])
 
     with pytest.raises(ValueError, match="contrastive batch size >= 2"):
@@ -46,9 +39,7 @@ def test_objective_rejects_singleton_plain_batch():
 
 
 def test_objective_rejects_singleton_bank_warmup_batch():
-    bank = ContrastiveMemoryBank(
-        MemoryBankConfig(enabled=True, size=2, warmup_steps=1, mass_ramp_steps=1)
-    )
+    bank = ContrastiveMemoryBank(MemoryBankConfig(enabled=True, size=2, warmup_steps=1, mass_ramp_steps=1))
     bank.enqueue(torch.eye(2), {"doc_key_id": torch.tensor([1, 2])})
     singleton = torch.tensor([[1.0, 0.0]])
     memory = bank.select(
@@ -62,9 +53,7 @@ def test_objective_rejects_singleton_bank_warmup_batch():
 
 
 def test_objective_rejects_singleton_zero_mass_batch():
-    bank = ContrastiveMemoryBank(
-        MemoryBankConfig(enabled=True, size=2, mass_ratio=0.0, mass_ramp_steps=1)
-    )
+    bank = ContrastiveMemoryBank(MemoryBankConfig(enabled=True, size=2, mass_ratio=0.0, mass_ramp_steps=1))
     bank.enqueue(torch.eye(2), {"doc_key_id": torch.tensor([1, 2])})
     singleton = torch.tensor([[1.0, 0.0]])
     memory = bank.select(
@@ -91,9 +80,7 @@ def test_objective_rejects_singleton_active_bank_batch():
 
 
 def test_objective_rejects_mismatched_query_positive_batch_counts():
-    objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False)
-    )
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False))
 
     with pytest.raises(ValueError, match="matching contrastive batch sizes"):
         objective(
@@ -161,9 +148,7 @@ def test_objective_atom_gate_detaches_alpha_only_from_auxiliary_gradient():
 
 
 def test_atom_gate_uses_detached_positive_confidence_with_learnable_temperature():
-    objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=0.7, learnable_temperature=True, decoupled=False)
-    )
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=0.7, learnable_temperature=True, decoupled=False))
     q = F.normalize(torch.tensor([[1.0, 0.0], [0.0, 1.0]]), dim=-1).requires_grad_()
     p = F.normalize(torch.tensor([[1.0, 0.0], [0.6, 0.8]]), dim=-1).requires_grad_()
     alpha_logits = torch.tensor([-0.4, 0.7], requires_grad=True)
@@ -183,9 +168,7 @@ def test_atom_gate_uses_detached_positive_confidence_with_learnable_temperature(
 
 
 def test_fixed_alpha_target_temperature_changes_only_target_and_bce():
-    objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=0.1, learnable_temperature=False, decoupled=False)
-    )
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=0.1, learnable_temperature=False, decoupled=False))
     q = F.normalize(torch.tensor([[1.0, 0.0], [0.4, 0.9], [-0.6, 0.8]]), dim=-1)
     p = F.normalize(torch.tensor([[0.9, 0.1], [0.2, 1.0], [-0.8, 0.4]]), dim=-1)
     alpha_logits = torch.tensor([-0.5, 0.2, 0.8])
@@ -286,15 +269,11 @@ def test_alpha_auxiliary_temperature_metrics_match_effective_objective():
 
 
 def test_alpha_bce_does_not_update_retrieval_embeddings_or_temperature():
-    objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=0.7, learnable_temperature=True, decoupled=False)
-    )
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=0.7, learnable_temperature=True, decoupled=False))
     q = F.normalize(torch.randn(3, 4), dim=-1).requires_grad_()
     p = F.normalize(torch.randn(3, 4), dim=-1).requires_grad_()
     alpha_logits = torch.tensor([-1.0, 0.0, 1.0], requires_grad=True)
-    output = objective(
-        ObjectiveInputs(queries=q, positives=p, alpha_logits=alpha_logits, alpha_supervision_weight=1.0)
-    )
+    output = objective(ObjectiveInputs(queries=q, positives=p, alpha_logits=alpha_logits, alpha_supervision_weight=1.0))
     output.alpha_supervision_per_row.mean().backward()
     assert alpha_logits.grad is not None and torch.isfinite(alpha_logits.grad).all()
     assert float(alpha_logits.grad.abs().sum()) > 0.0
@@ -380,9 +359,7 @@ def test_objective_atomic_forwards_bank_columns_and_live_margin():
 
 def test_normalized_bank_matches_closed_form_at_non_unit_temperature():
     temperature = 0.5
-    objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=temperature, learnable_temperature=False, decoupled=False)
-    )
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=temperature, learnable_temperature=False, decoupled=False))
     q = F.normalize(torch.tensor([[1.0, 0.0], [0.0, 1.0]]), dim=-1)
     p = q.clone()
     vector = F.normalize(torch.tensor([[1.0, 1.0]]), dim=-1)
@@ -416,9 +393,7 @@ def test_normalized_bank_matches_closed_form_at_non_unit_temperature():
 
 
 def test_augmented_gradient_equals_independent_primary_plus_memory_gradients():
-    objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=0.5, learnable_temperature=False, decoupled=False)
-    )
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=0.5, learnable_temperature=False, decoupled=False))
     positives = F.normalize(torch.tensor([[1.0, 0.2], [0.1, 1.0]]), dim=-1)
     memory = MemorySelection(
         embeddings=F.normalize(torch.tensor([[1.0, 1.0], [-1.0, 0.5]]), dim=-1),
@@ -430,9 +405,7 @@ def test_augmented_gradient_equals_independent_primary_plus_memory_gradients():
     )
 
     augmented_queries = torch.tensor([[1.0, 0.1], [0.2, 1.0]], requires_grad=True)
-    augmented = objective(
-        ObjectiveInputs(queries=augmented_queries, positives=positives, memory=memory)
-    )
+    augmented = objective(ObjectiveInputs(queries=augmented_queries, positives=positives, memory=memory))
     augmented_gradient = torch.autograd.grad(augmented.loss, augmented_queries)[0]
 
     primary_queries = augmented_queries.detach().clone().requires_grad_()
@@ -448,9 +421,7 @@ def test_augmented_gradient_equals_independent_primary_plus_memory_gradients():
 
 
 def test_row_without_valid_bank_candidates_equals_main_loss():
-    objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False)
-    )
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=1.0, learnable_temperature=False, decoupled=False))
     q = F.normalize(torch.tensor([[1.0, 0.0], [0.0, 1.0]]), dim=-1)
     p = q.clone()
     memory = MemorySelection(
@@ -476,9 +447,7 @@ def test_row_without_valid_bank_candidates_equals_main_loss():
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")
 def test_normalized_bank_objective_gradients_are_finite_on_mps():
-    objective = ContrastiveObjective(
-        ObjectiveConfig(temperature=0.05, learnable_temperature=True, decoupled=False)
-    ).to("mps")
+    objective = ContrastiveObjective(ObjectiveConfig(temperature=0.05, learnable_temperature=True, decoupled=False)).to("mps")
     q = F.normalize(torch.randn(2, 4, device="mps"), dim=-1).requires_grad_()
     p = F.normalize(torch.randn(2, 4, device="mps"), dim=-1).requires_grad_()
     memory = MemorySelection(

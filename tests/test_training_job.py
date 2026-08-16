@@ -7,13 +7,7 @@ import pytest
 import yaml
 
 from justatom.training.config import ExperimentRole, TrainingMethod
-from justatom.training.job import (
-    RunManifest,
-    TrainingJob,
-    artifact_paths,
-    build_lightning_trainer,
-    write_run_manifest,
-)
+from justatom.training.job import RunManifest, TrainingJob, artifact_paths, build_lightning_trainer, write_run_manifest
 from justatom.training.methods import canonical_method_config
 
 
