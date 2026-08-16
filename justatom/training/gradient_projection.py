@@ -30,6 +30,28 @@ class ProjectionStats:
         }
 
 
+@dataclass(frozen=True)
+class ConstraintProjectionStats:
+    constraint_norm: float
+    update_norm: float
+    projected_update_norm: float
+    dot: float
+    cosine: float
+    active: bool
+    coefficient: float
+
+    def metrics(self) -> dict[str, float]:
+        return {
+            "gradient_anchor/constraint_norm": self.constraint_norm,
+            "gradient_anchor/update_norm": self.update_norm,
+            "gradient_anchor/projected_update_norm": self.projected_update_norm,
+            "gradient_anchor/dot": self.dot,
+            "gradient_anchor/cosine": self.cosine,
+            "gradient_anchor/active": float(self.active),
+            "gradient_anchor/projection_coefficient": self.coefficient,
+        }
+
+
 def project_conflicting_gradients(
     primary: GradientList,
     memory: GradientList,
@@ -102,3 +124,28 @@ def project_conflicting_gradients(
         coefficient=float(coefficient.item()),
     )
     return projected, stats
+
+
+def project_update_against_constraint(
+    update: GradientList,
+    constraint: GradientList,
+    *,
+    eps: float = 1e-12,
+) -> tuple[list[torch.Tensor | None], ConstraintProjectionStats]:
+    """Remove only an update component that would increase a constraint.
+
+    Parameters follow ``theta <- theta - eta * update``. A negative dot
+    product with the constraint gradient therefore increases the constraint to
+    first order. The constraint itself is never added as an auxiliary loss.
+    """
+
+    projected, raw = project_conflicting_gradients(constraint, update, eps=eps)
+    return projected, ConstraintProjectionStats(
+        constraint_norm=raw.primary_norm,
+        update_norm=raw.memory_norm,
+        projected_update_norm=raw.projected_memory_norm,
+        dot=raw.dot,
+        cosine=raw.cosine,
+        active=raw.conflict,
+        coefficient=raw.coefficient,
+    )

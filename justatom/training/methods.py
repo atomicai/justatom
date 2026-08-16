@@ -49,6 +49,7 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
     role = config.experiment.role
     gate = config.alpha_gate
     bank = config.memory_bank
+    anchor = config.anchor_bank
     auxiliary = config.auxiliary_gradient
 
     if auxiliary.mode is not AuxiliaryGradientMode.OFF and (
@@ -62,6 +63,8 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
     if method is TrainingMethod.VANILLA:
         if gate.enabled:
             raise ValueError("vanilla does not permit alpha_gate.enabled")
+        if anchor.enabled:
+            raise ValueError("vanilla does not permit anchor_bank.enabled")
         if config.gradient_projection.enabled:
             raise ValueError("vanilla does not permit gradient_projection.enabled")
         if bank.enabled:
@@ -77,6 +80,8 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
         raise ValueError("atom_gate requires alpha_gate.enabled=true")
 
     if method is TrainingMethod.ATOM_GATE:
+        if anchor.enabled:
+            raise ValueError("atom_gate does not permit anchor_bank.enabled")
         if config.gradient_projection.enabled:
             raise ValueError("atom_gate does not permit gradient_projection.enabled")
         if bank.enabled:
@@ -85,12 +90,20 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
 
     if gate.enabled:
         raise ValueError("atomic does not permit alpha_gate.enabled; memory gradients are controlled by projection")
-    if not bank.enabled:
-        raise ValueError("atomic requires memory_bank.enabled=true")
-    if bank.size <= 0:
+    if not bank.enabled and not anchor.enabled:
+        raise ValueError("atomic requires memory_bank.enabled=true or anchor_bank.enabled=true")
+    if bank.enabled and bank.size <= 0:
         raise ValueError("atomic requires memory_bank.size > 0")
     if not config.gradient_projection.enabled:
         raise ValueError("atomic requires gradient_projection.enabled=true")
+
+    if anchor.enabled:
+        if role is not ExperimentRole.ABLATION:
+            raise ValueError("atomic anchor bank requires experiment.role=ablation")
+        if anchor.size <= 0:
+            raise ValueError("atomic anchor bank requires anchor_bank.size > 0")
+        if not config.model.lora.enabled:
+            raise ValueError("atomic anchor bank requires model.lora.enabled=true")
 
     if role is ExperimentRole.CANONICAL:
         if bank.margin.mode is not MarginMode.OFF:

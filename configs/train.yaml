@@ -51,6 +51,7 @@ optimization:
 objective: {}
 alpha_gate: {}
 memory_bank: {}
+anchor_bank: {}
 gradient_projection: {}
 auxiliary_gradient: {}
 

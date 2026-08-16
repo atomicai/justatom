@@ -169,6 +169,50 @@ def test_parse_train_config_rejects_invalid_beta_before_model_load():
         )
 
 
+def test_anchor_bank_config_round_trips_for_lora_atomic_ablation():
+    config = parse_train_config(
+        {
+            "method": "atomic",
+            "experiment": {"role": "ablation", "seed": 42},
+            "model": {"lora": {"enabled": True}},
+            "memory_bank": {"enabled": False, "size": 0},
+            "anchor_bank": {
+                "enabled": True,
+                "size": 512,
+                "warmup_steps": 5,
+                "temperature": 0.05,
+            },
+        }
+    )
+
+    assert config.anchor_bank.enabled
+    assert config.anchor_bank.size == 512
+    assert config.anchor_bank.warmup_steps == 5
+    assert parse_train_config(train_config_to_dict(config)) == config
+
+
+def test_anchor_bank_requires_positive_capacity_and_lora():
+    with pytest.raises(ValueError, match=r"anchor_bank\.size"):
+        parse_train_config(
+            {
+                "method": "atomic",
+                "experiment": {"role": "ablation"},
+                "model": {"lora": {"enabled": True}},
+                "anchor_bank": {"enabled": True, "size": 0},
+            }
+        )
+
+    with pytest.raises(ValueError, match=r"model\.lora\.enabled"):
+        parse_train_config(
+            {
+                "method": "atomic",
+                "experiment": {"role": "ablation"},
+                "memory_bank": {"enabled": False, "size": 0},
+                "anchor_bank": {"enabled": True, "size": 8},
+            }
+        )
+
+
 def test_parse_train_config_keeps_dataset_preset_metadata():
     config = parse_train_config(
         {

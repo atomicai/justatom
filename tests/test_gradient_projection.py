@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from justatom.training.gradient_projection import project_conflicting_gradients
+from justatom.training.gradient_projection import project_conflicting_gradients, project_update_against_constraint
 
 
 def test_conflicting_memory_gradient_is_projected_orthogonally():
@@ -59,3 +59,17 @@ def test_projection_spans_primary_only_parameters():
 def test_projection_rejects_mismatched_gradient_lists():
     with pytest.raises(ValueError, match="equal length"):
         project_conflicting_gradients([torch.ones(1)], [])
+
+
+def test_constraint_projection_changes_the_task_update_not_the_constraint():
+    update = [torch.tensor([-1.0, 2.0])]
+    constraint = [torch.tensor([1.0, 0.0])]
+
+    projected, stats = project_update_against_constraint(update, constraint)
+
+    assert projected[0] is not None
+    torch.testing.assert_close(projected[0], torch.tensor([0.0, 2.0]))
+    assert torch.dot(constraint[0], projected[0]).item() == pytest.approx(0.0, abs=1e-7)
+    assert stats.active is True
+    assert stats.constraint_norm == pytest.approx(1.0)
+    assert stats.update_norm == pytest.approx(5.0**0.5)

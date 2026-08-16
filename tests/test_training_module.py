@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 
 from justatom.training import telemetry
 from justatom.training.alpha_gate import QueryAlphaGate
+from justatom.training.anchor_bank import GeometryAnchorBank
 from justatom.training.config import (
     AuxiliaryGradientConfig,
     AuxiliaryGradientMode,
@@ -109,6 +110,19 @@ def auxiliary_control_config(
             max_norm_ratio=max_norm_ratio,
             eps=eps,
         ),
+    )
+
+
+def anchor_control_config(*, grad_acc_steps: int = 1):
+    config = canonical_method_config(TrainingMethod.ATOMIC)
+    return replace(
+        config,
+        experiment=replace(config.experiment, role=ExperimentRole.ABLATION),
+        model=replace(config.model, lora=replace(config.model.lora, enabled=True)),
+        optimization=replace(config.optimization, grad_acc_steps=grad_acc_steps),
+        memory_bank=replace(config.memory_bank, enabled=False, size=0),
+        anchor_bank=replace(config.anchor_bank, enabled=True, size=8, warmup_steps=0),
+        gradient_projection=replace(config.gradient_projection, memory_weight=0.0),
     )
 
 
@@ -215,12 +229,18 @@ def test_module_constructs_only_components_required_by_method():
     vanilla = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.VANILLA))
     gate = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.ATOM_GATE))
     atomic = ContrastiveTrainingModule.build(TinyEncoder(), canonical_method_config(TrainingMethod.ATOMIC))
+    anchor = ContrastiveTrainingModule.build(TinyEncoder(), anchor_control_config())
 
-    assert vanilla.alpha_gate is None and vanilla.memory_bank is None and vanilla.margin_head is None
+    assert (
+        vanilla.alpha_gate is None and vanilla.memory_bank is None and vanilla.margin_head is None and vanilla.anchor_bank is None
+    )
     assert isinstance(gate.alpha_gate, QueryAlphaGate) and gate.memory_bank is None
     assert atomic.alpha_gate is None and atomic.memory_bank is not None and atomic.margin_head is None
     assert atomic.config.gradient_projection.enabled
     assert atomic.automatic_optimization is False
+    assert anchor.alpha_gate is None and anchor.memory_bank is None and anchor.margin_head is None
+    assert isinstance(anchor.anchor_bank, GeometryAnchorBank)
+    assert anchor.automatic_optimization is False
 
 
 @pytest.mark.parametrize(
@@ -723,6 +743,67 @@ def test_projected_optimization_step_applies_live_bank_update_direction(
         assert raw_dot > 0.0
         expected_applied = primary + memory_weight * memory
     torch.testing.assert_close(applied, expected_applied, atol=1e-6, rtol=1e-5)
+
+
+def test_anchor_constraint_projects_only_task_update_that_increases_geometry_loss(monkeypatch):
+    module = ContrastiveTrainingModule.build(DirectionalEncoder(), anchor_control_config())
+    parameter = module.encoder.projection.weight
+    task_loss = parameter[0, 0]
+    anchor_loss = -parameter[0, 0] + parameter[0, 1]
+    output = replace(
+        finite_output(),
+        loss=task_loss,
+        primary_loss=task_loss,
+        retrieval_loss=task_loss,
+        anchor_loss=anchor_loss,
+    )
+    optimizer = torch.optim.SGD(module.parameters(), lr=0.1)
+    monkeypatch.setattr(module, "optimizers", lambda: optimizer)
+    monkeypatch.setattr(
+        module,
+        "manual_backward",
+        lambda loss, retain_graph=False: loss.backward(retain_graph=retain_graph),
+    )
+    monkeypatch.setattr(module, "should_step_optimizer", lambda _batch_idx: False)
+
+    metrics = module._projected_optimization_step(output, batch_idx=0)
+
+    expected = torch.zeros_like(parameter)
+    expected[0, :2] = torch.tensor([0.5, 0.5])
+    torch.testing.assert_close(parameter.grad, expected)
+    assert metrics["gradient_anchor/dot"] == pytest.approx(-1.0)
+    assert metrics["gradient_anchor/active"] == 1.0
+
+
+def test_anchor_bank_uses_frozen_views_then_activates_on_next_batch(monkeypatch):
+    module = ContrastiveTrainingModule.build(TinyEncoder(), anchor_control_config())
+
+    def anchor_views(batch, *, include_student):
+        base_queries = torch.nn.functional.normalize(batch["queries"], dim=-1)
+        base_documents = torch.nn.functional.normalize(batch["documents"], dim=-1)
+        if not include_student:
+            return None, None, base_queries, base_documents
+        return (
+            torch.nn.functional.normalize(base_queries + 0.1, dim=-1),
+            torch.nn.functional.normalize(base_documents - 0.1, dim=-1),
+            base_queries,
+            base_documents,
+        )
+
+    monkeypatch.setattr(module, "_anchor_views", anchor_views)
+    first = tiny_batch()
+    second = {key: value.clone() for key, value in first.items()}
+    for key in ("doc_key_id", "content_key_id", "query_key_id"):
+        second[key] += 100
+
+    warmup = module.compute_training_step(first, step=0)
+    output = module.compute_training_step(second, step=1)
+
+    assert warmup.anchor_loss is None
+    assert output.anchor_loss is not None and torch.isfinite(output.anchor_loss)
+    assert module.anchor_bank is not None and module.anchor_bank.current_size == 4
+    assert output.metrics["anchor/size"] == 2.0
+    assert output.metrics["anchor/active_rows"] == 2.0
 
 
 def test_auxiliary_control_step_caps_aligned_safe_gradient_and_preserves_head(

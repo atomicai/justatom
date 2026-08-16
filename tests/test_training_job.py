@@ -86,6 +86,22 @@ def test_manifest_records_auxiliary_gradient_control_contract():
     assert safe_manifest.objective_contract["auxiliary_norm"] == "retrieval_relative"
 
 
+def test_manifest_records_geometry_anchor_contract():
+    config = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(
+        config,
+        experiment=replace(config.experiment, role=ExperimentRole.ABLATION),
+        model=replace(config.model, lora=replace(config.model.lora, enabled=True)),
+        memory_bank=replace(config.memory_bank, enabled=False, size=0),
+        anchor_bank=replace(config.anchor_bank, enabled=True, size=512),
+    )
+
+    manifest = RunManifest.from_config(config, git_commit="abc123", git_dirty=False)
+
+    assert manifest.objective_contract["geometry_anchor"] == "frozen_base_relational_kl"
+    assert manifest.objective_contract["geometry_control"] == "one_sided_task_projection"
+
+
 def test_manifest_records_resolved_auxiliary_temperatures():
     config = canonical_method_config(TrainingMethod.ATOM_GATE)
     config = replace(
