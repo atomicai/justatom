@@ -71,9 +71,7 @@ def retrieval_metrics_by_confidence(
         mask = (confidence >= lower) & ((confidence <= upper) if include_upper else (confidence < upper))
         prefix = f"alpha_target_bucket/{name}"
         result[f"{prefix}/count"] = float(mask.sum().item())
-        result[f"{prefix}/hit_rate_at_1"] = (
-            float((ranks[mask] <= 1).float().mean().item()) if mask.any() else float("nan")
-        )
+        result[f"{prefix}/hit_rate_at_1"] = float((ranks[mask] <= 1).float().mean().item()) if mask.any() else float("nan")
         result[f"{prefix}/mrr"] = float((1.0 / ranks[mask].float()).mean().item()) if mask.any() else float("nan")
     return result
 

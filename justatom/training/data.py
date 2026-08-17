@@ -173,11 +173,7 @@ def prepare_training_data(
     **kwargs: Any,
 ) -> tuple[pl.DataFrame, list[dict[str, Any]]]:
     sampled = sample_training_rows(**kwargs)
-    frame = (
-        pl.from_dicts(sampled)
-        if sampled
-        else pl.DataFrame(schema={"queries": pl.Utf8, "content": pl.Utf8})
-    )
+    frame = pl.from_dicts(sampled) if sampled else pl.DataFrame(schema={"queries": pl.Utf8, "content": pl.Utf8})
     return frame, sampled
 
 

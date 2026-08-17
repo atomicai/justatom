@@ -92,9 +92,7 @@ def test_auxiliary_gradient_mode_must_be_known(mode):
 @pytest.mark.parametrize("value", [-0.1, float("nan"), float("inf")])
 def test_auxiliary_gradient_max_norm_ratio_must_be_finite_and_non_negative(value):
     with pytest.raises(ValueError, match=r"auxiliary_gradient\.max_norm_ratio"):
-        parse_train_config(
-            {"method": "atom_gate", "auxiliary_gradient": {"max_norm_ratio": value}}
-        )
+        parse_train_config({"method": "atom_gate", "auxiliary_gradient": {"max_norm_ratio": value}})
 
 
 @pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf")])

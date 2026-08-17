@@ -4,17 +4,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from justatom.training.config import (
-    AdaptiveBankConfig,
-    MarginConfig,
-    MarginMode,
-    MemoryBankConfig,
-)
-from justatom.training.memory_bank import (
-    ContrastiveMemoryBank,
-    MemorySelection,
-    QueryMarginHead,
-)
+from justatom.training.config import AdaptiveBankConfig, MarginConfig, MarginMode, MemoryBankConfig
+from justatom.training.memory_bank import ContrastiveMemoryBank, MemorySelection, QueryMarginHead
 
 
 def test_memory_bank_requires_typed_configuration():
@@ -155,9 +146,7 @@ def test_random_selection_preserves_live_telemetry_after_normalization():
     assert selection.metrics["memory/active_count/mean"] == pytest.approx(2.0)
     assert selection.metrics["memory/random_k"] == pytest.approx(2.0)
     assert selection.metrics["memory/positive_similarity_mean"] == pytest.approx(1.0)
-    assert selection.metrics["memory/active_similarity/mean"] == pytest.approx(
-        float(selected_similarities.mean().item())
-    )
+    assert selection.metrics["memory/active_similarity/mean"] == pytest.approx(float(selected_similarities.mean().item()))
     assert selection.metrics["memory/active_similarity/mean"] > 0.0
 
 
@@ -208,9 +197,7 @@ def test_n8_k12_candidate_weight_is_seven_over_twenty_four():
 
 
 def test_candidate_weights_compose_and_empty_rows_stay_finite():
-    bank = ContrastiveMemoryBank(
-        MemoryBankConfig(enabled=True, size=8, mass_ratio=0.5, mass_ramp_steps=1)
-    )
+    bank = ContrastiveMemoryBank(MemoryBankConfig(enabled=True, size=8, mass_ratio=0.5, mass_ramp_steps=1))
     active = torch.tensor([[True, True, False], [False, False, False]])
     candidate = torch.log(torch.tensor([[0.5, 0.25, 1.0], [1.0, 1.0, 1.0]]))
     log_weights, _ = bank._normalized_log_weights(active, candidate, step=0)
@@ -220,9 +207,7 @@ def test_candidate_weights_compose_and_empty_rows_stay_finite():
 
 
 def test_normalization_rejects_single_row_contrastive_batch():
-    bank = ContrastiveMemoryBank(
-        MemoryBankConfig(enabled=True, size=8, mass_ratio=0.5, mass_ramp_steps=1)
-    )
+    bank = ContrastiveMemoryBank(MemoryBankConfig(enabled=True, size=8, mass_ratio=0.5, mass_ramp_steps=1))
     with pytest.raises(ValueError, match="contrastive batch size >= 2"):
         bank._normalized_log_weights(torch.ones(1, 2, dtype=torch.bool), None, step=0)
 
@@ -270,9 +255,7 @@ def test_adaptive_metric_columns_are_stable_across_mass_warmup():
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")
 def test_normalized_weights_are_finite_on_mps():
-    bank = ContrastiveMemoryBank(
-        MemoryBankConfig(enabled=True, size=8, mass_ratio=0.5, mass_ramp_steps=1)
-    )
+    bank = ContrastiveMemoryBank(MemoryBankConfig(enabled=True, size=8, mass_ratio=0.5, mass_ramp_steps=1))
     active = torch.tensor([[True, False], [False, False]], device="mps")
     log_weights, _ = bank._normalized_log_weights(active, None, step=0)
     assert torch.isfinite(log_weights).all()

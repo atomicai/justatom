@@ -13,13 +13,7 @@ from torch import nn
 from justatom.logging.io import CSVLogger
 from justatom.training.alpha_gate import QueryAlphaGate
 from justatom.training.auxiliary_gradient import control_auxiliary_gradients
-from justatom.training.config import (
-    AuxiliaryGradientMode,
-    MarginMode,
-    TrainConfig,
-    parse_train_config,
-    train_config_to_dict,
-)
+from justatom.training.config import AuxiliaryGradientMode, MarginMode, TrainConfig, parse_train_config, train_config_to_dict
 from justatom.training.gradient_projection import project_conflicting_gradients
 from justatom.training.memory_bank import ContrastiveMemoryBank, QueryMarginHead
 from justatom.training.methods import resolve_method
@@ -156,6 +150,8 @@ class ContrastiveTrainingModule(L.LightningModule):
                 metrics.update(scalar_distribution("alpha", alpha))
                 metrics.update(scalar_distribution("alpha_aux_weight", 1.0 - alpha.detach()))
             if output.alpha_target is not None:
+                if alpha is None:
+                    raise RuntimeError("Alpha target requires alpha-gate output")
                 metrics.update(scalar_distribution("alpha_target", output.alpha_target))
                 metrics["alpha/absolute_error_mean"] = float((alpha.detach() - output.alpha_target).abs().mean().item())
                 metrics.update(retrieval_metrics_by_confidence(queries @ positives.T, output.alpha_target))
