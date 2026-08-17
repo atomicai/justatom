@@ -120,6 +120,8 @@ class BenchmarkVariantTests(unittest.TestCase):
                     str(bench_root),
                     "--train-config",
                     "configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml",
+                    "--experiment-role",
+                    "ablation",
                     "--aux-gradient-mode",
                     "safe",
                     "--aux-gradient-max-norm-ratio",
@@ -144,6 +146,7 @@ class BenchmarkVariantTests(unittest.TestCase):
             self.assertIn("--aux-gradient-mode safe", commands)
             self.assertIn("--aux-gradient-max-norm-ratio 0.25", commands)
             self.assertIn("--aux-gradient-eps 1e-12", commands)
+            self.assertEqual(commands.count("--experiment-role ablation"), 1)
 
     @unittest.skipIf(os.name == "nt", "pipeline shell tests require a Unix environment")
     def test_pipeline_rejects_missing_train_config_before_creating_run_root(self):
