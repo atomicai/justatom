@@ -12,9 +12,10 @@ from torch import nn
 
 from justatom.logging.io import CSVLogger
 from justatom.training.alpha_gate import QueryAlphaGate
+from justatom.training.anchor_bank import AnchorSelection, GeometryAnchorBank
 from justatom.training.auxiliary_gradient import control_auxiliary_gradients
 from justatom.training.config import AuxiliaryGradientMode, MarginMode, TrainConfig, parse_train_config, train_config_to_dict
-from justatom.training.gradient_projection import project_conflicting_gradients
+from justatom.training.gradient_projection import project_conflicting_gradients, project_update_against_constraint
 from justatom.training.memory_bank import ContrastiveMemoryBank, QueryMarginHead
 from justatom.training.methods import resolve_method
 from justatom.training.objective import ContrastiveObjective, ObjectiveInputs, ObjectiveOutput
@@ -38,6 +39,7 @@ class ContrastiveTrainingModule(L.LightningModule):
         alpha_gate: QueryAlphaGate | None,
         memory_bank: ContrastiveMemoryBank | None,
         margin_head: QueryMarginHead | None,
+        anchor_bank: GeometryAnchorBank | None = None,
     ):
         super().__init__()
         self.encoder = encoder
@@ -46,6 +48,7 @@ class ContrastiveTrainingModule(L.LightningModule):
         self.alpha_gate = alpha_gate
         self.memory_bank = memory_bank
         self.margin_head = margin_head
+        self.anchor_bank = anchor_bank
         self.metrics_path = None if config.telemetry.metrics_path is None else Path(config.telemetry.metrics_path)
         self.metrics_logger = CSVLogger(self.metrics_path) if self.metrics_path is not None else None
         self.automatic_optimization = not (
@@ -62,6 +65,7 @@ class ContrastiveTrainingModule(L.LightningModule):
         embedding_dim = int(encoder.output_dims)
         alpha_gate = QueryAlphaGate(embedding_dim, config.alpha_gate) if config.alpha_gate.enabled else None
         memory_bank = ContrastiveMemoryBank(config.memory_bank) if config.memory_bank.enabled else None
+        anchor_bank = GeometryAnchorBank(config.anchor_bank) if config.anchor_bank.enabled else None
         margin_head = (
             QueryMarginHead(embedding_dim, config.memory_bank.margin)
             if config.memory_bank.margin.mode is MarginMode.QUERY
@@ -74,6 +78,7 @@ class ContrastiveTrainingModule(L.LightningModule):
             alpha_gate=alpha_gate,
             memory_bank=memory_bank,
             margin_head=margin_head,
+            anchor_bank=anchor_bank,
         )
 
     @property
@@ -97,6 +102,45 @@ class ContrastiveTrainingModule(L.LightningModule):
     def _encode_dropout_query_view(self, batch: dict[str, Any]) -> torch.Tensor:
         return self.encoder.encode_queries(batch)
 
+    def _anchor_views(
+        self,
+        batch: dict[str, Any],
+        *,
+        include_student: bool,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor, torch.Tensor]:
+        """Encode deterministic LoRA and adapter-disabled views of a batch."""
+
+        peft_model = self._lora_model()
+        was_training = self.encoder.training
+        self.encoder.eval()
+        try:
+            if include_student:
+                student_queries, student_documents = self.encoder.encode_pair(batch)
+            else:
+                student_queries = None
+                student_documents = None
+            with torch.no_grad(), peft_model.disable_adapter():
+                base_queries, base_documents = self.encoder.encode_pair(batch)
+        finally:
+            self.encoder.train(was_training)
+        return student_queries, student_documents, base_queries.detach(), base_documents.detach()
+
+    def _anchor_selection(
+        self,
+        batch: dict[str, Any],
+        *,
+        step: int,
+        reference: torch.Tensor,
+    ) -> AnchorSelection | None:
+        if self.anchor_bank is None:
+            return None
+        return self.anchor_bank.select(
+            batch,
+            step=step,
+            device=reference.device,
+            dtype=reference.dtype,
+        )
+
     def _margin_values(self, queries: torch.Tensor) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         margin_config = self.config.memory_bank.margin
         if self.margin_head is not None:
@@ -108,6 +152,18 @@ class ContrastiveTrainingModule(L.LightningModule):
 
     def compute_training_step(self, batch: dict[str, Any], *, step: int) -> ObjectiveOutput:
         queries, positives = self.encoder.encode_pair(batch)
+        anchor_selection = self._anchor_selection(batch, step=step, reference=queries)
+        anchor_student_queries = None
+        anchor_student_documents = None
+        anchor_base_queries = None
+        anchor_base_documents = None
+        if self.anchor_bank is not None:
+            (
+                anchor_student_queries,
+                anchor_student_documents,
+                anchor_base_queries,
+                anchor_base_documents,
+            ) = self._anchor_views(batch, include_student=anchor_selection is not None)
         alpha_logits = None if self.alpha_gate is None else self.alpha_gate.logits(queries.detach())
         alpha = None if alpha_logits is None else torch.sigmoid(alpha_logits)
         query_alt = self._encode_dropout_query_view(batch) if self.needs_simcse else None
@@ -137,12 +193,40 @@ class ContrastiveTrainingModule(L.LightningModule):
             ),
             margin_config=(self.config.memory_bank.margin if self.memory_bank is not None else None),
         )
+        anchor_loss = None
+        anchor_metrics: dict[str, float | torch.Tensor] = {}
+        if anchor_selection is not None:
+            assert self.anchor_bank is not None
+            assert anchor_student_queries is not None
+            assert anchor_student_documents is not None
+            assert anchor_base_queries is not None
+            assert anchor_base_documents is not None
+            anchor_loss, anchor_metrics = self.anchor_bank.geometry_loss(
+                student_queries=anchor_student_queries,
+                student_documents=anchor_student_documents,
+                base_queries=anchor_base_queries,
+                base_documents=anchor_base_documents,
+                selection=anchor_selection,
+            )
+            anchor_metrics = {**anchor_selection.metrics, **anchor_metrics}
+        elif self.anchor_bank is not None:
+            anchor_metrics = {
+                "anchor/capacity": float(self.config.anchor_bank.size),
+                "anchor/size": float(self.anchor_bank.current_size),
+                "anchor/valid_mean": 0.0,
+                "anchor/valid_min": 0.0,
+                "loss/anchor_geometry": 0.0,
+                "anchor/active_rows": 0.0,
+            }
+        output = replace(output, anchor_loss=anchor_loss)
         if not torch.isfinite(output.loss.detach()):
             raise RuntimeError(f"Non-finite loss at step={step}: {output.loss.detach().cpu().item()}")
         if not torch.isfinite(output.primary_loss.detach()):
             raise RuntimeError(f"Non-finite primary loss at step={step}: {output.primary_loss.detach().cpu().item()}")
         if output.memory_loss is not None and not torch.isfinite(output.memory_loss.detach()):
             raise RuntimeError(f"Non-finite memory loss at step={step}: {output.memory_loss.detach().cpu().item()}")
+        if output.anchor_loss is not None and not torch.isfinite(output.anchor_loss.detach()):
+            raise RuntimeError(f"Non-finite anchor loss at step={step}: {output.anchor_loss.detach().cpu().item()}")
         with torch.no_grad():
             metrics: dict[str, Any] = dict(output.metrics)
             metrics.update(batch_retrieval_metrics(queries @ positives.T))
@@ -161,9 +245,14 @@ class ContrastiveTrainingModule(L.LightningModule):
                 metrics.update(scalar_distribution("margin/bounded", margin))
             if selection is not None:
                 metrics.update(selection.metrics)
+            metrics.update(anchor_metrics)
         output = replace(output, metrics=metrics)
         if self.memory_bank is not None:
             self.memory_bank.enqueue(positives, batch)
+        if self.anchor_bank is not None:
+            assert anchor_base_queries is not None
+            assert anchor_base_documents is not None
+            self.anchor_bank.enqueue(anchor_base_queries, anchor_base_documents, batch)
         return output
 
     @staticmethod
@@ -216,25 +305,40 @@ class ContrastiveTrainingModule(L.LightningModule):
             eps=self.config.gradient_projection.eps,
         )
         memory_weight = float(self.config.gradient_projection.memory_weight)
-        for parameter, previous, primary, memory in zip(
-            parameters,
-            accumulated,
-            primary_gradients,
-            projected_memory,
-        ):
-            combined = previous
-            if primary is not None:
-                combined = primary if combined is None else combined + primary
+        task_gradients: list[torch.Tensor | None] = []
+        for primary, memory in zip(primary_gradients, projected_memory):
+            combined = None if primary is None else primary.detach().clone()
             if memory is not None and memory_weight > 0.0:
                 weighted_memory = memory * memory_weight
                 combined = weighted_memory if combined is None else combined + weighted_memory
+            task_gradients.append(combined)
+
+        anchor_stats = None
+        if output.anchor_loss is not None:
+            anchor_loss = self.adjust_loss_for_accumulation(output.anchor_loss)
+            self.manual_backward(anchor_loss)
+            anchor_gradients = self._capture_gradients(parameters)
+            optimizer.zero_grad()
+            task_gradients, anchor_stats = project_update_against_constraint(
+                task_gradients,
+                anchor_gradients,
+                eps=self.config.gradient_projection.eps,
+            )
+
+        for parameter, previous, task_gradient in zip(parameters, accumulated, task_gradients):
+            combined = previous
+            if task_gradient is not None:
+                combined = task_gradient if combined is None else combined + task_gradient
             parameter.grad = combined
 
         if self.should_step_optimizer(batch_idx):
             optimizer.step()
             optimizer.zero_grad()
             self.objective.kernel.clamp_temperature_()
-        return stats.metrics()
+        metrics = stats.metrics()
+        if anchor_stats is not None:
+            metrics.update(anchor_stats.metrics())
+        return metrics
 
     def _auxiliary_control_optimization_step(
         self,

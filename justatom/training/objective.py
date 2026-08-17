@@ -39,6 +39,7 @@ class ObjectiveOutput:
     alpha_target: torch.Tensor | None
     alpha_supervision_per_row: torch.Tensor | None
     metrics: dict[str, float | torch.Tensor]
+    anchor_loss: torch.Tensor | None = None
 
 
 class ContrastiveObjective(nn.Module):

@@ -88,6 +88,11 @@ def objective_contract(config: TrainConfig) -> dict[str, str]:
             alpha_target="detached_positive_softmax_confidence",
             alpha_head_input_gradient="detached",
         )
+    if config.anchor_bank.enabled:
+        contract.update(
+            geometry_anchor="frozen_base_relational_kl",
+            geometry_control="one_sided_task_projection",
+        )
     return contract
 
 

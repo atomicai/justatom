@@ -154,6 +154,16 @@ class MemoryBankConfig:
 
 
 @dataclass(frozen=True)
+class AnchorBankConfig:
+    """Frozen-base relational anchors used as an update constraint."""
+
+    enabled: bool = False
+    size: int = 0
+    warmup_steps: int = 0
+    temperature: float = 0.05
+
+
+@dataclass(frozen=True)
 class GradientProjectionConfig:
     """One-sided gradient surgery for the ATOMIC memory objective."""
 
@@ -204,6 +214,7 @@ class TrainConfig:
     objective: ObjectiveConfig = field(default_factory=ObjectiveConfig)
     alpha_gate: AlphaGateConfig = field(default_factory=AlphaGateConfig)
     memory_bank: MemoryBankConfig = field(default_factory=MemoryBankConfig)
+    anchor_bank: AnchorBankConfig = field(default_factory=AnchorBankConfig)
     gradient_projection: GradientProjectionConfig = field(default_factory=GradientProjectionConfig)
     auxiliary_gradient: AuxiliaryGradientConfig = field(default_factory=AuxiliaryGradientConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
@@ -407,6 +418,16 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_int(bank.hard_ramp_steps, "memory_bank.hard_ramp_steps", 1)
     _require_bool(bank.adaptive.enabled, "memory_bank.adaptive.enabled")
     _require_number(bank.adaptive.collision_beta, "memory_bank.adaptive.collision_beta", 1e-12)
+
+    anchor = config.anchor_bank
+    _require_bool(anchor.enabled, "anchor_bank.enabled")
+    _require_int(anchor.size, "anchor_bank.size", 0)
+    _require_int(anchor.warmup_steps, "anchor_bank.warmup_steps", 0)
+    _require_number(anchor.temperature, "anchor_bank.temperature", 1e-12)
+    if anchor.enabled and anchor.size <= 0:
+        raise ValueError("anchor_bank.size must be > 0 when anchor_bank.enabled=true")
+    if anchor.enabled and not lora.enabled:
+        raise ValueError("anchor_bank requires model.lora.enabled=true")
 
     margin = bank.margin
     _require_number(margin.scale, "memory_bank.margin.scale", 0.0)

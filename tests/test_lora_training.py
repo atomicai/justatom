@@ -4,8 +4,10 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+import torch
 
-from justatom.training.config import LoraAdapterConfig, RuntimeConfig, TrainingMethod
+from justatom.running.encoders import EncoderRunner
+from justatom.training.config import ExperimentRole, LoraAdapterConfig, RuntimeConfig, TrainingMethod
 from justatom.training.job import apply_lora_adapter, resolve_training_precision
 from justatom.training.methods import canonical_method_config
 from justatom.training.module import ContrastiveTrainingModule
@@ -74,7 +76,6 @@ def test_lora_can_be_combined_with_atomic_method():
 
 
 def test_qwen3_lora_all_linear_has_trainable_adapter_gradients():
-    import torch
     from peft import PeftModel
     from transformers import Qwen3Config, Qwen3Model
 
@@ -109,6 +110,66 @@ def test_qwen3_lora_all_linear_has_trainable_adapter_gradients():
     (query - positive.roll(1, 0)).square().mean().backward()
 
     assert any(parameter.grad is not None for parameter in trainable)
+
+
+def test_geometry_anchor_uses_real_peft_disabled_adapter_view():
+    from transformers import Qwen3Config, Qwen3Model
+
+    from justatom.modeling.prime import Qwen3EmbeddingModel
+
+    backbone = Qwen3Model(
+        Qwen3Config(
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            num_key_value_heads=2,
+            head_dim=8,
+        )
+    )
+    language_model = Qwen3EmbeddingModel(backbone)
+    apply_lora_adapter(language_model, LoraAdapterConfig(enabled=True, rank=4, alpha=8))
+    encoder = EncoderRunner(model=language_model, prediction_heads=[], device="cpu")
+    config = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(
+        config,
+        experiment=replace(config.experiment, role=ExperimentRole.ABLATION),
+        model=replace(config.model, lora=LoraAdapterConfig(enabled=True, rank=4, alpha=8)),
+        memory_bank=replace(config.memory_bank, enabled=False, size=0),
+        anchor_bank=replace(config.anchor_bank, enabled=True, size=8, warmup_steps=0),
+        gradient_projection=replace(config.gradient_projection, memory_weight=0.0),
+    )
+    module = ContrastiveTrainingModule.build(encoder, config)
+    batch = {
+        "input_ids": torch.randint(0, 64, (2, 8)),
+        "attention_mask": torch.ones(2, 8, dtype=torch.long),
+        "pos_input_ids": torch.randint(0, 64, (2, 8)),
+        "pos_attention_mask": torch.ones(2, 8, dtype=torch.long),
+        "doc_key_id": torch.tensor([1, 2]),
+        "content_key_id": torch.tensor([11, 12]),
+        "query_key_id": torch.tensor([21, 22]),
+    }
+
+    first = module.compute_training_step(batch, step=0)
+    assert first.anchor_loss is None
+    with torch.no_grad():
+        for name, parameter in language_model.model.named_parameters():
+            if "lora_B" in name:
+                parameter.normal_(std=0.1)
+    second = {key: value.clone() for key, value in batch.items()}
+    for key in ("doc_key_id", "content_key_id", "query_key_id"):
+        second[key] += 100
+
+    output = module.compute_training_step(second, step=1)
+
+    assert output.anchor_loss is not None and output.anchor_loss.detach().item() > 0.0
+    output.anchor_loss.backward()
+    assert any(
+        parameter.grad is not None
+        for name, parameter in language_model.model.named_parameters()
+        if "lora_" in name and parameter.requires_grad
+    )
 
 
 def test_adapter_is_saved_before_encoder_is_merged(monkeypatch, tmp_path):
