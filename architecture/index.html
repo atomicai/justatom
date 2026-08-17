@@ -734,17 +734,17 @@
 <p><code>justatom</code> separates retrieval composition from training and command-line
 orchestration. A retrieval application owns concrete dependencies and passes
 them to one <code>RetrievalRuntime</code>:</p>
-<p><code>text
-DocumentStore + Embedder -&gt; RetrievalRuntime -&gt; Indexer + Retriever</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>DocumentStore + Embedder -&gt; RetrievalRuntime -&gt; Indexer + Retriever
+</code></pre></div>
 <p>The runtime creates an <code>Indexer</code> for writes and a mode-specific <code>Retriever</code> for
 <code>keyword</code>, <code>vector</code>, or <code>hybrid</code> reads. It is an async context manager and owns
 closing the supplied store and embedder.</p>
 <h2 id="retrieval-service-boundary">Retrieval Service Boundary<a class="headerlink" href="#retrieval-service-boundary" title="Permanent link">&para;</a></h2>
 <p>Production retrieval splits orchestration, embedding inference, and storage
 into independent processes:</p>
-<p><code>text
-client -&gt; justatom-api -&gt; OpenAICompatibleEmbedder -&gt; embedding HTTP service
-                    `-&gt; WeaviateDocumentStore -&gt; Weaviate</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>client -&gt; justatom-api -&gt; OpenAICompatibleEmbedder -&gt; embedding HTTP service
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>                    `-&gt; WeaviateDocumentStore -&gt; Weaviate
+</code></pre></div>
 <p><code>justatom-api</code> owns the <code>RetrievalRuntime</code>, HTTP embedding client, and Weaviate
 connection. Its image contains no model. Query and document prefixes and
 batching are applied by the API-side client before HTTP inference. The local

@@ -788,56 +788,57 @@
 <p>Evaluation scenarios combine dataset settings with a strict retrieval runtime
 configuration. The default file is <code>configs/evaluate.yaml</code>.</p>
 <h2 id="retrieval-config">Retrieval Config<a class="headerlink" href="#retrieval-config" title="Permanent link">&para;</a></h2>
-<p>```yaml
-retrieval:
-  mode: hybrid
-  alpha: 0.5
-  embedding:
-    backend: local
-    model: intfloat/multilingual-e5-small
-    device: auto
-    batch_size: 64
-    max_length: 512
-    query_prefix: "query: "
-    document_prefix: "passage: "
-  store:
-    collection: Document
-    url: http://localhost:2211
-    grpc_port: 50051</p>
-<p>dataset:
-  id: demo-eval</p>
-<p>search:
-  top_k: 20
-  batch_size: 32
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">retrieval</span><span class="p">:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hybrid</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">alpha</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.5</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">embedding</span><span class="p">:</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">backend</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">local</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">intfloat/multilingual-e5-small</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">device</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">auto</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">max_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">query_prefix</span><span class="p">:</span><span class="w"> </span><span class="s">"query:</span><span class="nv"> </span><span class="s">"</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">document_prefix</span><span class="p">:</span><span class="w"> </span><span class="s">"passage:</span><span class="nv"> </span><span class="s">"</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span><span class="nt">store</span><span class="p">:</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">collection</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Document</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://localhost:2211</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nt">grpc_port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">50051</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="nt">dataset</span><span class="p">:</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">  </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">demo-eval</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="nt">search</span><span class="p">:</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">  </span><span class="nt">top_k</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">  </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">32</span>
+</code></pre></div>
 <p><code>retrieval.mode</code> must be <code>keyword</code>, <code>vector</code>, or <code>hybrid</code>. Keyword retrieval
 does not need an embedding section; vector and hybrid retrieval do. The runtime
 rejects unknown retrieval, embedding, and store keys rather than silently
 ignoring a misspelling.</p>
 <h2 id="evaluate-locally">Evaluate Locally<a class="headerlink" href="#evaluate-locally" title="Permanent link">&para;</a></h2>
-<p><code>bash
-python -m justatom.api.eval \
-  --config configs/evaluate.yaml \
-  --dataset.id demo-eval \
-  --search-mode hybrid \
-  --embedding-model intfloat/multilingual-e5-small \
-  --query-prefix "query: " \
-  --document-prefix "passage: " \
-  --collection-name JustAtomEval \
-  --weaviate-url http://localhost:2211 \
-  --weaviate-grpc-port 50051</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>-m<span class="w"> </span>justatom.api.eval<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--config<span class="w"> </span>configs/evaluate.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--dataset.id<span class="w"> </span>demo-eval<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--search-mode<span class="w"> </span>hybrid<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--embedding-model<span class="w"> </span>intfloat/multilingual-e5-small<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--query-prefix<span class="w"> </span><span class="s2">"query: "</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>--document-prefix<span class="w"> </span><span class="s2">"passage: "</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span>--collection-name<span class="w"> </span>JustAtomEval<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span>--weaviate-url<span class="w"> </span>http://localhost:2211<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">  </span>--weaviate-grpc-port<span class="w"> </span><span class="m">50051</span>
+</code></pre></div>
 <h2 id="evaluate-against-a-remote-embedder">Evaluate Against a Remote Embedder<a class="headerlink" href="#evaluate-against-a-remote-embedder" title="Permanent link">&para;</a></h2>
-<p><code>bash
-python -m justatom.api.eval \
-  --config configs/evaluate.yaml \
-  --dataset.id demo-eval \
-  --search-mode vector \
-  --embedding-backend openai-compatible \
-  --embedding-base-url http://ubuntu-box:8000/v1 \
-  --embedding-api-key "$EMBEDDING_API_KEY" \
-  --embedding-model deployed-embedding-model \
-  --collection-name JustAtomRemoteEval \
-  --weaviate-url http://localhost:2211</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python<span class="w"> </span>-m<span class="w"> </span>justatom.api.eval<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--config<span class="w"> </span>configs/evaluate.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--dataset.id<span class="w"> </span>demo-eval<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--search-mode<span class="w"> </span>vector<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--embedding-backend<span class="w"> </span>openai-compatible<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--embedding-base-url<span class="w"> </span>http://ubuntu-box:8000/v1<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--embedding-api-key<span class="w"> </span><span class="s2">"</span><span class="nv">$EMBEDDING_API_KEY</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span>--embedding-model<span class="w"> </span>deployed-embedding-model<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span>--collection-name<span class="w"> </span>JustAtomRemoteEval<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span>--weaviate-url<span class="w"> </span>http://localhost:2211
+</code></pre></div>
 <p>The evaluator accepts explicit <code>--search-mode</code>, <code>--embedding-model</code>,
 <code>--query-prefix</code>, <code>--document-prefix</code>, <code>--weaviate-url</code>, and
 <code>--collection-name</code> flags. Values are passed to the strict runtime schema; old
@@ -851,47 +852,47 @@ is built from <code>Dockerfile.api</code> and contains no Torch or model weights
 cannot expose MPS to containers, so native MPS stays a host process.</p>
 <h3 id="native-mps-on-apple-silicon">Native MPS on Apple Silicon<a class="headerlink" href="#native-mps-on-apple-silicon" title="Permanent link">&para;</a></h3>
 <p>Run the embedding service directly on an Apple Silicon macOS host:</p>
-<p><code>bash
-EMBEDDING_DEVICE=mps \
-EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B \
-conda run -n justatom python -m justatom.api.serve_embeddings</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">EMBEDDING_DEVICE</span><span class="o">=</span>mps<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nv">EMBEDDING_MODEL</span><span class="o">=</span>Qwen/Qwen3-Embedding-0.6B<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>justatom<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>justatom.api.serve_embeddings
+</code></pre></div>
 <p>The service listens on <code>8000</code>. Point the API container at it with the external
 mode:</p>
-<p><code>bash
-EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1 \
-  scripts/services.sh external up -d --build api weaviate</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">EMBEDDING_BASE_URL</span><span class="o">=</span>http://host.docker.internal:8000/v1<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>scripts/services.sh<span class="w"> </span>external<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build<span class="w"> </span>api<span class="w"> </span>weaviate
+</code></pre></div>
 <h3 id="managed-cpu-service">Managed CPU Service<a class="headerlink" href="#managed-cpu-service" title="Permanent link">&para;</a></h3>
 <p>The portable CPU backend runs alongside the API and Weaviate:</p>
-<p><code>bash
-scripts/services.sh cpu up -d --build</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>scripts/services.sh<span class="w"> </span>cpu<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+</code></pre></div>
 <h3 id="managed-cuda-service">Managed CUDA Service<a class="headerlink" href="#managed-cuda-service" title="Permanent link">&para;</a></h3>
 <p>The CUDA backend requires a Linux x86_64/amd64 NVIDIA host with a working
 <code>nvidia-smi</code>. Starting it elsewhere fails before any workload starts. On
 non-CUDA hosts, use the launcher’s CUDA configuration and platform-build
 validation only; neither establishes CUDA inference.</p>
 <p>CUDA mode never falls back to CPU.</p>
-<p><code>bash
-scripts/services.sh cuda up -d --build</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>scripts/services.sh<span class="w"> </span>cuda<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+</code></pre></div>
 <h3 id="external-openai-compatible-service">External OpenAI-compatible Service<a class="headerlink" href="#external-openai-compatible-service" title="Permanent link">&para;</a></h3>
 <p>Any service implementing the same <code>/v1/embeddings</code> contract can back the API,
 including vLLM, Triton adapters, llama.cpp servers, and the built-in host
 process. Configure its URL and start only the API and Weaviate:</p>
-<p><code>bash
-EMBEDDING_BASE_URL=http://host.docker.internal:8000/v1 \
-  scripts/services.sh external up -d --build api weaviate</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">EMBEDDING_BASE_URL</span><span class="o">=</span>http://host.docker.internal:8000/v1<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>scripts/services.sh<span class="w"> </span>external<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build<span class="w"> </span>api<span class="w"> </span>weaviate
+</code></pre></div>
 <p>One embedding service process owns one model instance. Repeated requests do not reload it.
 The persistent Hugging Face cache avoids a redownload for unchanged weights,
 but does not preserve the model in RAM after a process restart.</p>
 <h2 id="shell-wrappers">Shell Wrappers<a class="headerlink" href="#shell-wrappers" title="Permanent link">&para;</a></h2>
 <p>The pipeline wrapper preserves the <code>vanilla</code>, <code>atom_gate</code>, and <code>atomic</code> training
 variants while passing evaluator settings through the current CLI:</p>
-<p><code>bash
-bash scripts/run_pipeline.sh \
-  --dataset-ids demo-eval \
-  --method atomic \
-  --search-mode hybrid \
-  --model intfloat/multilingual-e5-small \
-  --weaviate-url http://localhost:2211</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>bash<span class="w"> </span>scripts/run_pipeline.sh<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>--dataset-ids<span class="w"> </span>demo-eval<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--method<span class="w"> </span>atomic<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span>--search-mode<span class="w"> </span>hybrid<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span>--model<span class="w"> </span>intfloat/multilingual-e5-small<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span>--weaviate-url<span class="w"> </span>http://localhost:2211
+</code></pre></div>
 <p><code>scripts/run_benchmark.sh</code> records shell-escaped commands in <code>COMMANDS.md</code>, so
 each <code>vanilla</code>, <code>atom_gate</code>, and <code>atomic</code> benchmark invocation is reproducible.</p>
 <h2 id="dataset-presets">Dataset Presets<a class="headerlink" href="#dataset-presets" title="Permanent link">&para;</a></h2>

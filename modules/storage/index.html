@@ -636,24 +636,24 @@ retrieval runtime. It owns one async Weaviate client, creates the collection
 when necessary, and implements document writes, deletes, keyword search, vector
 search, hybrid search, and shutdown.</p>
 <h2 id="connect-explicitly">Connect Explicitly<a class="headerlink" href="#connect-explicitly" title="Permanent link">&para;</a></h2>
-<p>```python
-from justatom.storing.weaviate import WeaviateDocumentStore</p>
-<p>store = await WeaviateDocumentStore.connect(
-    "JustAtom",
-    url="http://localhost:2211",
-    grpc_port=50051,
-)
-try:
-    count = await store.count_documents()
-finally:
-    await store.close()
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.storing.weaviate</span><span class="w"> </span><span class="kn">import</span> <span class="n">WeaviateDocumentStore</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">store</span> <span class="o">=</span> <span class="k">await</span> <span class="n">WeaviateDocumentStore</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="s2">"JustAtom"</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">url</span><span class="o">=</span><span class="s2">"http://localhost:2211"</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">grpc_port</span><span class="o">=</span><span class="mi">50051</span><span class="p">,</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">count</span> <span class="o">=</span> <span class="k">await</span> <span class="n">store</span><span class="o">.</span><span class="n">count_documents</span><span class="p">()</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="k">finally</span><span class="p">:</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="k">await</span> <span class="n">store</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</code></pre></div>
 <p>When the store is passed to <code>RetrievalRuntime</code>, let the runtime close it through
 <code>async with RetrievalRuntime(...)</code> instead of closing it separately.</p>
 <h2 id="runtime-role">Runtime Role<a class="headerlink" href="#runtime-role" title="Permanent link">&para;</a></h2>
 <p>The store is the <code>DocumentStore</code> component in the public composition:</p>
-<p><code>text
-WeaviateDocumentStore + Embedder -&gt; RetrievalRuntime -&gt; Indexer + Retriever</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>WeaviateDocumentStore + Embedder -&gt; RetrievalRuntime -&gt; Indexer + Retriever
+</code></pre></div>
 <p>Keyword mode needs only the store. Vector and hybrid modes also require an
 embedder. Store URLs must be absolute <code>http</code> or <code>https</code> origins, and the
 retrieval config validates collection names, gRPC ports, and unknown keys before

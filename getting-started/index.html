@@ -733,34 +733,35 @@
 <h1 id="getting-started">Getting Started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h1>
 <h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h2>
 <p>Install the library in editable mode for local development:</p>
-<p><code>bash
-pip install -e .</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+</code></pre></div>
 <p>Install the documentation toolchain when you want the local docs site:</p>
-<p><code>bash
-pip install -r requirements-docs.txt</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-docs.txt
+</code></pre></div>
 <h2 id="common-local-commands">Common Local Commands<a class="headerlink" href="#common-local-commands" title="Permanent link">&para;</a></h2>
-<p><code>bash
-make format-check
-make fix-format
-make docs-serve
-make docs-build
-pytest tests -m "not integration"</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>format-check
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>make<span class="w"> </span>fix-format
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>make<span class="w"> </span>docs-serve
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>make<span class="w"> </span>docs-build
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>pytest<span class="w"> </span>tests<span class="w"> </span>-m<span class="w"> </span><span class="s2">"not integration"</span>
+</code></pre></div>
 <h2 id="project-highlights">Project Highlights<a class="headerlink" href="#project-highlights" title="Permanent link">&para;</a></h2>
 <h3 id="dataset-adapters">Dataset adapters<a class="headerlink" href="#dataset-adapters" title="Permanent link">&para;</a></h3>
 <p><code>DatasetRecordAdapter</code> converts external datasets into a canonical document shape while preserving non-standard fields inside <code>meta</code>.</p>
-<p>```python
-from pathlib import Path
-from justatom.tooling.dataset import DatasetRecordAdapter</p>
-<p>adapter = DatasetRecordAdapter.from_source(
-    Path("data/eval.parquet"),
-    lazy=True,
-    content_col="output",
-    queries_col="input",
-)</p>
-<p>first_doc = next(adapter.iterator())
-print(first_doc["content"])
-print(first_doc["meta"]["labels"])
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.tooling.dataset</span><span class="w"> </span><span class="kn">import</span> <span class="n">DatasetRecordAdapter</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">adapter</span> <span class="o">=</span> <span class="n">DatasetRecordAdapter</span><span class="o">.</span><span class="n">from_source</span><span class="p">(</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">Path</span><span class="p">(</span><span class="s2">"data/eval.parquet"</span><span class="p">),</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">lazy</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">content_col</span><span class="o">=</span><span class="s2">"output"</span><span class="p">,</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="n">queries_col</span><span class="o">=</span><span class="s2">"input"</span><span class="p">,</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">)</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="n">first_doc</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">adapter</span><span class="o">.</span><span class="n">iterator</span><span class="p">())</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="nb">print</span><span class="p">(</span><span class="n">first_doc</span><span class="p">[</span><span class="s2">"content"</span><span class="p">])</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="nb">print</span><span class="p">(</span><span class="n">first_doc</span><span class="p">[</span><span class="s2">"meta"</span><span class="p">][</span><span class="s2">"labels"</span><span class="p">])</span>
+</code></pre></div>
 <p>Supported source formats:</p>
 <ul>
 <li><code>json</code></li>
@@ -786,11 +787,11 @@ print(first_doc["meta"]["labels"])
 <p>Integration tests expect external services such as Weaviate to be available.</p>
 <h2 id="documentation-workflow">Documentation Workflow<a class="headerlink" href="#documentation-workflow" title="Permanent link">&para;</a></h2>
 <p>Serve the documentation site locally:</p>
-<p><code>bash
-make docs-serve</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>docs-serve
+</code></pre></div>
 <p>Build the static site exactly like CI:</p>
-<p><code>bash
-make docs-build</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>make<span class="w"> </span>docs-build
+</code></pre></div>
 <p>The generated site is written to <code>site/</code>.</p>
 
 

@@ -765,33 +765,33 @@
 <h2 id="objective">Objective<a class="headerlink" href="#objective" title="Permanent link">&para;</a></h2>
 <p>For a batch of query embeddings <code>Q</code> and positive document embeddings <code>P</code>, the
 in-batch similarity matrix is</p>
-<p><code>text
-S = Q P^T,       S_ij = cosine(q_i, p_j).</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>S = Q P^T,       S_ij = cosine(q_i, p_j).
+</code></pre></div>
 <p>All three canonical methods use the same coupled InfoNCE row loss:</p>
-<p><code>text
-L_i = -S_ii / tau + log sum_j exp(S_ij / tau).</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>L_i = -S_ii / tau + log sum_j exp(S_ij / tau).
+</code></pre></div>
 <p><code>atom_gate</code> learns a query-only scalar from a detached query representation,
 with its target derived from the detached in-batch positive retrieval
 confidence:</p>
-<p><code>text
-t_i = stop_gradient(softmax(S / tau_target)_ii)
-alpha_i = sigmoid(MLP(stop_gradient(q_i)))
-L_i = L_InfoNCE,i
-    + (1 - stop_gradient(alpha_i)) lambda_sc L_SimCSE,i
-    + lambda_alpha BCEWithLogits(alpha_logit_i, t_i)</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>t_i = stop_gradient(softmax(S / tau_target)_ii)
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>alpha_i = sigmoid(MLP(stop_gradient(q_i)))
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>L_i = L_InfoNCE,i
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    + (1 - stop_gradient(alpha_i)) lambda_sc L_SimCSE,i
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    + lambda_alpha BCEWithLogits(alpha_logit_i, t_i)
+</code></pre></div>
 <p>The gate cannot lower the current SimCSE loss by moving toward one. Its BCE
 term trains the head against retrieval confidence while leaving the encoder
 path detached. The gate is training-only; the saved encoder has the same
 inference interface as the source embedding model.</p>
 <p>The retrieval, confidence-target, and SimCSE temperatures can be separated
 without changing the primary retrieval objective:</p>
-<p>```yaml
-objective:
-  temperature: 0.05
-  simcse_temperature: 0.2</p>
-<p>alpha_gate:
-  target_temperature: 0.2
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">objective</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">temperature</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.05</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">simcse_temperature</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.2</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nt">alpha_gate</span><span class="p">:</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">target_temperature</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.2</span>
+</code></pre></div>
 <p>Both auxiliary fields default to <code>null</code>. In that compatibility mode,
 <code>tau_target</code> and <code>tau_simcse</code> reuse the live retrieval temperature exactly.
 A non-null value is a fixed, non-learnable auxiliary temperature. The target
@@ -814,10 +814,10 @@ columns are emitted only when the corresponding alpha or SimCSE path is active.<
 retrieval gradient for every contrastive microbatch. Let <code>g_r</code> be the retrieval
 gradient over shared encoder parameters and <code>g_a</code> the detached-alpha-weighted
 SimCSE gradient. In <code>safe</code> mode, the controller computes</p>
-<p><code>text
-c = max(0, dot(g_r, g_a) / max(||g_r|| ||g_a||, eps))
-s = min(1, max_norm_ratio ||g_r|| / (c ||g_a|| + eps))
-g_a_safe = c s g_a</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>c = max(0, dot(g_r, g_a) / max(||g_r|| ||g_a||, eps))
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>s = min(1, max_norm_ratio ||g_r|| / (c ||g_a|| + eps))
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>g_a_safe = c s g_a
+</code></pre></div>
 <p>When <code>dot(g_r, g_a) &lt;= 0</code> or either norm is at most <code>eps</code>, it sets both scales
 to zero. This bounds <code>||g_a_safe|| &lt;= max_norm_ratio ||g_r||</code>; more importantly,
 the shared encoder update has the first-order boundary
@@ -832,22 +832,22 @@ is <code>gradient/retrieval_norm</code>, <code>gradient/auxiliary_norm</code>,
 <code>gradient/auxiliary_cosine_scale</code>, <code>gradient/auxiliary_norm_scale</code>, and
 <code>gradient/auxiliary_total_scale</code>.</p>
 <p>Use <code>observe</code> before a safe run to collect the compatibility distribution:</p>
-<p><code>bash
-bash scripts/run_pipeline.sh \
-  --train-config configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml \
-  --method atom_gate \
-  --experiment-role ablation \
-  --dataset-ids justatom \
-  --model Qwen/Qwen3-Embedding-0.6B \
-  --batch-size 8 \
-  --grad-acc-steps 4 \
-  --epochs 1 \
-  --nsamples 3000 \
-  --temperature 0.05 \
-  --aux-gradient-mode observe \
-  --aux-gradient-max-norm-ratio 0.25 \
-  --aux-gradient-eps 1e-12 \
-  --wandb-mode disabled</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>bash<span class="w"> </span>scripts/run_pipeline.sh<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--train-config<span class="w"> </span>configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--method<span class="w"> </span>atom_gate<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--experiment-role<span class="w"> </span>ablation<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--dataset-ids<span class="w"> </span>justatom<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>--model<span class="w"> </span>Qwen/Qwen3-Embedding-0.6B<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>--batch-size<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>--grad-acc-steps<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>--epochs<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span>--nsamples<span class="w"> </span><span class="m">3000</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span>--temperature<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">  </span>--aux-gradient-mode<span class="w"> </span>observe<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">  </span>--aux-gradient-max-norm-ratio<span class="w"> </span><span class="m">0</span>.25<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">  </span>--aux-gradient-eps<span class="w"> </span>1e-12<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">  </span>--wandb-mode<span class="w"> </span>disabled
+</code></pre></div>
 <p><code>--train-config</code> replaces only the pipeline's <code>--config configs/train.yaml</code>
 argument. Pipeline defaults and explicit shell options still override values in
 the selected YAML. Run manifests expose this decision under <code>objective_contract</code>:
@@ -859,26 +859,26 @@ the selected YAML. Run manifests expose this decision under <code>objective_cont
 not retain previous autograd graphs. Unlike an ordinary memory-bank objective,
 ATOMIC does not place the extra negatives directly into the protected primary
 loss. It decomposes the objective exactly into:</p>
-<p><code>text
-L_primary = InfoNCE(Q, P)
-L_memory  = InfoNCE(Q, P, B) - InfoNCE(Q, P)</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>L_primary = InfoNCE(Q, P)
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>L_memory  = InfoNCE(Q, P, B) - InfoNCE(Q, P)
+</code></pre></div>
 <p>For a query <code>i</code> with <code>K_i</code> selected bank candidates in a contrastive
 microbatch of <code>N</code> pairs, the augmented denominator is count-normalized:</p>
-<p><code>text
-L_aug,i = -z_ii + log(
-  exp(z_ii) + A_batch,i + lambda(t) (N - 1) / K_i A_bank,i
-)</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>L_aug,i = -z_ii + log(
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>  exp(z_ii) + A_batch,i + lambda(t) (N - 1) / K_i A_bank,i
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>)
+</code></pre></div>
 <p>The selected-bank term is omitted when <code>K_i = 0</code>. <code>lambda(t)</code> applies the
 configured memory-mass ramp, so <code>mass_ratio</code> controls the normalized bank mass
 without changing its meaning when the number of selected candidates changes.</p>
 <p>Let <code>g_p</code> and <code>g_m</code> be their gradients over the trainable parameters. The
 primary gradient is protected. When the memory gradient conflicts with it,
 ATOMIC removes only the opposing component:</p>
-<p>```text
-if dot(g_p, g_m) &lt; 0:
-    g_m &lt;- g_m - dot(g_p, g_m) / ||g_p||^2 * g_p</p>
-<p>g_update = g_p + lambda_memory * g_m
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>if dot(g_p, g_m) &lt; 0:
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    g_m &lt;- g_m - dot(g_p, g_m) / ||g_p||^2 * g_p
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>g_update = g_p + lambda_memory * g_m
+</code></pre></div>
 <p>The projected memory component is orthogonal to <code>g_p</code>, so it cannot oppose the
 primary descent direction to first order. Aligned memory gradients are retained
 unchanged. Parameters owned only by an optional memory-side head also retain
@@ -906,57 +906,57 @@ contract was introduced used different canonical objectives and must not be
 pooled with or directly compared against new runs. Re-run matched methods with
 the same model, split, seed, batch size, optimizer, and epoch count before
 drawing method-level conclusions.</p>
-<p><code>bash
-python -m justatom.api.train \
-  --config configs/train.yaml \
-  --method atomic \
-  --experiment.role ablation \
-  --memory-bank.adaptive.enabled true \
-  --memory-bank.margin.mode constant</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>python<span class="w"> </span>-m<span class="w"> </span>justatom.api.train<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>--config<span class="w"> </span>configs/train.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>--method<span class="w"> </span>atomic<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span>--experiment.role<span class="w"> </span>ablation<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span>--memory-bank.adaptive.enabled<span class="w"> </span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span>--memory-bank.margin.mode<span class="w"> </span>constant
+</code></pre></div>
 <p>A plain InfoNCE control with detached bank negatives keeps the <code>vanilla</code>
 method identity but must also be labeled as an ablation. It does not construct
 an alpha gate or query-margin head:</p>
-<p><code>bash
-python -m justatom.api.train \
-  --config configs/train.yaml \
-  --method vanilla \
-  --experiment.role ablation \
-  --objective.decoupled false \
-  --optimization.epochs 1 \
-  --optimization.num-samples 3000 \
-  --memory-bank.enabled true \
-  --memory-bank.size 512 \
-  --memory-bank.mining random \
-  --memory-bank.random-negatives 12 \
-  --memory-bank.adaptive.enabled false \
-  --memory-bank.margin.mode off</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>python<span class="w"> </span>-m<span class="w"> </span>justatom.api.train<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span>--config<span class="w"> </span>configs/train.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>--method<span class="w"> </span>vanilla<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>--experiment.role<span class="w"> </span>ablation<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span>--objective.decoupled<span class="w"> </span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span>--optimization.epochs<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span>--optimization.num-samples<span class="w"> </span><span class="m">3000</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span>--memory-bank.enabled<span class="w"> </span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span>--memory-bank.size<span class="w"> </span><span class="m">512</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span>--memory-bank.mining<span class="w"> </span>random<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">  </span>--memory-bank.random-negatives<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">  </span>--memory-bank.adaptive.enabled<span class="w"> </span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">  </span>--memory-bank.margin.mode<span class="w"> </span>off
+</code></pre></div>
 <h2 id="commands">Commands<a class="headerlink" href="#commands" title="Permanent link">&para;</a></h2>
 <p>Train one method:</p>
-<p><code>bash
-python -m justatom.api.train \
-  --config configs/train.yaml \
-  --method atomic \
-  --dataset.id justatom \
-  --optimization.batch-size 32 \
-  --optimization.epochs 2</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>python<span class="w"> </span>-m<span class="w"> </span>justatom.api.train<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>--config<span class="w"> </span>configs/train.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>--method<span class="w"> </span>atomic<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span>--dataset.id<span class="w"> </span>justatom<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span>--optimization.batch-size<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span>--optimization.epochs<span class="w"> </span><span class="m">2</span>
+</code></pre></div>
 <p>Run the full retrieval pipeline:</p>
-<p><code>bash
-bash scripts/run_pipeline.sh \
-  --method atomic \
-  --dataset-ids justatom \
-  --model intfloat/multilingual-e5-small \
-  --batch-size 32 \
-  --epochs 2 \
-  --auto-e5-prefixes</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>bash<span class="w"> </span>scripts/run_pipeline.sh<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span>--method<span class="w"> </span>atomic<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>--dataset-ids<span class="w"> </span>justatom<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span>--model<span class="w"> </span>intfloat/multilingual-e5-small<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">  </span>--batch-size<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">  </span>--epochs<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">  </span>--auto-e5-prefixes
+</code></pre></div>
 <p>Compare all three methods with the same model and datasets:</p>
-<p><code>bash
-bash scripts/run_benchmark.sh \
-  --dataset-ids justatom,meme-russian-ir \
-  --model intfloat/multilingual-e5-small \
-  --variants vanilla,atom_gate,atomic \
-  --batch-size 32 \
-  --epochs 2 \
-  --auto-e5-prefixes</code></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>bash<span class="w"> </span>scripts/run_benchmark.sh<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>--dataset-ids<span class="w"> </span>justatom,meme-russian-ir<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span>--model<span class="w"> </span>intfloat/multilingual-e5-small<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span>--variants<span class="w"> </span>vanilla,atom_gate,atomic<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span>--batch-size<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">  </span>--epochs<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">  </span>--auto-e5-prefixes
+</code></pre></div>
 <h2 id="lora-adapters">LoRA adapters<a class="headerlink" href="#lora-adapters" title="Permanent link">&para;</a></h2>
 <p>LoRA is an encoder configuration, so it composes with every training method.
 The objective and memory-gradient projection do not change; the optimizer
@@ -968,29 +968,31 @@ itself. This keeps the same config usable for Qwen3-Embedding, E5, BGE, and
 mBERT. An explicit list is still available for controlled experiments.
 <code>justatom/pfbert</code> is intentionally unsupported because it is not a Hugging Face
 encoder.</p>
-<p>```yaml
-method: atomic</p>
-<p>model:
-  name_or_path: Qwen/Qwen3-Embedding-0.6B
-  query_prefix: |-
-    Instruct: Given a web search query, retrieve relevant passages that answer the query
-    Query:
-  content_prefix: ""
-  lora:
-    enabled: true
-    rank: 16
-    alpha: 32
-    dropout: 0.05
-    target_modules: all-linear
-    use_rslora: true
-    bias: none</p>
-<p>optimization:
-  lr_encoder: 0.00002</p>
-<p>runtime:
-  accelerator: auto
-  precision: auto
-  gradient_checkpointing: true
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nt">method</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">atomic</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="nt">model</span><span class="p">:</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="nt">name_or_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-Embedding-0.6B</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">  </span><span class="nt">query_prefix</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|-</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">    </span><span class="no">Instruct: Given a web search query, retrieve relevant passages that answer the query</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">    </span><span class="no">Query:</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">  </span><span class="nt">content_prefix</span><span class="p">:</span><span class="w"> </span><span class="s">""</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">  </span><span class="nt">lora</span><span class="p">:</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">    </span><span class="nt">rank</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">16</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="w">    </span><span class="nt">alpha</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">32</span>
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="w">    </span><span class="nt">dropout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.05</span>
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="w">    </span><span class="nt">target_modules</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">all-linear</span>
+<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="w">    </span><span class="nt">use_rslora</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="w">    </span><span class="nt">bias</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">none</span>
+<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a>
+<a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="nt">optimization</span><span class="p">:</span>
+<a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a><span class="w">  </span><span class="nt">lr_encoder</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.00002</span>
+<a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a>
+<a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a><span class="nt">runtime</span><span class="p">:</span>
+<a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a><span class="w">  </span><span class="nt">accelerator</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">auto</span>
+<a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a><span class="w">  </span><span class="nt">precision</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">auto</span>
+<a id="__codelineno-14-24" name="__codelineno-14-24" href="#__codelineno-14-24"></a><span class="w">  </span><span class="nt">gradient_checkpointing</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre></div>
 <p>This is ordinary Hugging Face PEFT; it does not require Unsloth, bitsandbytes,
 or a quantized base model. With <code>precision: auto</code>, CUDA uses BF16 when the GPU
 supports it and otherwise FP16. MPS and CPU default to FP32 for compatibility;

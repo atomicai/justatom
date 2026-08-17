@@ -673,42 +673,45 @@ optional <code>Embedder</code>, a search mode, and a hybrid alpha. It exposes <c
 <code>retrieve</code>, and <code>retrieve_many</code>, while owning the <code>Indexer</code>, mode-specific
 <code>Retriever</code>, and asynchronous cleanup lifecycle.</p>
 <h2 id="local-runtime">Local Runtime<a class="headerlink" href="#local-runtime" title="Permanent link">&para;</a></h2>
-<p>```python
-from justatom.etc.schema import Document
-from justatom.retrieval import EmbeddingProfile, RetrievalRuntime
-from justatom.retrieval.embedders.huggingface import HuggingFaceEmbedder
-from justatom.storing.weaviate import WeaviateDocumentStore</p>
-<p>documents = [Document(content="Документ для локального поиска.")]
-store = await WeaviateDocumentStore.connect("JustAtom", url="http://localhost:2211")
-embedder = HuggingFaceEmbedder(
-    "intfloat/multilingual-e5-small",
-    device="auto",
-    profile=EmbeddingProfile(query_prefix="query: ", document_prefix="passage: "),
-)</p>
-<p>async with RetrievalRuntime(store, embedder, mode="hybrid", alpha=0.5) as runtime:
-    await runtime.index(documents)
-    results = await runtime.retrieve("как устроен индекс", top_k=10)
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.etc.schema</span><span class="w"> </span><span class="kn">import</span> <span class="n">Document</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.retrieval</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingProfile</span><span class="p">,</span> <span class="n">RetrievalRuntime</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.retrieval.embedders.huggingface</span><span class="w"> </span><span class="kn">import</span> <span class="n">HuggingFaceEmbedder</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.storing.weaviate</span><span class="w"> </span><span class="kn">import</span> <span class="n">WeaviateDocumentStore</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">documents</span> <span class="o">=</span> <span class="p">[</span><span class="n">Document</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="s2">"Документ для локального поиска."</span><span class="p">)]</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">store</span> <span class="o">=</span> <span class="k">await</span> <span class="n">WeaviateDocumentStore</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">"JustAtom"</span><span class="p">,</span> <span class="n">url</span><span class="o">=</span><span class="s2">"http://localhost:2211"</span><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">embedder</span> <span class="o">=</span> <span class="n">HuggingFaceEmbedder</span><span class="p">(</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="s2">"intfloat/multilingual-e5-small"</span><span class="p">,</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">device</span><span class="o">=</span><span class="s2">"auto"</span><span class="p">,</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">profile</span><span class="o">=</span><span class="n">EmbeddingProfile</span><span class="p">(</span><span class="n">query_prefix</span><span class="o">=</span><span class="s2">"query: "</span><span class="p">,</span> <span class="n">document_prefix</span><span class="o">=</span><span class="s2">"passage: "</span><span class="p">),</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="p">)</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="k">async</span> <span class="k">with</span> <span class="n">RetrievalRuntime</span><span class="p">(</span><span class="n">store</span><span class="p">,</span> <span class="n">embedder</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">"hybrid"</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span> <span class="k">as</span> <span class="n">runtime</span><span class="p">:</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">documents</span><span class="p">)</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">retrieve</span><span class="p">(</span><span class="s2">"как устроен индекс"</span><span class="p">,</span> <span class="n">top_k</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+</code></pre></div>
 <p><code>device="auto"</code> resolves to CUDA, MPS, or CPU as available. Leaving the
 <code>async with</code> block closes the runtime's store and embedder.</p>
 <h2 id="remote-runtime">Remote Runtime<a class="headerlink" href="#remote-runtime" title="Permanent link">&para;</a></h2>
-<p>```python
-import os</p>
-<p>from justatom.etc.schema import Document
-from justatom.retrieval import EmbeddingProfile, RetrievalRuntime
-from justatom.retrieval.embedders.openai_compatible import OpenAICompatibleEmbedder
-from justatom.storing.weaviate import WeaviateDocumentStore</p>
-<p>store = await WeaviateDocumentStore.connect("JustAtom", url="http://localhost:2211")
-embedder = OpenAICompatibleEmbedder(
-    base_url="http://ubuntu-box:8000/v1",
-    model="deployed-embedding-model",
-    api_key=os.getenv("EMBEDDING_API_KEY"),
-    profile=EmbeddingProfile(query_prefix="query: ", document_prefix="passage: "),
-)</p>
-<p>async with RetrievalRuntime(store, embedder, mode="vector") as runtime:
-    await runtime.index([Document(content="Документ для удаленного поиска.")])
-    results = await runtime.retrieve("где работает модель", top_k=10)
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.etc.schema</span><span class="w"> </span><span class="kn">import</span> <span class="n">Document</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.retrieval</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingProfile</span><span class="p">,</span> <span class="n">RetrievalRuntime</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.retrieval.embedders.openai_compatible</span><span class="w"> </span><span class="kn">import</span> <span class="n">OpenAICompatibleEmbedder</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.storing.weaviate</span><span class="w"> </span><span class="kn">import</span> <span class="n">WeaviateDocumentStore</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">store</span> <span class="o">=</span> <span class="k">await</span> <span class="n">WeaviateDocumentStore</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s2">"JustAtom"</span><span class="p">,</span> <span class="n">url</span><span class="o">=</span><span class="s2">"http://localhost:2211"</span><span class="p">)</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">embedder</span> <span class="o">=</span> <span class="n">OpenAICompatibleEmbedder</span><span class="p">(</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">base_url</span><span class="o">=</span><span class="s2">"http://ubuntu-box:8000/v1"</span><span class="p">,</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">"deployed-embedding-model"</span><span class="p">,</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="n">api_key</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"EMBEDDING_API_KEY"</span><span class="p">),</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    <span class="n">profile</span><span class="o">=</span><span class="n">EmbeddingProfile</span><span class="p">(</span><span class="n">query_prefix</span><span class="o">=</span><span class="s2">"query: "</span><span class="p">,</span> <span class="n">document_prefix</span><span class="o">=</span><span class="s2">"passage: "</span><span class="p">),</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="p">)</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="k">async</span> <span class="k">with</span> <span class="n">RetrievalRuntime</span><span class="p">(</span><span class="n">store</span><span class="p">,</span> <span class="n">embedder</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">"vector"</span><span class="p">)</span> <span class="k">as</span> <span class="n">runtime</span><span class="p">:</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>    <span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">index</span><span class="p">([</span><span class="n">Document</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="s2">"Документ для удаленного поиска."</span><span class="p">)])</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>    <span class="n">results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">retrieve</span><span class="p">(</span><span class="s2">"где работает модель"</span><span class="p">,</span> <span class="n">top_k</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+</code></pre></div>
 <p>An OpenAI-compatible Triton deployment is used only through its HTTP API. The
 client does not import or require <code>tritonclient</code>, so it can run on macOS while
 the Triton server runs on its supported host.</p>
@@ -728,28 +731,28 @@ the model into RAM or accelerator memory.</p>
 keys <code>mode</code>, <code>alpha</code>, <code>embedding</code>, and <code>store</code>. Unknown keys, invalid value
 types, missing stores, missing vector embedders, and unsupported modes fail with
 <code>ConfigurationError</code> before the runtime is built.</p>
-<p>```python
-from justatom.retrieval import build_runtime</p>
-<p>runtime = await build_runtime(
-    {
-        "mode": "vector",
-        "embedding": {
-            "backend": "openai-compatible",
-            "base_url": "http://ubuntu-box:8000/v1",
-            "model": "deployed-embedding-model",
-        },
-        "store": {
-            "collection": "JustAtom",
-            "url": "http://localhost:2211",
-            "grpc_port": 50051,
-        },
-    }
-)
-try:
-    results = await runtime.retrieve("проверочный запрос", top_k=5)
-finally:
-    await runtime.close()
-```</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.retrieval</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_runtime</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">runtime</span> <span class="o">=</span> <span class="k">await</span> <span class="n">build_runtime</span><span class="p">(</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="p">{</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>        <span class="s2">"mode"</span><span class="p">:</span> <span class="s2">"vector"</span><span class="p">,</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>        <span class="s2">"embedding"</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>            <span class="s2">"backend"</span><span class="p">:</span> <span class="s2">"openai-compatible"</span><span class="p">,</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>            <span class="s2">"base_url"</span><span class="p">:</span> <span class="s2">"http://ubuntu-box:8000/v1"</span><span class="p">,</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>            <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"deployed-embedding-model"</span><span class="p">,</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>        <span class="p">},</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>        <span class="s2">"store"</span><span class="p">:</span> <span class="p">{</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>            <span class="s2">"collection"</span><span class="p">:</span> <span class="s2">"JustAtom"</span><span class="p">,</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>            <span class="s2">"url"</span><span class="p">:</span> <span class="s2">"http://localhost:2211"</span><span class="p">,</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>            <span class="s2">"grpc_port"</span><span class="p">:</span> <span class="mi">50051</span><span class="p">,</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>        <span class="p">},</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>    <span class="p">}</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="p">)</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>    <span class="n">results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">retrieve</span><span class="p">(</span><span class="s2">"проверочный запрос"</span><span class="p">,</span> <span class="n">top_k</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="k">finally</span><span class="p">:</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>    <span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</code></pre></div>
 <p>Use the context-manager form when possible. The explicit <code>try</code>/<code>finally</code> form
 is useful when a framework owns the surrounding lifecycle.</p>
 
