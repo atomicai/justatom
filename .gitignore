@@ -142,3 +142,7 @@ evals/
 justatom-rc/
 .worktrees/
 phd.paper/
+
+# Local agent planning and review artifacts
+.superpowers/
+docs/superpowers/
