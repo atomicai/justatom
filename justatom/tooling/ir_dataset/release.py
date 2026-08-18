@@ -412,6 +412,13 @@ def _validate_generation_artifact(
 def _request_bindings(
     state: Mapping[str, Any], generation_root: Path, generator_model: str
 ) -> tuple[list[str], dict[str, GenerationBinding], list[dict[str, Any]]]:
+    generation_config = state.get("generation_config")
+    try:
+        generation_attempt = int(generation_config["attempt"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("generation state has an invalid generation attempt") from exc
+    if generation_attempt < 1:
+        raise ValueError("generation state has an invalid generation attempt")
     shards = state.get("shards")
     if not isinstance(shards, list) or not shards:
         raise ValueError("generation state has no request shards")
@@ -444,7 +451,7 @@ def _request_bindings(
                 attempt = int(metadata["generation_attempt"])
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError(f"request {custom_id} has invalid generation attempt") from exc
-            if attempt != int(shard.get("attempt", -1)):
+            if attempt != generation_attempt:
                 raise ValueError(f"request {custom_id} generation attempt mismatch")
             values = {key: metadata.get(key) for key in ("passage_id", "article_id", "source_hash", "prompt_hash")}
             if not all(isinstance(value, str) and value for value in values.values()):

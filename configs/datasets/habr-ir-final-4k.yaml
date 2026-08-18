@@ -50,7 +50,7 @@ generation:
   prompt_cache_mode: explicit
   max_requests_per_shard: 1000
   max_shard_bytes: 100000000
-  max_batch_attempts: 2
+  max_batch_attempts: 3
   scale_authorized: true
 
 output:

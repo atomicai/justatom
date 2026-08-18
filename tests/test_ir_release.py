@@ -436,6 +436,20 @@ def test_finalize_writes_hf_layout_manifest_and_review_sheet(tmp_path):
     ]
 
 
+def test_finalize_keeps_generation_attempt_separate_from_batch_retry_attempt(tmp_path):
+    source_root, generation_root, release_root = write_release_workspace(tmp_path)
+    state_path = generation_root / "generation_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["shards"][0]["attempt"] = 3
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    finalize_release(source_root, generation_root, release_root, git_sha="test-sha", git_dirty=False)
+
+    pairs = pl.read_parquet(release_root / "data/pairs/train.parquet")
+    assert pairs["generation_attempt"].to_list() == [1]
+    assert pairs["generation_batch_id"].to_list() == ["batch-1"]
+
+
 def test_finalize_scale_release_uses_checksummed_external_pilot_gate(tmp_path):
     source_root, generation_root, release_root = write_release_workspace(tmp_path)
     pilot_root = tmp_path / "pilot-generation"

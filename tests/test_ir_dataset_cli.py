@@ -12,6 +12,7 @@ import pytest
 from justatom.api import ir_dataset as ir_dataset_module
 from justatom.api.ir_dataset import (
     _embed_fingerprint,
+    combine_releases_stage,
     embed_stage,
     finalize_stage,
     inspect_stage,
@@ -186,6 +187,58 @@ def test_cli_accepts_local_finalize_stage():
     parsed = parse_cli(["--config", str(CONFIG_PATH), "finalize"])
 
     assert parsed.stage == "finalize"
+
+
+def test_cli_accepts_combined_release_stage_and_normalizes_release_roots(tmp_path):
+    roots = [tmp_path / "first", tmp_path / "second"]
+
+    parsed = parse_cli(
+        [
+            "--config",
+            str(CONFIG_PATH),
+            "--output.release_sources",
+            json.dumps([str(root) for root in roots]),
+            "--output.release_root",
+            str(tmp_path / "combined"),
+            "combine-releases",
+        ]
+    )
+
+    assert parsed.stage == "combine-releases"
+    assert parsed.config.output.release_sources == tuple(roots)
+
+
+def test_combine_releases_stage_passes_sources_and_git_identity(monkeypatch, tmp_path):
+    roots = [tmp_path / "first", tmp_path / "second"]
+    config = load_ir_dataset_config(
+        CONFIG_PATH,
+        overrides={
+            "output": {
+                "release_sources": [str(root) for root in roots],
+                "release_root": str(tmp_path / "combined"),
+            }
+        },
+    )
+    captured = {}
+    monkeypatch.setattr(ir_dataset_module, "_git_identity", lambda: ("abc123", False))
+    monkeypatch.setattr(
+        ir_dataset_module,
+        "combine_releases",
+        lambda release_roots, output_root, **kwargs: captured.update(
+            release_roots=release_roots,
+            output_root=output_root,
+            **kwargs,
+        ),
+    )
+
+    combine_releases_stage(config)
+
+    assert captured == {
+        "release_roots": tuple(roots),
+        "output_root": tmp_path / "combined",
+        "git_sha": "abc123",
+        "git_dirty": False,
+    }
 
 
 def test_finalize_stage_passes_bound_roots_and_git_identity(monkeypatch, tmp_path):

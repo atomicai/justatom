@@ -1,0 +1,7 @@
+output:
+  release_sources:
+    - .tmp_runs/datasets/habr-ir/canary-1k-release-v1
+    - .tmp_runs/datasets/habr-ir/next-3k-release-v1
+    - .tmp_runs/datasets/habr-ir/next-3k-release-v2
+    - .tmp_runs/datasets/habr-ir/final-4k-release-v1
+  release_root: .tmp_runs/datasets/habr-ir/habr-ir-release-v1

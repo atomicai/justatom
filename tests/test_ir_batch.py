@@ -1023,6 +1023,33 @@ def test_retry_failed_shard_preserves_history_and_starts_only_one_new_attempt(tm
     assert client.creates == ["file-1", "file-1"]
 
 
+def test_retry_reuploads_request_when_the_previous_input_file_is_missing(tmp_path: Path):
+    row = target()
+    state = prepare_generation_batches(
+        [row],
+        context(row),
+        GeneratorConfig(max_batch_attempts=2),
+        tmp_path,
+        source_corpus_fingerprint=SOURCE_CORPUS_FINGERPRINT,
+    )
+    client = FakeOpenAI()
+    submitted = submit_pending_shards(state, client, tmp_path)
+    client.file_objects.clear()
+    client.batch_objects["batch-1"] = FakeObject(
+        id="batch-1",
+        status="failed",
+        errors={"data": [{"code": "invalid_request", "param": "file_id"}]},
+    )
+
+    retried = batch_module.retry_failed_shards(submitted, client, tmp_path)
+
+    shard = retried["shards"][0]
+    assert shard["input_file_id"] == "file-2"
+    assert shard["batch_operation"]["input_file_id"] == "file-2"
+    assert client.creates == ["file-1", "file-2"]
+    assert len(client.uploads) == 2
+
+
 @pytest.mark.parametrize("status", ("completed", "in_progress", "validating"))
 def test_retry_rejects_non_retryable_statuses_without_creating_a_batch(tmp_path: Path, status: str):
     row = target()

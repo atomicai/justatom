@@ -850,6 +850,7 @@ def retry_failed_shards(
             shard.setdefault("history", []).append(_attempt_history_entry(shard))
             shard["attempt"] = int(shard.get("attempt", 1)) + 1
             for field in (
+                "input_file_id",
                 "batch_id",
                 "batch_operation",
                 "output_file_id",
@@ -861,7 +862,7 @@ def retry_failed_shards(
                 "batch_errors",
             ):
                 shard.pop(field, None)
-            shard["status"] = "uploaded" if shard.get("input_file_id") else "prepared"
+            shard["status"] = "prepared"
         refreshed.pop("collected_path", None)
         refreshed.pop("collected_sha256", None)
         refreshed.pop("diagnostics_path", None)
