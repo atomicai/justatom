@@ -232,7 +232,7 @@ def _dataset_card(pair_count: int, corpus_count: int) -> str:
     return f"""---
 pretty_name: Habr IR
 task_categories:
-- information-retrieval
+- text-retrieval
 language:
 - ru
 size_categories:

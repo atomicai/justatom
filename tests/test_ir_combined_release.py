@@ -135,6 +135,9 @@ def test_combine_releases_merges_validated_artifacts_and_recomputes_positive_cor
     assert pl.read_parquet(output / "data/pairs/test.parquet")["query_id"].to_list() == ["q-b"]
     assert pl.read_parquet(output / "data/corpus-100k/corpus.parquet")["is_positive"].to_list() == [True, True]
     assert pl.read_csv(output / "audit/pilot-review.csv").height == 2
+    dataset_card = (output / "README.md").read_text(encoding="utf-8")
+    assert "- text-retrieval" in dataset_card
+    assert "- information-retrieval" not in dataset_card
 
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["contract"] == "habr-ir-combined-release-v1"
