@@ -1,7 +1,18 @@
-output:
-  release_sources:
+release:
+  repo_id: justatom/habr-ir
+  private: false
+  config_name: default
+  layout: retrieval
+  source_releases:
     - .tmp_runs/datasets/habr-ir/canary-1k-release-v1
     - .tmp_runs/datasets/habr-ir/next-3k-release-v1
     - .tmp_runs/datasets/habr-ir/next-3k-release-v2
     - .tmp_runs/datasets/habr-ir/final-4k-release-v1
-  release_root: .tmp_runs/datasets/habr-ir/habr-ir-release-v1
+  output_root: .tmp_runs/datasets/habr-ir/habr-ir-default-v1
+  split_map:
+    train: train
+    validation: dev
+    test: test
+    corpus: corpus
+  include_audit: true
+  include_qrels_artifacts: true

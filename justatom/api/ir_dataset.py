@@ -33,7 +33,6 @@ from justatom.tooling.ir_dataset.batch import (
     submit_pending_shards,
 )
 from justatom.tooling.ir_dataset.chunking import CHUNKER_VERSION, ChunkingConfig, MarkdownPassageChunker
-from justatom.tooling.ir_dataset.combined_release import CombinedReleaseSummary, combine_releases
 from justatom.tooling.ir_dataset.dense import DenseIndex, E5TextEncoder, TextEncoder
 from justatom.tooling.ir_dataset.generation import GeneratorConfig
 from justatom.tooling.ir_dataset.generation_context import GenerationContextConfig, build_generation_context
@@ -95,7 +94,6 @@ class OutputConfig:
     generation_root: Path = Path(".tmp_runs/datasets/habr-ir/generation-v1")
     pilot_generation_root: Path = Path(".tmp_runs/datasets/habr-ir/generation-v1")
     release_root: Path = Path(".tmp_runs/datasets/habr-ir/pilot-release-v1")
-    release_sources: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,8 +155,6 @@ def load_ir_dataset_config(
         output_values["pilot_generation_root"] = Path(output_values["pilot_generation_root"])
     if output_values.get("release_root") is not None:
         output_values["release_root"] = Path(output_values["release_root"])
-    if output_values.get("release_sources") is not None:
-        output_values["release_sources"] = tuple(Path(root) for root in output_values["release_sources"])
     return IRDatasetConfig(
         source=_build_dataclass(SourceConfig, source_values),
         chunking=_build_dataclass(ChunkingConfig, raw.get("chunking")),
@@ -185,7 +181,6 @@ def parse_cli(argv: list[str] | None = None) -> ParsedCLI:
         "retry-generation",
         "collect-generation",
         "finalize",
-        "combine-releases",
     )
     stage_positions = [(index, token) for index, token in enumerate(raw_argv) if token in stages]
     if len(stage_positions) != 1:
@@ -607,16 +602,6 @@ def finalize_stage(config: IRDatasetConfig) -> ReleaseSummary:
     )
 
 
-def combine_releases_stage(config: IRDatasetConfig) -> CombinedReleaseSummary:
-    git_sha, git_dirty = _git_identity()
-    return combine_releases(
-        config.output.release_sources,
-        config.output.release_root,
-        git_sha=git_sha,
-        git_dirty=git_dirty,
-    )
-
-
 def inspect_stage(
     config: IRDatasetConfig,
     *,
@@ -740,8 +725,6 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif parsed.stage == "finalize":
         result = finalize_stage(parsed.config)
-    elif parsed.stage == "combine-releases":
-        result = combine_releases_stage(parsed.config)
     else:
         raise AssertionError(f"Unhandled IR dataset stage: {parsed.stage}")
     print(json.dumps(_summary_payload(result), ensure_ascii=False, indent=2, default=str))

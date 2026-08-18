@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 
 import polars as pl
+import yaml
 
 from justatom.tooling.ir_dataset.artifacts import sha256_file
-from justatom.tooling.ir_dataset.combined_release import combine_releases
 from justatom.tooling.ir_dataset.release import CORPUS_COLUMNS, PAIR_SCHEMA, QREL_SCHEMA, RELEASE_ARTIFACT_PATHS
+from research.habr_ir.release import PUBLIC_SCHEMA, combine_releases, load_release_config
 
 
 def _pair(*, suffix: str, passage_id: str, article_id: str, split: str) -> dict[str, object]:
@@ -131,18 +132,51 @@ def test_combine_releases_merges_validated_artifacts_and_recomputes_positive_cor
     assert result.corpus_count == 2
     assert result.review_count == 2
     assert result.reused is False
-    assert pl.read_parquet(output / "data/pairs/train.parquet")["query_id"].to_list() == ["q-a"]
-    assert pl.read_parquet(output / "data/pairs/test.parquet")["query_id"].to_list() == ["q-b"]
-    assert pl.read_parquet(output / "data/corpus-100k/corpus.parquet")["is_positive"].to_list() == [True, True]
+    train = pl.read_parquet(output / "data/train-00000-of-00001.parquet")
+    dev = pl.read_parquet(output / "data/dev-00000-of-00001.parquet")
+    test = pl.read_parquet(output / "data/test-00000-of-00001.parquet")
+    corpus = pl.read_parquet(output / "data/corpus-00000-of-00001.parquet")
+    assert train.schema == dev.schema == test.schema == corpus.schema == pl.Schema(PUBLIC_SCHEMA)
+    assert train.select("query_id", "positive_doc_id", "query", "positive", "doc_id", "content").to_dicts() == [
+        {
+            "query_id": "q-a",
+            "positive_doc_id": "p-a",
+            "query": "Как работает механизм a?",
+            "positive": "Заголовок a\n\nТекст a",
+            "doc_id": "",
+            "content": "",
+        }
+    ]
+    assert dev.is_empty()
+    assert test["query_id"].to_list() == ["q-b"]
+    assert corpus["doc_id"].to_list() == ["p-a", "p-b"]
+    assert corpus["query"].to_list() == ["", ""]
+    assert corpus["is_positive"].to_list() == [True, True]
     assert pl.read_csv(output / "audit/pilot-review.csv").height == 2
+    assert (output / "artifacts/qrels/train.parquet").exists()
+    assert (output / "artifacts/qrels/dev.parquet").exists()
+    assert (output / "artifacts/qrels/test.parquet").exists()
     dataset_card = (output / "README.md").read_text(encoding="utf-8")
     assert "- text-retrieval" in dataset_card
     assert "- information-retrieval" not in dataset_card
+    metadata = yaml.safe_load(dataset_card.split("---", 2)[1])
+    assert metadata["configs"] == [
+        {
+            "config_name": "default",
+            "data_files": [
+                {"split": "train", "path": "data/train-*.parquet"},
+                {"split": "dev", "path": "data/dev-*.parquet"},
+                {"split": "test", "path": "data/test-*.parquet"},
+                {"split": "corpus", "path": "data/corpus-*.parquet"},
+            ],
+        }
+    ]
 
+    assert result.manifest_path == output / "manifest.json"
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
-    assert manifest["contract"] == "habr-ir-combined-release-v1"
+    assert manifest["contract"] == "habr-ir-retrieval-release-v1"
     assert manifest["git"] == {"sha": "combined-git", "dirty": False}
-    assert manifest["counts"]["pair_splits"] == {"train": 1, "validation": 0, "test": 1}
+    assert manifest["counts"]["splits"] == {"train": 1, "dev": 0, "test": 1, "corpus": 2}
     assert [source["fingerprint"] for source in manifest["releases"]] == ["fingerprint-a", "fingerprint-b"]
 
     reused = combine_releases([first, second], output, git_sha="combined-git", git_dirty=False)
@@ -162,3 +196,38 @@ def test_combine_releases_rejects_duplicate_positive_passage(tmp_path: Path):
         assert "duplicate positive_passage_id" in str(exc)
     else:
         raise AssertionError("duplicate positive passage was accepted")
+
+
+def test_release_config_controls_sources_layout_and_publication(tmp_path: Path):
+    path = tmp_path / "release.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "release": {
+                    "repo_id": "justatom/habr-ir",
+                    "private": False,
+                    "config_name": "default",
+                    "layout": "retrieval",
+                    "source_releases": ["first", "second"],
+                    "output_root": "combined",
+                    "split_map": {"train": "train", "validation": "dev", "test": "test", "corpus": "corpus"},
+                    "include_audit": True,
+                    "include_qrels_artifacts": True,
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_release_config(path)
+
+    assert config.repo_id == "justatom/habr-ir"
+    assert config.private is False
+    assert config.config_name == "default"
+    assert config.layout == "retrieval"
+    assert config.source_releases == (Path("first"), Path("second"))
+    assert config.output_root == Path("combined")
+    assert config.split_map == {"train": "train", "validation": "dev", "test": "test", "corpus": "corpus"}
+    assert config.include_audit is True
+    assert config.include_qrels_artifacts is True
