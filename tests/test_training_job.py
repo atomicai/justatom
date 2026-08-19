@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from justatom.training.config import AuxiliaryGradientConfig, AuxiliaryGradientMode, ExperimentRole, TrainingMethod
+from justatom.training.config import (
+    AnchorControlMode,
+    AuxiliaryGradientConfig,
+    AuxiliaryGradientMode,
+    ExperimentRole,
+    TrainingMethod,
+)
 from justatom.training.job import RunManifest, TrainingJob, artifact_paths, build_lightning_trainer, write_run_manifest
 from justatom.training.methods import canonical_method_config
 
@@ -100,6 +106,29 @@ def test_manifest_records_geometry_anchor_contract():
 
     assert manifest.objective_contract["geometry_anchor"] == "frozen_base_relational_kl"
     assert manifest.objective_contract["geometry_control"] == "one_sided_task_projection"
+
+
+def test_manifest_distinguishes_additive_geometry_anchor_ablation():
+    config = canonical_method_config(TrainingMethod.ATOMIC)
+    config = replace(
+        config,
+        experiment=replace(config.experiment, role=ExperimentRole.ABLATION),
+        model=replace(config.model, lora=replace(config.model.lora, enabled=True)),
+        memory_bank=replace(config.memory_bank, enabled=False, size=0),
+        anchor_bank=replace(
+            config.anchor_bank,
+            enabled=True,
+            size=512,
+            control=AnchorControlMode.ADDITIVE,
+            weight=0.1,
+        ),
+        gradient_projection=replace(config.gradient_projection, enabled=False),
+    )
+
+    manifest = RunManifest.from_config(config, git_commit="abc123", git_dirty=False)
+
+    assert manifest.objective_contract["geometry_anchor"] == "frozen_base_relational_kl"
+    assert manifest.objective_contract["geometry_control"] == "additive_regularization"
 
 
 def test_manifest_records_resolved_auxiliary_temperatures():

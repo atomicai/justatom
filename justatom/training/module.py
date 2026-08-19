@@ -14,7 +14,14 @@ from justatom.logging.io import CSVLogger
 from justatom.training.alpha_gate import QueryAlphaGate
 from justatom.training.anchor_bank import AnchorSelection, GeometryAnchorBank
 from justatom.training.auxiliary_gradient import control_auxiliary_gradients
-from justatom.training.config import AuxiliaryGradientMode, MarginMode, TrainConfig, parse_train_config, train_config_to_dict
+from justatom.training.config import (
+    AnchorControlMode,
+    AuxiliaryGradientMode,
+    MarginMode,
+    TrainConfig,
+    parse_train_config,
+    train_config_to_dict,
+)
 from justatom.training.gradient_projection import project_conflicting_gradients, project_update_against_constraint
 from justatom.training.memory_bank import ContrastiveMemoryBank, QueryMarginHead
 from justatom.training.methods import resolve_method
@@ -219,6 +226,12 @@ class ContrastiveTrainingModule(L.LightningModule):
                 "anchor/active_rows": 0.0,
             }
         output = replace(output, anchor_loss=anchor_loss)
+        if anchor_loss is not None and self.config.anchor_bank.control is AnchorControlMode.ADDITIVE:
+            weighted_anchor = float(self.config.anchor_bank.weight) * anchor_loss
+            output = replace(output, loss=output.loss + weighted_anchor)
+            anchor_metrics["loss/anchor_weighted"] = weighted_anchor.detach()
+        elif self.anchor_bank is not None:
+            anchor_metrics["loss/anchor_weighted"] = 0.0
         if not torch.isfinite(output.loss.detach()):
             raise RuntimeError(f"Non-finite loss at step={step}: {output.loss.detach().cpu().item()}")
         if not torch.isfinite(output.primary_loss.detach()):

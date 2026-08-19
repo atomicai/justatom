@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from justatom.training.config import (
+    AnchorControlMode,
     AuxiliaryGradientMode,
     ExperimentRole,
     MarginMode,
@@ -189,6 +190,31 @@ def test_anchor_bank_config_round_trips_for_lora_atomic_ablation():
     assert config.anchor_bank.size == 512
     assert config.anchor_bank.warmup_steps == 5
     assert parse_train_config(train_config_to_dict(config)) == config
+
+
+def test_additive_anchor_config_round_trips_and_requires_positive_weight():
+    raw = {
+        "method": "atomic",
+        "experiment": {"role": "ablation", "seed": 42},
+        "model": {"lora": {"enabled": True}},
+        "memory_bank": {"enabled": False, "size": 0},
+        "anchor_bank": {
+            "enabled": True,
+            "size": 512,
+            "control": "additive",
+            "weight": 0.1,
+        },
+        "gradient_projection": {"enabled": False},
+    }
+
+    config = parse_train_config(raw)
+
+    assert config.anchor_bank.control is AnchorControlMode.ADDITIVE
+    assert config.anchor_bank.weight == pytest.approx(0.1)
+    assert parse_train_config(train_config_to_dict(config)) == config
+    raw["anchor_bank"]["weight"] = 0.0
+    with pytest.raises(ValueError, match=r"anchor_bank\.weight must be > 0"):
+        parse_train_config(raw)
 
 
 def test_anchor_bank_requires_positive_capacity_and_lora():

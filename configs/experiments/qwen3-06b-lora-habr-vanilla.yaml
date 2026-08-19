@@ -1,14 +1,12 @@
-method: atomic
+method: vanilla
 
 experiment:
-  role: ablation
+  role: canonical
   seed: 42
 
 model:
   name_or_path: Qwen/Qwen3-Embedding-0.6B
-  query_prefix: |-
-    Instruct: Given a web search query, retrieve relevant passages that answer the query
-    Query:
+  query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
   content_prefix: ""
   max_query_seq_len: 128
   max_seq_len: 512
@@ -22,37 +20,19 @@ model:
     bias: none
 
 dataset:
-  id: miracl-ru
-  limit: 10000
+  id: habr-ir
 
 optimization:
   lr_encoder: 0.00002
-  batch_size: 9
+  batch_size: 8
   grad_acc_steps: 4
   epochs: 1
-  num_samples: 3000
+  num_samples: -1
 
 objective:
   decoupled: false
   temperature: 0.05
   simcse_dropout_weight: 0.0
-
-memory_bank:
-  enabled: false
-  size: 0
-
-anchor_bank:
-  enabled: true
-  size: 512
-  warmup_steps: 5
-  temperature: 0.05
-  control: projection
-  weight: 1.0
-
-gradient_projection:
-  enabled: true
-  memory_weight: 0.0
-  eps: 1.0e-12
 
 runtime:
   accelerator: auto

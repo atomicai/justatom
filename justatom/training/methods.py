@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from justatom.training.config import (
     AlphaGateConfig,
+    AnchorControlMode,
     AuxiliaryGradientMode,
     ExperimentRole,
     GradientProjectionConfig,
@@ -94,8 +95,9 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
         raise ValueError("atomic requires memory_bank.enabled=true or anchor_bank.enabled=true")
     if bank.enabled and bank.size <= 0:
         raise ValueError("atomic requires memory_bank.size > 0")
-    if not config.gradient_projection.enabled:
-        raise ValueError("atomic requires gradient_projection.enabled=true")
+    additive_anchor = anchor.enabled and anchor.control is AnchorControlMode.ADDITIVE
+    if not config.gradient_projection.enabled and not additive_anchor:
+        raise ValueError("atomic requires gradient_projection.enabled=true unless anchor_bank.control=additive")
 
     if anchor.enabled:
         if role is not ExperimentRole.ABLATION:
@@ -104,6 +106,13 @@ def resolve_method(config: TrainConfig) -> TrainConfig:
             raise ValueError("atomic anchor bank requires anchor_bank.size > 0")
         if not config.model.lora.enabled:
             raise ValueError("atomic anchor bank requires model.lora.enabled=true")
+        if additive_anchor:
+            if bank.enabled:
+                raise ValueError("additive anchor ablation does not permit memory_bank.enabled")
+            if config.gradient_projection.enabled:
+                raise ValueError("anchor_bank.control=additive requires gradient_projection.enabled=false")
+        elif not config.gradient_projection.enabled:
+            raise ValueError("anchor_bank.control=projection requires gradient_projection.enabled=true")
 
     if role is ExperimentRole.CANONICAL:
         if bank.margin.mode is not MarginMode.OFF:

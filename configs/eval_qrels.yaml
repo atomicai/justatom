@@ -1,0 +1,23 @@
+dataset:
+  # A preset can define independent eval-query and corpus splits.
+  id: null
+
+embedding:
+  model: Qwen/Qwen3-Embedding-0.6B
+  device: auto
+  batch_size: 16
+  outer_batch_size: 256
+  max_length: 512
+  query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+  # Habr-IR passages are already serialized with `passage:`.
+  document_prefix: ""
+  skip_prefix_if_present: true
+
+ranking:
+  device: auto
+  query_batch_size: 64
+  corpus_block_size: 8192
+
+output:
+  dir: .tmp_runs/qrels-eval
+  reuse_embeddings: true

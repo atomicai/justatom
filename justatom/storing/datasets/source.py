@@ -20,6 +20,7 @@ _HF_REPO_ID = re.compile(r"^[^/?\s:]+/[^/?\s:]+$")
 class DatasetReadOptions:
     split: str | None = None
     config: str | None = None
+    revision: str | None = None
     limit: int | None = None
     drop_columns: tuple[str, ...] = ()
 

@@ -24,6 +24,7 @@ dataset:
   name_or_path: null
   lazy: true
   config: null
+  revision: null
   labels_field: queries
   content_field: content
   split: null
