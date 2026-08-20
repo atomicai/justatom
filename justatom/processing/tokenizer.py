@@ -21,7 +21,7 @@ class ITokenizer(PreTrainedTokenizer):
         super().__init__(max_len=max_len, pad_token=pad_token)
 
     @classmethod
-    def from_pretrained(cls, where) -> PreTrainedTokenizer:
+    def from_pretrained(cls, where, revision: str | None = None) -> PreTrainedTokenizer:
         # Here we do check if `where` is a directory or `huggingface` tokenizer-name
         where_path = Path(where)
         if where_path.is_dir():
@@ -37,7 +37,7 @@ class ITokenizer(PreTrainedTokenizer):
         else:
             # try to ignite huggingface `transformers` tokenizer
             try:
-                tokenizer = ignite_hf_tokenizer(where)
+                tokenizer = ignite_hf_tokenizer(where, revision=revision)
             except:  # noqa: E722
                 msg = f"The provided name [{where}] neither directory nor recognized tokenizer name from `huggingface.co`"
                 logger.error(msg)

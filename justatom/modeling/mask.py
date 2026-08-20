@@ -128,6 +128,9 @@ class ILanguageModel(nn.Module, abc.ABC):
         language_model_class=None,
         **kwargs,
     ):
+        hub_kwargs = dict(kwargs)
+        if revision is not None:
+            hub_kwargs["revision"] = revision
         config_file = Path(model_name_or_path) / "config.json"
         # assert config_file.exists(), "The config is not found, couldn't load the model"
         if config_file.exists():
@@ -141,7 +144,7 @@ class ILanguageModel(nn.Module, abc.ABC):
 
             logger.info(f'Loading from huggingface hub via "{model_name_or_path}"')
             klass = HF_CLASS_MAPPING[model_name_or_path]
-            language_model = klass.load(model_name_or_path, **kwargs)
+            language_model = klass.load(model_name_or_path, **hub_kwargs)
         return language_model
 
     @property

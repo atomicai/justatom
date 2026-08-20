@@ -117,6 +117,37 @@ def test_exact_qrels_api_writes_metrics_ranks_and_reuses_embedding_cache(tmp_pat
     assert (tmp_path / "dev.results.json").is_file()
 
 
+def test_exact_qrels_api_forwards_pinned_model_revision(monkeypatch, tmp_path):
+    vectors = {
+        "query one": [1.0, 0.0],
+        "query two": [0.0, 1.0],
+        "document one": [1.0, 0.0],
+        "document two": [0.0, 1.0],
+        "document three": [-1.0, 0.0],
+    }
+    captured = {}
+
+    class CapturingEmbedder(_FakeEmbedder):
+        def __init__(self, model, *, device, profile, revision):
+            super().__init__(vectors)
+            captured.update(model=model, device=device, profile=profile, revision=revision)
+
+        async def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr("justatom.api.eval_qrels.HuggingFaceEmbedder", CapturingEmbedder)
+    config = _config(tmp_path)
+    config["embedding"]["revision"] = "model-snapshot-123"
+
+    result = asyncio.run(evaluate_qrels(config=config, loader=_loader))
+
+    assert captured["model"] == "fake/model"
+    assert captured["device"] == "cpu"
+    assert captured["revision"] == "model-snapshot-123"
+    assert captured["closed"] is True
+    assert result["embedding"]["requested_revision"] == "model-snapshot-123"
+
+
 def test_benchmark_records_reject_relevant_document_missing_from_corpus(tmp_path):
     def missing_loader(*args, **kwargs):
         rows = list(_loader(*args, **kwargs))
@@ -136,4 +167,5 @@ def test_habr_preset_pins_snapshot_and_separates_eval_from_corpus():
     assert config["dataset"]["eval"]["relevant_id_col"] == "positive_doc_id"
     assert config["dataset"]["corpus"]["split"] == "corpus"
     assert config["dataset"]["corpus"]["document_id_col"] == "doc_id"
+    assert config["embedding"]["revision"] == "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
     assert config["embedding"]["query_prefix"].endswith("Query: ")

@@ -4,6 +4,7 @@ dataset:
 
 embedding:
   model: Qwen/Qwen3-Embedding-0.6B
+  revision: 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3
   device: auto
   batch_size: 16
   outer_batch_size: 256

@@ -207,13 +207,13 @@ def _local_model_fingerprint(model: str) -> str | None:
     return digest.hexdigest()
 
 
-def _cached_hf_revision(model: str) -> str | None:
+def _cached_hf_revision(model: str, revision: str | None = None) -> str | None:
     if Path(model).exists():
         return None
     try:
         from huggingface_hub import try_to_load_from_cache
 
-        cached = try_to_load_from_cache(model, "config.json")
+        cached = try_to_load_from_cache(model, "config.json", revision=revision)
     except (ImportError, OSError, ValueError):
         return None
     if not isinstance(cached, str):
@@ -332,6 +332,8 @@ async def evaluate_qrels(
     ranking = _mapping(resolved.get("ranking"), "ranking")
     output = _mapping(resolved.get("output"), "output")
     model = _required_text(embedding.get("model"), "embedding.model")
+    configured_model_revision = _optional_text(embedding.get("revision"), "embedding.revision")
+    requested_model_revision = None if Path(model).exists() else configured_model_revision
     output_dir = Path(_required_text(output.get("dir"), "output.dir")).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -347,19 +349,21 @@ async def evaluate_qrels(
 
     owns_embedder = embedder is None
     if embedder is None:
-        embedder = HuggingFaceEmbedder(
-            model,
-            device=embedding_device,
-            profile=EmbeddingProfile(
+        embedder_kwargs = {
+            "device": embedding_device,
+            "profile": EmbeddingProfile(
                 query_prefix=query_prefix,
                 document_prefix=document_prefix,
                 max_length=max_length,
                 batch_size=embedding_batch_size,
                 skip_prefix_if_present=skip_prefix_if_present,
             ),
-        )
+        }
+        if requested_model_revision is not None:
+            embedder_kwargs["revision"] = requested_model_revision
+        embedder = HuggingFaceEmbedder(model, **embedder_kwargs)
 
-    model_revision = _cached_hf_revision(model)
+    model_revision = _cached_hf_revision(model, requested_model_revision)
     model_fingerprint = _local_model_fingerprint(model)
     signature = {
         "schema_version": 1,
@@ -375,6 +379,8 @@ async def evaluate_qrels(
     }
     if model_fingerprint is not None:
         signature["model_fingerprint"] = model_fingerprint
+    if requested_model_revision is not None:
+        signature["model_revision"] = requested_model_revision
     started = time.perf_counter()
     try:
         corpus_started = time.perf_counter()
@@ -449,6 +455,7 @@ async def evaluate_qrels(
         },
         "embedding": {
             "model": model,
+            "requested_revision": requested_model_revision,
             "resolved_revision": model_revision,
             "local_fingerprint": model_fingerprint,
             "device": embedding_device,
