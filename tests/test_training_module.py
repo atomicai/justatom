@@ -13,7 +13,6 @@ from justatom.training import telemetry
 from justatom.training.alpha_gate import QueryAlphaGate
 from justatom.training.anchor_bank import GeometryAnchorBank
 from justatom.training.config import (
-    AnchorControlMode,
     AuxiliaryGradientConfig,
     AuxiliaryGradientMode,
     ExperimentConfig,
@@ -805,46 +804,6 @@ def test_anchor_bank_uses_frozen_views_then_activates_on_next_batch(monkeypatch)
     assert module.anchor_bank is not None and module.anchor_bank.current_size == 4
     assert output.metrics["anchor/size"] == 2.0
     assert output.metrics["anchor/active_rows"] == 2.0
-
-
-def test_additive_anchor_weight_is_part_of_automatic_training_loss(monkeypatch):
-    config = anchor_control_config()
-    config = replace(
-        config,
-        anchor_bank=replace(
-            config.anchor_bank,
-            control=AnchorControlMode.ADDITIVE,
-            weight=0.25,
-        ),
-        gradient_projection=replace(config.gradient_projection, enabled=False),
-    )
-    module = ContrastiveTrainingModule.build(TinyEncoder(), config)
-
-    def anchor_views(batch, *, include_student):
-        base_queries = torch.nn.functional.normalize(batch["queries"], dim=-1)
-        base_documents = torch.nn.functional.normalize(batch["documents"], dim=-1)
-        if not include_student:
-            return None, None, base_queries, base_documents
-        return (
-            torch.nn.functional.normalize(base_queries + 0.1, dim=-1),
-            torch.nn.functional.normalize(base_documents - 0.1, dim=-1),
-            base_queries,
-            base_documents,
-        )
-
-    monkeypatch.setattr(module, "_anchor_views", anchor_views)
-    first = tiny_batch()
-    second = {key: value.clone() for key, value in first.items()}
-    for key in ("doc_key_id", "content_key_id", "query_key_id"):
-        second[key] += 100
-
-    module.compute_training_step(first, step=0)
-    output = module.compute_training_step(second, step=1)
-
-    assert module.automatic_optimization
-    assert output.anchor_loss is not None
-    torch.testing.assert_close(output.loss, output.primary_loss + 0.25 * output.anchor_loss)
-    torch.testing.assert_close(output.metrics["loss/anchor_weighted"], 0.25 * output.anchor_loss.detach())
 
 
 def test_auxiliary_control_step_caps_aligned_safe_gradient_and_preserves_head(

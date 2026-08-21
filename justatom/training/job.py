@@ -18,7 +18,6 @@ from justatom.processing.prime import TrainWithContrastiveProcessor
 from justatom.running.encoders import EncoderRunner
 from justatom.tooling.collections import build_collection_metadata, resolve_artifact_dirname, write_collection_metadata
 from justatom.training.config import (
-    AnchorControlMode,
     AuxiliaryGradientMode,
     LoraAdapterConfig,
     RuntimeConfig,
@@ -92,11 +91,7 @@ def objective_contract(config: TrainConfig) -> dict[str, str]:
     if config.anchor_bank.enabled:
         contract.update(
             geometry_anchor="frozen_base_relational_kl",
-            geometry_control=(
-                "one_sided_task_projection"
-                if config.anchor_bank.control is AnchorControlMode.PROJECTION
-                else "additive_regularization"
-            ),
+            geometry_control="one_sided_task_projection",
         )
     return contract
 

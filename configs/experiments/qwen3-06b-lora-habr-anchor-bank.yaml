@@ -43,8 +43,6 @@ anchor_bank:
   size: 512
   warmup_steps: 5
   temperature: 0.05
-  control: projection
-  weight: 1.0
 
 gradient_projection:
   enabled: true

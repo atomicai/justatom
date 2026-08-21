@@ -5,7 +5,6 @@ from dataclasses import replace
 import pytest
 
 from justatom.training.config import (
-    AnchorControlMode,
     AuxiliaryGradientConfig,
     AuxiliaryGradientMode,
     ExperimentConfig,
@@ -114,33 +113,6 @@ def test_atomic_anchor_bank_can_replace_memory_only_as_lora_ablation():
     assert not resolved.memory_bank.enabled
     with pytest.raises(ValueError, match="experiment.role=ablation"):
         resolve_method(replace(anchor, experiment=ExperimentConfig()))
-
-
-def test_atomic_additive_anchor_is_an_explicit_lora_ablation_without_projection():
-    atomic = canonical_method_config(TrainingMethod.ATOMIC)
-    additive = replace(
-        atomic,
-        experiment=ExperimentConfig(role=ExperimentRole.ABLATION, seed=42),
-        model=replace(atomic.model, lora=replace(atomic.model.lora, enabled=True)),
-        memory_bank=replace(atomic.memory_bank, enabled=False, size=0),
-        anchor_bank=replace(
-            atomic.anchor_bank,
-            enabled=True,
-            size=512,
-            control=AnchorControlMode.ADDITIVE,
-            weight=0.1,
-        ),
-        gradient_projection=replace(atomic.gradient_projection, enabled=False),
-    )
-
-    resolved = resolve_method(additive)
-
-    assert resolved.anchor_bank.control is AnchorControlMode.ADDITIVE
-    assert not resolved.gradient_projection.enabled
-    with pytest.raises(ValueError, match=r"control=additive.*gradient_projection.enabled=false"):
-        resolve_method(replace(additive, gradient_projection=atomic.gradient_projection))
-    with pytest.raises(ValueError, match="additive anchor ablation does not permit memory_bank"):
-        resolve_method(replace(additive, memory_bank=atomic.memory_bank))
 
 
 @pytest.mark.parametrize("method", [TrainingMethod.VANILLA, TrainingMethod.ATOM_GATE])

@@ -30,11 +30,6 @@ class AuxiliaryGradientMode(str, Enum):
     SAFE = "safe"
 
 
-class AnchorControlMode(str, Enum):
-    PROJECTION = "projection"
-    ADDITIVE = "additive"
-
-
 @dataclass(frozen=True)
 class ExperimentConfig:
     role: ExperimentRole = ExperimentRole.CANONICAL
@@ -167,8 +162,6 @@ class AnchorBankConfig:
     size: int = 0
     warmup_steps: int = 0
     temperature: float = 0.05
-    control: AnchorControlMode = AnchorControlMode.PROJECTION
-    weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -432,13 +425,10 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_int(anchor.size, "anchor_bank.size", 0)
     _require_int(anchor.warmup_steps, "anchor_bank.warmup_steps", 0)
     _require_number(anchor.temperature, "anchor_bank.temperature", 1e-12)
-    _require_number(anchor.weight, "anchor_bank.weight", 0.0)
     if anchor.enabled and anchor.size <= 0:
         raise ValueError("anchor_bank.size must be > 0 when anchor_bank.enabled=true")
     if anchor.enabled and not lora.enabled:
         raise ValueError("anchor_bank requires model.lora.enabled=true")
-    if anchor.enabled and anchor.control is AnchorControlMode.ADDITIVE and anchor.weight <= 0.0:
-        raise ValueError("anchor_bank.weight must be > 0 when anchor_bank.control=additive")
 
     margin = bank.margin
     _require_number(margin.scale, "memory_bank.margin.scale", 0.0)
