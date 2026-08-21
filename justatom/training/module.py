@@ -14,13 +14,7 @@ from justatom.logging.io import CSVLogger
 from justatom.training.alpha_gate import QueryAlphaGate
 from justatom.training.anchor_bank import AnchorSelection, GeometryAnchorBank
 from justatom.training.auxiliary_gradient import control_auxiliary_gradients
-from justatom.training.config import (
-    AuxiliaryGradientMode,
-    MarginMode,
-    TrainConfig,
-    parse_train_config,
-    train_config_to_dict,
-)
+from justatom.training.config import AuxiliaryGradientMode, MarginMode, TrainConfig, parse_train_config, train_config_to_dict
 from justatom.training.gradient_projection import project_conflicting_gradients, project_update_against_constraint
 from justatom.training.memory_bank import ContrastiveMemoryBank, QueryMarginHead
 from justatom.training.methods import resolve_method
