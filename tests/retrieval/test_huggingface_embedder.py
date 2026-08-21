@@ -113,6 +113,26 @@ def test_local_embedder_builds_once_and_reuses_one_encoder(monkeypatch):
     assert encoder.closed == 1
 
 
+def test_local_embedder_forwards_pinned_revision(monkeypatch):
+    built = []
+    encoder = FakeEncoder()
+
+    def fake_build(model, device, max_length, *, revision=None):
+        built.append((model, device, max_length, revision))
+        return encoder
+
+    monkeypatch.setattr(module, "_build_local_encoder", fake_build)
+    embedder = module.HuggingFaceEmbedder(
+        model="owner/model",
+        device="cpu",
+        revision="snapshot-123",
+    )
+    asyncio.run(embedder.close())
+
+    assert built == [("owner/model", "cpu", 512, "snapshot-123")]
+    assert encoder.closed == 1
+
+
 def test_resolve_device_auto_prefers_cuda_then_mps_then_cpu(monkeypatch):
     monkeypatch.setattr(module, "_available_devices", lambda: (True, True))
     assert module.resolve_device("auto") == "cuda:0"

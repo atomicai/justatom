@@ -63,6 +63,7 @@ class DatasetConfig:
     name_or_path: str | None = None
     lazy: bool = True
     config: str | None = None
+    revision: str | None = None
     labels_field: str = "queries"
     content_field: str = "content"
     split: str | None = None

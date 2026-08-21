@@ -14,6 +14,11 @@ from justatom.modeling.div import IAttention, IEmbedding, MLAttention
 from justatom.modeling.mask import ILanguageModel, IModel
 
 
+def _load_auto_model(model_name_or_path: str, revision: str | None = None):
+    kwargs = {} if revision is None else {"revision": revision}
+    return AutoModel.from_pretrained(model_name_or_path, **kwargs)
+
+
 class EmbeddingPoolingWrapper(ILanguageModel):
     def __init__(self):
         super().__init__()
@@ -62,7 +67,8 @@ class Qwen3EmbeddingModel(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        revision = kwargs.pop("revision", None)
+        model = _load_auto_model(model_name_or_path, revision)
         return cls(model, **kwargs)
 
     def last_token_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
@@ -163,7 +169,8 @@ class E5Model(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        revision = kwargs.pop("revision", None)
+        model = _load_auto_model(model_name_or_path, revision)
         return cls(model, **kwargs)
 
     def forward(
@@ -214,7 +221,8 @@ class E5SModel(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        revision = kwargs.pop("revision", None)
+        model = _load_auto_model(model_name_or_path, revision)
         return cls(model, **kwargs)
 
     def forward(
@@ -268,7 +276,8 @@ class E5LModel(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        revision = kwargs.pop("revision", None)
+        model = _load_auto_model(model_name_or_path, revision)
         return cls(model, **kwargs)
 
     def forward(
@@ -318,7 +327,8 @@ class E5LInstructModel(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        revision = kwargs.pop("revision", None)
+        model = _load_auto_model(model_name_or_path, revision)
         return cls(model, **kwargs)
 
     def forward(
@@ -367,7 +377,8 @@ class MBERTModel(ILanguageModel):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        revision = kwargs.pop("revision", None)
+        model = _load_auto_model(model_name_or_path, revision)
         return cls(model, **kwargs)
 
     def maybe_norm(self, xs, norm: bool):
@@ -414,7 +425,8 @@ class BGEModel(ILanguageModel):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        revision = kwargs.pop("revision", None)
+        model = _load_auto_model(model_name_or_path, revision)
         return cls(model, **kwargs)
 
     def maybe_norm(self, xs, norm: bool):

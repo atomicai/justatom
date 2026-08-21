@@ -1,0 +1,34 @@
+dataset:
+  id: null
+  name_or_path: null
+  config: null
+  revision: null
+  eval:
+    split: dev
+    query_id_col: query_id
+    query_field: query
+    relevant_id_col: positive_doc_id
+    group_id_col: article_id
+  corpus:
+    split: corpus
+    document_id_col: doc_id
+    content_field: content
+
+embedding:
+  model: null
+  device: auto
+  batch_size: 16
+  outer_batch_size: 256
+  max_length: 512
+  query_prefix: ""
+  document_prefix: ""
+  skip_prefix_if_present: true
+
+ranking:
+  device: auto
+  query_batch_size: 64
+  corpus_block_size: 8192
+
+output:
+  dir: .tmp_runs/qrels-eval
+  reuse_embeddings: true
