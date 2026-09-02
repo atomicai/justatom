@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, cast
 
-from justatom.agentic.schemas import CallKind, CallStatus, RunTrace
+from justatom.agentic.schemas import AgentObjective, CallKind, CallStatus, RunTrace
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,13 +90,23 @@ def _validate_document_id(document_id: object) -> None:
         raise ValueError("document_id must be a non-empty string")
 
 
-def _validate_inputs(trace: RunTrace, labels: EvidenceLabels, k: int) -> None:
+def _validate_inputs(
+    trace: RunTrace,
+    labels: EvidenceLabels,
+    k: int,
+    context_k: int | None,
+) -> int:
     if not isinstance(trace, RunTrace):
         raise TypeError("trace must be a RunTrace")
     if not isinstance(labels, EvidenceLabels):
         raise TypeError("labels must be EvidenceLabels")
     if isinstance(k, bool) or not isinstance(k, int) or k <= 0:
         raise ValueError("k must be a positive integer")
+    if context_k is None:
+        return trace.limits.max_context_documents if trace.objective is AgentObjective.CONTEXT else k
+    if isinstance(context_k, bool) or not isinstance(context_k, int) or context_k <= 0:
+        raise ValueError("context_k must be a positive integer or None")
+    return context_k
 
 
 def _deduplicate(document_ids: Iterable[str]) -> list[str]:
@@ -234,7 +244,13 @@ def _completion_target_satisfied(seen: set[str], labels: EvidenceLabels) -> bool
     return bool(positive_qrels) and positive_qrels.issubset(seen)
 
 
-def evaluate_trace(trace: RunTrace, labels: EvidenceLabels, k: int = 10) -> dict[str, Any]:
+def evaluate_trace(
+    trace: RunTrace,
+    labels: EvidenceLabels,
+    k: int = 10,
+    *,
+    context_k: int | None = None,
+) -> dict[str, Any]:
     """Evaluate recorded retrievals without exposing gold labels to the runtime.
 
     ``k`` truncates each retrieval hop.  Every retrieval call with a payload
@@ -242,10 +258,14 @@ def evaluate_trace(trace: RunTrace, labels: EvidenceLabels, k: int = 10) -> dict
     ``k`` cumulative slots.  The cumulative ranked series preserves every
     consumed slot (including repeats), while evidence completion uses a
     deduplicated seen set.  Final-context metrics independently evaluate the
-    first ``k`` document ids actually handed to the answer stage.
+    first ``context_k`` document ids actually handed to the downstream stage.
+    For answer-mode traces, ``context_k`` defaults to ``k`` so existing
+    evaluations retain their original depth. For context-mode traces it
+    defaults to the recorded ``max_context_documents`` budget. Citation
+    metrics continue to use ``k``.
     """
 
-    _validate_inputs(trace, labels, k)
+    resolved_context_k = _validate_inputs(trace, labels, k, context_k)
     hops = _retrieval_hops(trace, k)
     relevant_ids = set(labels.positive_qrels) or set(labels.evidence_document_ids)
 
@@ -311,8 +331,12 @@ def evaluate_trace(trace: RunTrace, labels: EvidenceLabels, k: int = 10) -> dict
         )
         cumulative.append(cumulative_metrics)
 
-    final_context_ids = _deduplicate(trace.final_context_document_ids[:k])
-    final_context = _ranking_metrics(final_context_ids, labels, evaluation_depth=k)
+    final_context_ids = _deduplicate(trace.final_context_document_ids[:resolved_context_k])
+    final_context = _ranking_metrics(
+        final_context_ids,
+        labels,
+        evaluation_depth=resolved_context_k,
+    )
     final_citation_ids = list(trace.final_cited_document_ids[:k])
     final_citations = _ranking_metrics(
         final_citation_ids,
@@ -334,7 +358,9 @@ def evaluate_trace(trace: RunTrace, labels: EvidenceLabels, k: int = 10) -> dict
 
     return {
         "run_id": trace.run_id,
+        "objective": trace.objective.value,
         "k": k,
+        "context_k": resolved_context_k,
         "positive_qrel_count": len(labels.positive_qrels),
         "required_evidence_group_count": len(tuple(labels.required_evidence_groups)),
         "retrieval_hop_count": len(hops),

@@ -7,7 +7,16 @@ import pytest
 
 from justatom.agentic.contracts import TracePersistenceError
 from justatom.agentic.runtime import AgenticCapacityError, AgenticConfigurationError, AgenticRunResult
-from justatom.agentic.schemas import EvidenceDocument, RunLimits, RunStatus, RunTrace, TerminationReason, TextCapturePolicy
+from justatom.agentic.schemas import (
+    TRACE_SCHEMA_VERSION,
+    AgentObjective,
+    EvidenceDocument,
+    RunLimits,
+    RunStatus,
+    RunTrace,
+    TerminationReason,
+    TextCapturePolicy,
+)
 from justatom.api.run import create_app
 
 
@@ -42,8 +51,12 @@ class FakeAgenticRuntime:
 def _result(
     status: RunStatus = RunStatus.COMPLETED,
     reason: TerminationReason = TerminationReason.ANSWERED,
+    *,
+    objective: AgentObjective = AgentObjective.ANSWER,
 ) -> AgenticRunResult:
-    answer = "API answer" if reason is TerminationReason.ANSWERED else None
+    answered = objective is AgentObjective.ANSWER and reason is TerminationReason.ANSWERED
+    answer = "API answer" if answered else None
+    cited_document_ids = ("doc-a",) if answered else ()
     evidence = (
         EvidenceDocument(
             document_id="doc-a",
@@ -54,12 +67,13 @@ def _result(
         ),
     )
     trace = RunTrace(
-        schema_version=1,
+        schema_version=TRACE_SCHEMA_VERSION,
         run_id="run-123",
         request_id="request-123",
         experiment_id=None,
         variant=None,
         seed=None,
+        objective=objective,
         config_fingerprint="fingerprint",
         planner_config_fingerprint="planner-fingerprint",
         retrieval_config_fingerprint="retrieval-fingerprint",
@@ -79,6 +93,9 @@ def _result(
             max_retrieval_calls=3,
             max_llm_calls=3,
             max_tokens=None,
+            top_k=10,
+            max_context_documents=50,
+            max_context_chars=24_000,
             max_duration_ms=60_000.0,
         ),
         steps=(),
@@ -86,7 +103,7 @@ def _result(
         answer_sha256=None,
         answer_text=None,
         final_context_chars=23,
-        final_cited_document_ids=("doc-a",),
+        final_cited_document_ids=cited_document_ids,
     )
     return AgenticRunResult(
         run_id="run-123",
@@ -97,8 +114,12 @@ def _result(
             "duration_ms": 12.0,
             "retrieval_call_count": 1,
             "final_context_chars": 23,
-            "citation_count": 1,
-            "citation_context_coverage": {"numerator": 1, "denominator": 1, "rate": 1.0},
+            "citation_count": len(cited_document_ids),
+            "citation_context_coverage": {
+                "numerator": len(cited_document_ids),
+                "denominator": len(cited_document_ids),
+                "rate": 1.0 if cited_document_ids else None,
+            },
         },
     )
 
@@ -220,6 +241,7 @@ def test_agentic_endpoint_forwards_request_and_returns_safe_evidence_and_metrics
         ]
         assert body == {
             "run_id": "run-123",
+            "objective": "answer",
             "answer": "API answer",
             "status": "completed",
             "termination_reason": "answered",
@@ -237,6 +259,43 @@ def test_agentic_endpoint_forwards_request_and_returns_safe_evidence_and_metrics
         assert events == ["agent.close", "retrieval.close"]
         assert agent.close_calls == 1
         assert retrieval.close_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_context_objective_returns_ranked_evidence_without_an_answer_or_citations() -> None:
+    async def scenario() -> None:
+        result = _result(
+            reason=TerminationReason.AGENT_STOP,
+            objective=AgentObjective.CONTEXT,
+        )
+        app = create_app(
+            runtime=FakeRetrievalRuntime(),
+            agentic_runtime=FakeAgenticRuntime(result),
+            start_mq=False,
+        )
+
+        async with app.test_app() as test_app:
+            response = await test_app.test_client().post(
+                "/searching/agentic",
+                json={"text": "find evidence"},
+            )
+            body = await response.get_json()
+
+        assert response.status_code == 200
+        assert body["objective"] == "context"
+        assert body["status"] == "completed"
+        assert body["termination_reason"] == "agent_stop"
+        assert body["answer"] is None
+        assert body["cited_document_ids"] == []
+        assert body["evidence"] == [
+            {
+                "id": "doc-a",
+                "rank": 1,
+                "score": 0.91,
+                "content": "private supporting text",
+            }
+        ]
 
     asyncio.run(scenario())
 

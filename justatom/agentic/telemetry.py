@@ -264,7 +264,7 @@ def _reject_json_constant(value: str) -> None:
 
 
 def iter_jsonl_traces(path: str | Path) -> Iterator[RunTrace]:
-    """Stream strict schema-v1 traces from a JSON Lines artifact."""
+    """Stream strict current-schema traces from a JSON Lines artifact."""
 
     if not isinstance(path, (str, Path)):
         raise TypeError("path must be a string or pathlib.Path")
@@ -497,6 +497,8 @@ def derive_run_metrics(trace: RunTrace) -> dict[str, Any]:
     truncated_document_count = sum(
         call.retrieval.truncated_document_count for call in successful_retrieval_calls if call.retrieval is not None
     )
+    retrieval_requested_slot_count = sum(call.retrieval.top_k_requested for call in retrieval_calls if call.retrieval is not None)
+    retrieval_slot_budget = trace.limits.max_retrieval_calls * trace.limits.top_k
     final_context_ids = set(trace.final_context_document_ids)
     cited_ids = trace.final_cited_document_ids
     cited_in_context_count = sum(document_id in final_context_ids for document_id in cited_ids)
@@ -507,6 +509,7 @@ def derive_run_metrics(trace: RunTrace) -> dict[str, Any]:
         "experiment_id": trace.experiment_id,
         "variant": trace.variant,
         "seed": trace.seed,
+        "objective": trace.objective.value,
         "config_fingerprint": trace.config_fingerprint,
         "planner_config_fingerprint": trace.planner_config_fingerprint,
         "retrieval_config_fingerprint": trace.retrieval_config_fingerprint,
@@ -518,6 +521,7 @@ def derive_run_metrics(trace: RunTrace) -> dict[str, Any]:
         "answered_with_citations": (
             trace.status is RunStatus.COMPLETED and trace.termination_reason is TerminationReason.ANSWERED and bool(cited_ids)
         ),
+        "agent_stopped": trace.status is RunStatus.COMPLETED and trace.termination_reason is TerminationReason.AGENT_STOP,
         "duration_ms": trace.duration_ms,
         "queue_latency_ms": trace.queue_latency_ms,
         "execution_ms": trace.execution_ms,
@@ -543,6 +547,9 @@ def derive_run_metrics(trace: RunTrace) -> dict[str, Any]:
         "llm_call_count": len(token_calls),
         "retrieval_call_count": len(retrieval_calls),
         "successful_retrieval_call_count": len(successful_retrieval_calls),
+        "retrieval_requested_slot_count": retrieval_requested_slot_count,
+        "retrieval_slot_budget": retrieval_slot_budget,
+        "retrieval_slot_budget_utilization": _coverage(retrieval_requested_slot_count, retrieval_slot_budget),
         "token_totals": token_totals,
         "token_usage_coverage": _coverage(usage_observed, len(token_calls)),
         "token_coverage": token_coverage,
@@ -579,6 +586,11 @@ def derive_run_metrics(trace: RunTrace) -> dict[str, Any]:
         "final_context_document_count": len(trace.final_context_document_ids),
         "final_context_unique_document_count": len(set(trace.final_context_document_ids)),
         "final_context_chars": trace.final_context_chars,
+        "final_context_document_budget": _coverage(
+            len(trace.final_context_document_ids),
+            trace.limits.max_context_documents,
+        ),
+        "final_context_char_budget": _coverage(trace.final_context_chars, trace.limits.max_context_chars),
         "citation_count": len(cited_ids),
         "unique_citation_count": len(set(cited_ids)),
         "citations_in_context_count": cited_in_context_count,
@@ -640,6 +652,7 @@ def aggregate_run_metrics(traces: Iterable[RunTrace]) -> dict[str, Any]:
     operational_success_count = sum(metric["operational_success"] for metric in derived)
     answered_count = sum(metric["answered"] for metric in derived)
     answered_with_citations_count = sum(metric["answered_with_citations"] for metric in derived)
+    agent_stopped_count = sum(metric["agent_stopped"] for metric in derived)
     status_counts = Counter(metric["status"] for metric in derived)
     termination_counts = Counter(metric["termination_reason"] for metric in derived)
     token_budgets = [metric["token_budget"] for metric in derived if metric["token_budget"]["limit"] is not None]
@@ -741,6 +754,7 @@ def aggregate_run_metrics(traces: Iterable[RunTrace]) -> dict[str, Any]:
         "experiment_id_counts": _value_counts(trace.experiment_id for trace in materialized),
         "variant_counts": _value_counts(trace.variant for trace in materialized),
         "seed_counts": _value_counts(trace.seed for trace in materialized),
+        "objective_counts": _value_counts(trace.objective.value for trace in materialized),
         "config_fingerprint_counts": dict(sorted(config_fingerprint_counts.items())),
         "planner_config_fingerprint_counts": dict(sorted(planner_fingerprint_counts.items())),
         "retrieval_config_fingerprint_counts": dict(sorted(retrieval_fingerprint_counts.items())),
@@ -749,12 +763,14 @@ def aggregate_run_metrics(traces: Iterable[RunTrace]) -> dict[str, Any]:
         "homogeneous_config_fingerprint": len(config_fingerprint_counts) <= 1 if run_count else None,
         "homogeneous_planner_config_fingerprint": len(planner_fingerprint_counts) <= 1 if run_count else None,
         "homogeneous_retrieval_config_fingerprint": len(retrieval_fingerprint_counts) <= 1 if run_count else None,
+        "homogeneous_objective": len({trace.objective for trace in materialized}) <= 1 if run_count else None,
         "homogeneous_filters_sha256": (
             len(set(filter_hashes)) <= 1 if run_count and known_filter_hash_count == run_count else None
         ),
         "operational_success": _coverage(operational_success_count, run_count),
         "answered": _coverage(answered_count, run_count),
         "answered_with_citations": _coverage(answered_with_citations_count, answered_count),
+        "agent_stopped": _coverage(agent_stopped_count, run_count),
         "status_counts": {status.value: status_counts[status.value] for status in RunStatus},
         "termination_reason_counts": {reason.value: termination_counts[reason.value] for reason in TerminationReason},
         "latency_ms": {
@@ -786,6 +802,12 @@ def aggregate_run_metrics(traces: Iterable[RunTrace]) -> dict[str, Any]:
         "llm_call_count": len(token_calls),
         "retrieval_call_count": len(retrieval_calls),
         "successful_retrieval_call_count": len(successful_retrieval_calls),
+        "retrieval_requested_slot_count": sum(metric["retrieval_requested_slot_count"] for metric in derived),
+        "retrieval_slot_budget": sum(metric["retrieval_slot_budget"] for metric in derived),
+        "retrieval_slot_budget_utilization": _coverage(
+            sum(metric["retrieval_requested_slot_count"] for metric in derived),
+            sum(metric["retrieval_slot_budget"] for metric in derived),
+        ),
         "token_totals": token_totals,
         "token_usage_coverage": _coverage(usage_observed, len(token_calls)),
         "token_coverage": token_coverage,
@@ -855,6 +877,14 @@ def aggregate_run_metrics(traces: Iterable[RunTrace]) -> dict[str, Any]:
                 denominator=run_count,
             ),
         },
+        "final_context_document_budget": _coverage(
+            sum(len(trace.final_context_document_ids) for trace in materialized),
+            sum(trace.limits.max_context_documents for trace in materialized),
+        ),
+        "final_context_char_budget": _coverage(
+            sum(trace.final_context_chars for trace in materialized),
+            sum(trace.limits.max_context_chars for trace in materialized),
+        ),
         "citation_count": len(all_cited_ids),
         "within_run_unique_citation_count": sum(len(set(trace.final_cited_document_ids)) for trace in materialized),
         "corpus_unique_cited_document_count": len(set(all_cited_ids)),

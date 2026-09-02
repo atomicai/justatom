@@ -13,6 +13,7 @@ from justatom.agentic.contracts import TraceDeliveryPendingError
 from justatom.agentic.schemas import (
     TRACE_SCHEMA_VERSION,
     AgentAction,
+    AgentObjective,
     CallKind,
     CallStatus,
     CallTrace,
@@ -127,6 +128,7 @@ def _trace(*, run_id: str = "run-1", duration_ms: float = 100.0) -> RunTrace:
         experiment_id=None,
         variant=None,
         seed=7,
+        objective=AgentObjective.ANSWER,
         config_fingerprint="config",
         planner_config_fingerprint="planner-config",
         retrieval_config_fingerprint="retrieval-config",
@@ -146,12 +148,16 @@ def _trace(*, run_id: str = "run-1", duration_ms: float = 100.0) -> RunTrace:
             max_retrieval_calls=5,
             max_llm_calls=5,
             max_tokens=1000,
+            top_k=2,
+            max_context_documents=5,
+            max_context_chars=10_000,
             max_duration_ms=1000.0,
         ),
         steps=steps,
         final_context_document_ids=("d1", "d2", "d3"),
         answer_sha256="answer",
         answer_text=None,
+        final_context_chars=300,
     )
 
 
@@ -394,6 +400,101 @@ def test_trace_loader_rejects_hashes_under_none_capture_policy():
         RunTrace.from_dict(payload)
 
 
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("objective", "trace.objective is required"),
+        ("top_k", "trace.limits.top_k is required"),
+        ("max_context_documents", "trace.limits.max_context_documents is required"),
+        ("max_context_chars", "trace.limits.max_context_chars is required"),
+    ],
+)
+def test_trace_loader_requires_objective_and_reproducible_context_limits(field: str, message: str) -> None:
+    payload = _trace().to_dict()
+    if field == "objective":
+        payload.pop(field)
+    else:
+        payload["limits"].pop(field)
+
+    with pytest.raises(ValueError, match=message):
+        RunTrace.from_dict(payload)
+
+
+def test_trace_loader_rejects_invalid_objective() -> None:
+    payload = _trace().to_dict()
+    payload["objective"] = "generation"
+
+    with pytest.raises(ValueError, match="trace.objective is invalid"):
+        RunTrace.from_dict(payload)
+
+
+def test_trace_loader_rejects_the_pre_context_schema_before_decoding_new_fields() -> None:
+    payload = _trace().to_dict()
+    payload["schema_version"] = 1
+    payload.pop("objective")
+    payload["limits"].pop("top_k")
+
+    with pytest.raises(ValueError, match="unsupported trace schema version: 1"):
+        RunTrace.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"top_k": 0},
+        {"max_context_documents": 0},
+        {"max_context_chars": 0},
+    ],
+)
+def test_run_limits_require_positive_context_budget_fields(limits: dict[str, int]) -> None:
+    with pytest.raises(ValueError, match="must be a positive integer"):
+        replace(_trace().limits, **limits)
+
+
+def test_run_trace_enforces_final_context_limits() -> None:
+    trace = _trace()
+
+    with pytest.raises(ValueError, match="limits.max_context_chars"):
+        replace(trace, final_context_chars=trace.limits.max_context_chars + 1)
+    with pytest.raises(ValueError, match="limits.max_context_documents"):
+        replace(
+            trace,
+            final_context_document_ids=tuple(f"doc-{index}" for index in range(trace.limits.max_context_documents + 1)),
+        )
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        DecisionTrace(action=AgentAction.SEARCH, query_sha256="query"),
+        DecisionTrace(action=AgentAction.ANSWER, answer_sha256="answer"),
+        DecisionTrace(action=AgentAction.STOP),
+    ],
+)
+def test_decision_trace_action_exclusivity_accepts_valid_shapes(decision: DecisionTrace) -> None:
+    assert isinstance(decision.action, AgentAction)
+
+
+@pytest.mark.parametrize(
+    ("action", "values", "message"),
+    [
+        (AgentAction.SEARCH, {"answer_sha256": "answer"}, "must not contain an answer"),
+        (AgentAction.SEARCH, {"cited_document_ids": ("doc",)}, "must not contain citations"),
+        (AgentAction.ANSWER, {"query_sha256": "query"}, "must not contain a query"),
+        (AgentAction.STOP, {"query_text": "query"}, "must not contain a query or answer"),
+        (AgentAction.STOP, {"answer_sha256": "answer"}, "must not contain a query or answer"),
+        (AgentAction.STOP, {"cited_document_ids": ("doc",)}, "must not contain citations"),
+    ],
+)
+def test_decision_trace_action_exclusivity_rejects_hidden_payloads(
+    action: AgentAction,
+    values: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        DecisionTrace(action=action, **values)
+
+
 def test_jsonl_sink_rejects_nan_before_writing(tmp_path):
     async def exercise() -> None:
         path = tmp_path / "traces.jsonl"
@@ -424,12 +525,14 @@ def test_derive_run_metrics_preserves_exact_token_coverage_and_diversity():
     assert metrics["experiment_id"] is None
     assert metrics["variant"] is None
     assert metrics["seed"] == 7
+    assert metrics["objective"] == "answer"
     assert metrics["config_fingerprint"] == "config"
     assert metrics["planner_config_fingerprint"] == "planner-config"
     assert metrics["retrieval_config_fingerprint"] == "retrieval-config"
     assert metrics["filters_sha256"] is None
     assert metrics["operational_success"] is True
     assert metrics["answered"] is True
+    assert metrics["agent_stopped"] is False
     assert metrics["call_count"] == 4
     assert metrics["calls_by_kind"] == {"planner": 2, "retrieval": 2, "reranker": 0, "answer": 0}
     assert metrics["call_latency_ms_by_kind"]["retrieval"] == {
@@ -440,6 +543,13 @@ def test_derive_run_metrics_preserves_exact_token_coverage_and_diversity():
     }
     assert metrics["retrieval_total_ms"] == 10.0
     assert metrics["planner_total_ms"] == 20.0
+    assert metrics["retrieval_requested_slot_count"] == 6
+    assert metrics["retrieval_slot_budget"] == 10
+    assert metrics["retrieval_slot_budget_utilization"] == {
+        "numerator": 6,
+        "denominator": 10,
+        "rate": 0.6,
+    }
     assert metrics["token_totals"]["input_tokens"] == 10
     assert metrics["token_coverage"]["input_tokens"] == {"numerator": 1, "denominator": 2, "rate": 0.5}
     assert metrics["token_coverage"]["cached_input_tokens"] == {
@@ -477,6 +587,16 @@ def test_derive_run_metrics_preserves_exact_token_coverage_and_diversity():
     assert metrics["retrieval_backend_document_count"] == 4
     assert metrics["retrieval_backend_count_coverage"] == {"numerator": 2, "denominator": 2, "rate": 1.0}
     assert metrics["retrieval_locally_truncated_document_count"] == 0
+    assert metrics["final_context_document_budget"] == {
+        "numerator": 3,
+        "denominator": 5,
+        "rate": 0.6,
+    }
+    assert metrics["final_context_char_budget"] == {
+        "numerator": 300,
+        "denominator": 10_000,
+        "rate": 0.03,
+    }
     assert metrics["retrieval_hops"] == [
         {
             "retrieval_index": 0,
@@ -588,10 +708,13 @@ def test_aggregate_run_metrics_reports_denominators_and_all_percentiles():
     assert metrics["experiment_id_counts"] == [{"value": None, "count": 2}]
     assert metrics["variant_counts"] == [{"value": None, "count": 2}]
     assert metrics["seed_counts"] == [{"value": 7, "count": 2}]
+    assert metrics["objective_counts"] == [{"value": "answer", "count": 2}]
     assert metrics["config_fingerprint_counts"] == {"config": 2}
     assert metrics["homogeneous_config_fingerprint"] is True
+    assert metrics["homogeneous_objective"] is True
     assert metrics["operational_success"] == {"numerator": 1, "denominator": 2, "rate": 0.5}
     assert metrics["answered"] == {"numerator": 1, "denominator": 2, "rate": 0.5}
+    assert metrics["agent_stopped"] == {"numerator": 0, "denominator": 2, "rate": 0.0}
     assert metrics["latency_ms"]["all"] == {
         "numerator": 2,
         "denominator": 2,
@@ -609,6 +732,13 @@ def test_aggregate_run_metrics_reports_denominators_and_all_percentiles():
     assert metrics["latency_ms"]["operational_success"]["p99"] == 100.0
     assert metrics["call_latency_ms_by_kind"]["retrieval"]["p50"] == 5.0
     assert metrics["call_latency_ms_by_kind"]["planner"]["sum"] == 40.0
+    assert metrics["retrieval_requested_slot_count"] == 12
+    assert metrics["retrieval_slot_budget"] == 20
+    assert metrics["retrieval_slot_budget_utilization"] == {
+        "numerator": 12,
+        "denominator": 20,
+        "rate": 0.6,
+    }
     assert metrics["cost_total_usd"] == 0.008
     assert metrics["retrieval_hop_novelty"]["rate"] == 0.75
     assert metrics["retrieval_previous_hop_jaccard"]["mean"] == pytest.approx(1 / 3)
@@ -620,6 +750,16 @@ def test_aggregate_run_metrics_reports_denominators_and_all_percentiles():
     assert metrics["final_context_document_count"] == 6
     assert metrics["final_context_within_run_unique_document_count"] == 6
     assert metrics["corpus_unique_final_context_document_count"] == 3
+    assert metrics["final_context_document_budget"] == {
+        "numerator": 6,
+        "denominator": 10,
+        "rate": 0.6,
+    }
+    assert metrics["final_context_char_budget"] == {
+        "numerator": 600,
+        "denominator": 20_000,
+        "rate": 0.03,
+    }
     assert metrics["retrieval_document_diversity"] == 0.75
     assert metrics["retrieval_document_redundancy"] == 0.25
     assert metrics["token_budget"]["run_count"] == 2
@@ -631,9 +771,34 @@ def test_aggregate_run_metrics_has_no_nan_for_empty_input():
 
     assert metrics["operational_success"] == {"numerator": 0, "denominator": 0, "rate": None}
     assert metrics["homogeneous_config_fingerprint"] is None
+    assert metrics["homogeneous_objective"] is None
     assert metrics["homogeneous_filters_sha256"] is None
     assert metrics["latency_ms"]["all"]["p99"] is None
     json.dumps(metrics, allow_nan=False)
+
+
+def test_aggregate_run_metrics_exposes_mixed_objectives_and_context_stop_rate() -> None:
+    context_trace = replace(
+        _trace(run_id="context-run"),
+        objective=AgentObjective.CONTEXT,
+        termination_reason=TerminationReason.AGENT_STOP,
+        answer_sha256=None,
+        answer_text=None,
+        final_cited_document_ids=(),
+    )
+
+    context_metrics = derive_run_metrics(context_trace)
+    aggregate = aggregate_run_metrics([_trace(), context_trace])
+
+    assert context_metrics["objective"] == "context"
+    assert context_metrics["answered"] is False
+    assert context_metrics["agent_stopped"] is True
+    assert aggregate["objective_counts"] == [
+        {"value": "answer", "count": 1},
+        {"value": "context", "count": 1},
+    ]
+    assert aggregate["homogeneous_objective"] is False
+    assert aggregate["agent_stopped"] == {"numerator": 1, "denominator": 2, "rate": 0.5}
 
 
 def test_aggregate_latency_sum_overflow_is_explicit_and_json_safe():

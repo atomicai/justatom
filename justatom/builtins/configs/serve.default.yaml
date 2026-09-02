@@ -10,6 +10,7 @@ retrieval:
 
 agentic:
   enabled: false
+  objective: answer
   max_steps: 4
   max_retrieval_calls: 3
   max_llm_calls: 3

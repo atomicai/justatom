@@ -9,6 +9,7 @@ from justatom.agentic.evaluation import EvidenceLabels, evaluate_trace
 from justatom.agentic.schemas import (
     TRACE_SCHEMA_VERSION,
     AgentAction,
+    AgentObjective,
     CallKind,
     CallStatus,
     CallTrace,
@@ -90,6 +91,7 @@ def _trace(
         experiment_id=None,
         variant=None,
         seed=None,
+        objective=AgentObjective.ANSWER,
         config_fingerprint="config",
         planner_config_fingerprint="planner-config",
         retrieval_config_fingerprint="retrieval-config",
@@ -109,6 +111,9 @@ def _trace(
             max_retrieval_calls=5,
             max_llm_calls=5,
             max_tokens=None,
+            top_k=max((len(hop) for hop in hops), default=1),
+            max_context_documents=max(len(final_context), 1),
+            max_context_chars=1_000,
             max_duration_ms=1000.0,
         ),
         steps=steps,
@@ -132,6 +137,7 @@ def test_evaluate_trace_reports_per_hop_cumulative_and_final_context_metrics():
 
     result = evaluate_trace(trace, labels, k=2)
 
+    assert result["objective"] == "answer"
     assert result["retrieval_hop_count"] == 2
     assert result["per_hop"][0]["hit_at_depth"] is True
     assert result["per_hop"][0]["recall_at_depth"] == 0.5
@@ -151,6 +157,40 @@ def test_evaluate_trace_reports_per_hop_cumulative_and_final_context_metrics():
     assert result["evidence_completed"] is True
 
 
+def test_context_objective_without_an_answer_has_identical_retrieval_and_context_metrics() -> None:
+    answer_trace = _trace(
+        (("noise", "a"), ("b",)),
+        final_context=("a", "b"),
+    )
+    context_trace = replace(
+        answer_trace,
+        objective=AgentObjective.CONTEXT,
+        termination_reason=TerminationReason.AGENT_STOP,
+        answer_sha256=None,
+        answer_text=None,
+        final_cited_document_ids=(),
+    )
+    labels = EvidenceLabels(
+        qrels={"a": 1, "b": 2},
+        required_evidence_groups=(("a",), ("b",)),
+    )
+
+    answer_result = evaluate_trace(answer_trace, labels, k=2, context_k=2)
+    context_result = evaluate_trace(context_trace, labels, k=2, context_k=2)
+    context_default = evaluate_trace(context_trace, labels, k=1)
+
+    assert context_trace.answer_sha256 is None
+    assert context_result["objective"] == "context"
+    assert context_result["per_hop"] == answer_result["per_hop"]
+    assert context_result["cumulative"] == answer_result["cumulative"]
+    assert context_result["final_context"] == answer_result["final_context"]
+    assert context_result["first_hit_hop"] == answer_result["first_hit_hop"]
+    assert context_result["completion_hop"] == answer_result["completion_hop"]
+    assert context_result["evidence_completed"] == answer_result["evidence_completed"]
+    assert context_default["context_k"] == context_trace.limits.max_context_documents
+    assert context_default["final_context"]["recall_at_depth"] == 1.0
+
+
 def test_k_is_applied_to_each_hop_before_cumulative_metrics():
     trace = _trace((("n1", "n2", "gold"), ("gold",)), final_context=("n1", "n2", "gold"))
     result = evaluate_trace(trace, EvidenceLabels(qrels={"gold": 1}), k=2)
@@ -161,6 +201,31 @@ def test_k_is_applied_to_each_hop_before_cumulative_metrics():
     assert result["first_hit_hop"] == 2
     assert result["cumulative"][0]["document_ids"] == ["n1", "n2"]
     assert result["final_context"]["hit_at_depth"] is False
+
+
+def test_context_k_can_evaluate_later_hop_documents_without_changing_retrieval_k():
+    trace = _trace(
+        (("noise",), ("gold",)),
+        final_context=("noise", "gold"),
+    )
+    labels = EvidenceLabels(qrels={"gold": 1})
+
+    default_result = evaluate_trace(trace, labels, k=1)
+    expanded_result = evaluate_trace(trace, labels, k=1, context_k=2)
+
+    assert default_result["k"] == 1
+    assert default_result["context_k"] == 1
+    assert default_result["final_context"]["document_ids"] == ["noise"]
+    assert default_result["final_context"]["hit_at_depth"] is False
+
+    assert expanded_result["k"] == 1
+    assert expanded_result["context_k"] == 2
+    assert expanded_result["per_hop"] == default_result["per_hop"]
+    assert expanded_result["cumulative"] == default_result["cumulative"]
+    assert expanded_result["final_context"]["evaluation_depth"] == 2
+    assert expanded_result["final_context"]["document_ids"] == ["noise", "gold"]
+    assert expanded_result["final_context"]["hit_at_depth"] is True
+    assert expanded_result["final_context"]["recall_at_depth"] == 1.0
 
 
 def test_cumulative_ranking_preserves_duplicate_slots_before_a_later_hit():
@@ -304,6 +369,16 @@ def test_run_trace_rejects_non_integer_schema_version(schema_version):
 def test_evaluate_trace_rejects_invalid_k(k):
     with pytest.raises(ValueError, match="positive integer"):
         evaluate_trace(_trace((), final_context=()), EvidenceLabels(), k=k)
+
+
+@pytest.mark.parametrize("context_k", [0, -1, True, 1.5])
+def test_evaluate_trace_rejects_invalid_context_k(context_k):
+    with pytest.raises(ValueError, match="context_k must be a positive integer or None"):
+        evaluate_trace(
+            _trace((), final_context=()),
+            EvidenceLabels(),
+            context_k=context_k,
+        )
 
 
 def test_evidence_labels_validate_qrels_and_required_groups():

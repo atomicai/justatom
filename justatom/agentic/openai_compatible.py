@@ -11,6 +11,7 @@ import httpx
 
 from justatom.agentic.schemas import (
     AgentAction,
+    AgentObjective,
     AttemptTrace,
     CallStatus,
     CostUsage,
@@ -35,6 +36,23 @@ For answer, query must be null, answer must be a non-empty string, and cited_doc
 only identifiers from context_documents. reason may be a string or null.
 
 Return only the JSON object required by the response schema. Never invent document identifiers."""
+
+DEFAULT_CONTEXT_SYSTEM_PROMPT = """You are the planner for an adaptive context acquisition agent.
+Choose exactly one action for the current step:
+- search: provide a focused, non-empty search query when more evidence is needed.
+- stop: stop retrieval when the supplied context is sufficient or no useful search remains.
+
+Before choosing stop, verify that every distinct part of the question is explicitly supported by
+context_documents. If any part is unsupported and retrieval calls remain, search specifically for
+that missing evidence. Never treat a generic statement or an unsupported inference as evidence.
+If every part is already explicitly supported, you must choose stop; do not search again for facts
+that are present in context_documents.
+
+Every output must contain exactly these five fields: action, query, answer, reason, cited_document_ids.
+For search, query must be a non-empty string, answer must be null, and cited_document_ids must be [].
+For stop, query and answer must be null, and cited_document_ids must be []. reason may be a string or null.
+
+Do not generate a final answer. Return only the JSON object required by the response schema."""
 
 
 _DECISION_SCHEMA: dict[str, Any] = {
@@ -74,12 +92,44 @@ _DECISION_SCHEMA: dict[str, Any] = {
     ],
 }
 
+_CONTEXT_DECISION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "oneOf": [
+        deepcopy(_DECISION_SCHEMA["oneOf"][0]),
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "const": AgentAction.STOP.value},
+                "query": {"type": "null"},
+                "answer": {"type": "null"},
+                "reason": {"type": ["string", "null"]},
+                "cited_document_ids": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "maxItems": 0,
+                },
+            },
+            "required": ["action", "query", "answer", "reason", "cited_document_ids"],
+            "additionalProperties": False,
+        },
+    ],
+}
+
 _RESPONSE_FORMAT: dict[str, Any] = {
     "type": "json_schema",
     "json_schema": {
         "name": "agentic_planner_decision",
         "strict": True,
         "schema": _DECISION_SCHEMA,
+    },
+}
+
+_CONTEXT_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "agentic_context_planner_decision",
+        "strict": True,
+        "schema": _CONTEXT_DECISION_SCHEMA,
     },
 }
 
@@ -122,6 +172,7 @@ class OpenAICompatibleChatBackend:
         system_prompt: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         client: httpx.AsyncClient | None = None,
+        objective: AgentObjective | str = AgentObjective.ANSWER,
     ) -> None:
         if not isinstance(base_url, str) or not base_url.strip():
             raise ValueError("base_url must be a non-empty string")
@@ -153,16 +204,22 @@ class OpenAICompatibleChatBackend:
             raise ValueError("api_key must be a string or null")
         if transport is not None and client is not None:
             raise ValueError("transport and client are mutually exclusive")
+        try:
+            objective = AgentObjective(objective)
+        except (TypeError, ValueError) as error:
+            raise ValueError("objective must be answer or context") from error
 
         self.base_url = base_url.strip().rstrip("/")
         self.model = model.strip()
+        self.objective = objective
         self._endpoint = f"{self.base_url}/chat/completions"
         self._timeout_seconds = float(timeout_seconds)
         self._temperature = float(temperature)
         self._max_tokens = max_tokens
         self._max_response_bytes = max_response_bytes
         self._seed = seed
-        self._system_prompt = DEFAULT_SYSTEM_PROMPT if system_prompt is None else system_prompt
+        default_prompt = DEFAULT_SYSTEM_PROMPT if objective is AgentObjective.ANSWER else DEFAULT_CONTEXT_SYSTEM_PROMPT
+        self._system_prompt = default_prompt if system_prompt is None else system_prompt
         self._prompt_fingerprint = sha256_text(self._system_prompt)
         config_payload = {
             "backend": "openai-compatible",
@@ -173,6 +230,7 @@ class OpenAICompatibleChatBackend:
             "max_tokens": self._max_tokens,
             "max_response_bytes": self._max_response_bytes,
             "seed": self._seed,
+            "objective": self.objective.value,
             "prompt_fingerprint": self._prompt_fingerprint,
         }
         self._config_fingerprint = sha256_text(
@@ -210,6 +268,31 @@ class OpenAICompatibleChatBackend:
             attempt = self._attempt(started, status=CallStatus.ERROR, error=error)
             raise OpenAICompatibleChatError("OpenAI-compatible chat backend is closed", attempts=(attempt,))
 
+        if not isinstance(request, PlannerRequest):
+            error = ErrorTrace(
+                component=self.backend_name,
+                category=ErrorCategory.VALIDATION,
+                code="invalid_request",
+                retryable=False,
+            )
+            attempt = self._attempt(started, status=CallStatus.ERROR, error=error)
+            raise OpenAICompatibleChatError(
+                "Planner request could not be serialized",
+                attempts=(attempt,),
+            )
+        if request.objective is not self.objective:
+            error = ErrorTrace(
+                component=self.backend_name,
+                category=ErrorCategory.VALIDATION,
+                code="objective_mismatch",
+                retryable=False,
+            )
+            attempt = self._attempt(started, status=CallStatus.ERROR, error=error)
+            raise OpenAICompatibleChatError(
+                "Planner request objective does not match the backend objective",
+                attempts=(attempt,),
+            )
+
         try:
             user_content = _encode_request(request)
         except (AttributeError, TypeError, ValueError, OverflowError):
@@ -230,7 +313,7 @@ class OpenAICompatibleChatBackend:
             ],
             "temperature": self._temperature,
             "max_tokens": self._max_tokens,
-            "response_format": deepcopy(_RESPONSE_FORMAT),
+            "response_format": deepcopy(_RESPONSE_FORMAT if self.objective is AgentObjective.ANSWER else _CONTEXT_RESPONSE_FORMAT),
         }
         if self._seed is not None:
             request_body["seed"] = self._seed
@@ -359,7 +442,11 @@ class OpenAICompatibleChatBackend:
         provider_request_id = provider_request_id or _payload_request_id(response_payload)
 
         try:
-            decision, response_model, finish_reason, usage, cost, cache_hit = _parse_completion(response_payload, self.model)
+            decision, response_model, finish_reason, usage, cost, cache_hit = _parse_completion(
+                response_payload,
+                self.model,
+                self.objective,
+            )
         except (TypeError, ValueError, OverflowError) as exc:
             error = ErrorTrace(
                 component=self.backend_name,
@@ -420,6 +507,7 @@ class OpenAICompatibleChatBackend:
 
 def _encode_request(request: PlannerRequest) -> str:
     payload = {
+        "objective": request.objective.value,
         "question": request.question,
         "observations": [
             {
@@ -502,6 +590,7 @@ async def _read_bounded_response(response: httpx.Response, max_response_bytes: i
 def _parse_completion(
     payload: Any,
     configured_model: str,
+    objective: AgentObjective,
 ) -> tuple[PlannerDecision, str, str | None, TokenUsage | None, CostUsage | None, bool | None]:
     if not isinstance(payload, Mapping):
         raise _InvalidResponse("completion must be an object")
@@ -527,12 +616,12 @@ def _parse_completion(
     if not isinstance(response_model, str) or not response_model.strip():
         raise _InvalidResponse("model must be a non-empty string or null")
 
-    decision = _parse_decision(content)
+    decision = _parse_decision(content, objective)
     usage, cost, cache_hit = _parse_usage(payload.get("usage", _MISSING))
     return decision, response_model, finish_reason, usage, cost, cache_hit
 
 
-def _parse_decision(content: str) -> PlannerDecision:
+def _parse_decision(content: str, objective: AgentObjective) -> PlannerDecision:
     try:
         value = json.loads(
             content,
@@ -553,6 +642,11 @@ def _parse_decision(content: str) -> PlannerDecision:
         action = AgentAction(action_value)
     except (TypeError, ValueError) as exc:
         raise _InvalidResponse("decision action is invalid") from exc
+    allowed_actions = (
+        {AgentAction.SEARCH, AgentAction.ANSWER} if objective is AgentObjective.ANSWER else {AgentAction.SEARCH, AgentAction.STOP}
+    )
+    if action not in allowed_actions:
+        raise _InvalidResponse("decision action does not match the configured objective")
 
     query = value.get("query")
     answer = value.get("answer")
@@ -680,6 +774,7 @@ def _reject_json_constant(value: str) -> None:
 
 
 __all__ = [
+    "DEFAULT_CONTEXT_SYSTEM_PROMPT",
     "DEFAULT_SYSTEM_PROMPT",
     "OpenAICompatibleChatBackend",
     "OpenAICompatibleChatError",

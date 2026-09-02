@@ -22,6 +22,7 @@ from justatom.agentic.runtime import (
 )
 from justatom.agentic.schemas import (
     AgentAction,
+    AgentObjective,
     AttemptTrace,
     CallKind,
     CallStatus,
@@ -117,6 +118,10 @@ def _search(query: str, *, usage: TokenUsage | None = None) -> PlannerReply:
     return PlannerReply(decision=PlannerDecision(action=AgentAction.SEARCH, query=query), usage=usage)
 
 
+def _stop(*, reason: str | None = None) -> PlannerReply:
+    return PlannerReply(decision=PlannerDecision(action=AgentAction.STOP, reason=reason))
+
+
 def _runtime(
     retriever: ScriptedRetriever,
     backend: ScriptedBackend,
@@ -190,6 +195,69 @@ def test_initial_retrieval_then_answer_records_complete_trace_and_nullable_usage
         await runtime.close()
         assert backend.close_calls == 1
         assert sink.close_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_context_objective_stops_with_evidence_and_without_an_answer() -> None:
+    async def scenario() -> None:
+        retriever = ScriptedRetriever([[FakeDocument("doc-a", "support", 0.9)]])
+        backend = ScriptedBackend([_stop(reason="context is sufficient")])
+        runtime, sink = _runtime(
+            retriever,
+            backend,
+            config=AgenticRuntimeConfig(objective="context"),
+        )
+
+        result = await runtime.run("What evidence is needed?")
+
+        assert runtime.config.objective is AgentObjective.CONTEXT
+        assert result.answer is None
+        assert [document.document_id for document in result.evidence] == ["doc-a"]
+        assert result.trace.status is RunStatus.COMPLETED
+        assert result.trace.termination_reason is TerminationReason.AGENT_STOP
+        assert result.trace.objective is AgentObjective.CONTEXT
+        assert result.trace.answer_sha256 is None
+        assert result.trace.answer_text is None
+        assert result.trace.final_cited_document_ids == ()
+        assert [step.action for step in result.trace.steps] == [AgentAction.SEARCH, AgentAction.STOP]
+        assert result.trace.steps[-1].decision is not None
+        assert result.trace.steps[-1].decision.action is AgentAction.STOP
+        assert result.trace.limits.top_k == runtime.config.top_k
+        assert result.trace.limits.max_context_documents == runtime.config.max_context_documents
+        assert result.trace.limits.max_context_chars == runtime.config.max_context_chars
+        assert result.metrics["answered"] is False
+        assert sink.traces == [result.trace]
+        await runtime.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("objective", "reply"),
+    [
+        (AgentObjective.ANSWER, _stop()),
+        (AgentObjective.CONTEXT, _answer()),
+    ],
+)
+def test_runtime_rejects_planner_actions_from_the_other_objective(
+    objective: AgentObjective,
+    reply: PlannerReply,
+) -> None:
+    async def scenario() -> None:
+        retriever = ScriptedRetriever([[FakeDocument("doc-a", "support")]])
+        runtime, _ = _runtime(
+            retriever,
+            ScriptedBackend([reply]),
+            config=AgenticRuntimeConfig(objective=objective),
+        )
+
+        result = await runtime.run("question")
+
+        assert result.trace.status is RunStatus.FAILED
+        assert result.trace.termination_reason is TerminationReason.INVALID_ACTION
+        assert result.answer is None
+        await runtime.close()
 
     asyncio.run(scenario())
 
@@ -327,6 +395,29 @@ def test_retrieval_budget_stops_before_planned_search() -> None:
         assert decision.action is AgentAction.SEARCH
         assert decision.query_sha256 is not None
         assert decision.query_text is None
+        await runtime.close()
+
+    asyncio.run(scenario())
+
+
+def test_context_objective_exhausted_retrieval_budget_skips_planner() -> None:
+    async def scenario() -> None:
+        retriever = ScriptedRetriever([[FakeDocument("doc-a", "support")]])
+        backend = ScriptedBackend([])
+        config = AgenticRuntimeConfig(objective="context", max_retrieval_calls=1)
+        runtime, _ = _runtime(retriever, backend, config=config)
+
+        result = await runtime.run("initial query")
+
+        assert result.answer is None
+        assert result.trace.status is RunStatus.COMPLETED
+        assert result.trace.termination_reason is TerminationReason.MAX_RETRIEVAL_CALLS
+        assert result.trace.budget_dimension == "max_retrieval_calls"
+        assert result.trace.objective is AgentObjective.CONTEXT
+        assert len(retriever.calls) == 1
+        assert backend.requests == []
+        assert result.metrics["llm_call_count"] == 0
+        assert [step.action for step in result.trace.steps] == [AgentAction.SEARCH]
         await runtime.close()
 
     asyncio.run(scenario())
@@ -1239,6 +1330,90 @@ def test_builder_constructs_enabled_runtime_without_contacting_provider() -> Non
     asyncio.run(scenario())
 
 
+def test_builder_propagates_context_objective_to_runtime_and_planner() -> None:
+    async def scenario() -> None:
+        def provider(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            schema = body["response_format"]["json_schema"]["schema"]
+            assert [branch["properties"]["action"]["const"] for branch in schema["oneOf"]] == [
+                "search",
+                "stop",
+            ]
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "action": "stop",
+                                        "query": None,
+                                        "answer": None,
+                                        "reason": "enough context",
+                                        "cited_document_ids": [],
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                },
+            )
+
+        config = {
+            "enabled": True,
+            "objective": "context",
+            "planner": {
+                "backend": "openai-compatible",
+                "base_url": "http://planner.test/v1",
+                "model": "planner-model",
+            },
+            "trace": {"path": None, "required": False},
+        }
+        runtime = await build_agentic_runtime(
+            config,
+            ScriptedRetriever([[FakeDocument("doc-a", "support")]]),
+            transport=httpx.MockTransport(provider),
+        )
+        assert runtime is not None
+        assert runtime.config.objective is AgentObjective.CONTEXT
+        assert runtime.chat_backend.objective is AgentObjective.CONTEXT
+
+        result = await runtime.run("question")
+
+        assert result.trace.termination_reason is TerminationReason.AGENT_STOP
+        assert result.answer is None
+        await runtime.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("objective", [None, "", "generation", 1])
+def test_runtime_config_rejects_invalid_objective(objective: Any) -> None:
+    with pytest.raises(AgenticConfigurationError, match="objective must be answer or context"):
+        AgenticRuntimeConfig(objective=objective)
+
+
+def test_direct_runtime_requires_backend_objective_to_match_config() -> None:
+    backend = ScriptedBackend([])
+    backend.objective = AgentObjective.ANSWER
+
+    with pytest.raises(AgenticConfigurationError, match="chat_backend.objective must match"):
+        _runtime(
+            ScriptedRetriever([]),
+            backend,
+            config=AgenticRuntimeConfig(objective=AgentObjective.CONTEXT),
+        )
+
+
+def test_direct_runtime_rejects_invalid_backend_objective() -> None:
+    backend = ScriptedBackend([])
+    backend.objective = "generation"
+
+    with pytest.raises(AgenticConfigurationError, match="chat_backend.objective must be answer or context"):
+        _runtime(ScriptedRetriever([]), backend)
+
+
 def test_builder_requires_a_persistent_sink_when_tracing_is_required() -> None:
     async def scenario() -> None:
         config = {
@@ -1317,6 +1492,26 @@ def test_config_fingerprints_cover_planner_and_retrieval_configuration() -> None
 
     assert first.planner_config_fingerprint == second.planner_config_fingerprint
     assert first.retrieval_config_fingerprint != second.retrieval_config_fingerprint
+
+
+def test_overall_fingerprint_covers_objective() -> None:
+    answer, _ = _runtime(
+        ScriptedRetriever([]),
+        ScriptedBackend([]),
+        config=AgenticRuntimeConfig(objective=AgentObjective.ANSWER),
+    )
+    context, _ = _runtime(
+        ScriptedRetriever([]),
+        ScriptedBackend([]),
+        config=AgenticRuntimeConfig(objective=AgentObjective.CONTEXT),
+    )
+
+    assert answer.planner_config_fingerprint == context.planner_config_fingerprint
+    assert answer.retrieval_config_fingerprint == context.retrieval_config_fingerprint
+    assert answer.config_fingerprint != context.config_fingerprint
+
+    asyncio.run(answer.close())
+    asyncio.run(context.close())
 
 
 def test_retrieval_fingerprint_covers_endpoint_transport_device_and_revision() -> None:

@@ -11,6 +11,7 @@ from justatom.agentic.runtime import (
 )
 from justatom.agentic.schemas import (
     AgentAction,
+    AgentObjective,
     DecisionTrace,
     PlannerDecision,
     PlannerReply,
@@ -33,6 +34,7 @@ from justatom.agentic.telemetry import (
 
 __all__ = [
     "AgentAction",
+    "AgentObjective",
     "AgenticCapacityError",
     "AgenticConfigurationError",
     "AgenticRAGRuntime",

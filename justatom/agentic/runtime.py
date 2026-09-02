@@ -15,6 +15,7 @@ from justatom.agentic.contracts import AgentRetriever, ChatBackend, TraceDeliver
 from justatom.agentic.schemas import (
     TRACE_SCHEMA_VERSION,
     AgentAction,
+    AgentObjective,
     AttemptTrace,
     CallKind,
     CallStatus,
@@ -43,6 +44,7 @@ from justatom.agentic.schemas import (
 
 _ROOT_CONFIG_KEYS = {
     "enabled",
+    "objective",
     "max_steps",
     "max_retrieval_calls",
     "max_llm_calls",
@@ -105,6 +107,7 @@ class AgenticCapacityError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class AgenticRuntimeConfig:
+    objective: AgentObjective = AgentObjective.ANSWER
     max_steps: int = 4
     max_retrieval_calls: int = 3
     max_llm_calls: int = 3
@@ -135,6 +138,11 @@ class AgenticRuntimeConfig:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.objective, AgentObjective):
+            try:
+                object.__setattr__(self, "objective", AgentObjective(self.objective))
+            except (TypeError, ValueError) as error:
+                raise AgenticConfigurationError("objective must be answer or context") from error
         for name in (
             "max_steps",
             "max_retrieval_calls",
@@ -206,6 +214,9 @@ class AgenticRuntimeConfig:
             max_retrieval_calls=self.max_retrieval_calls,
             max_llm_calls=self.max_llm_calls,
             max_tokens=self.max_tokens,
+            top_k=self.top_k,
+            max_context_documents=self.max_context_documents,
+            max_context_chars=self.max_context_chars,
             max_duration_ms=self.total_timeout_seconds * 1_000.0,
         )
 
@@ -284,7 +295,7 @@ class _TraceDeliveryPending(TimeoutError):
 
 
 class AgenticRAGRuntime:
-    """A bounded, observable search/answer loop over an existing retriever.
+    """A bounded, observable answer or context loop over an existing retriever.
 
     The runtime owns the chat backend and trace sink. It deliberately does not
     own or close the retriever because a retrieval service may share it with
@@ -303,6 +314,14 @@ class AgenticRAGRuntime:
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self.config = config or AgenticRuntimeConfig()
+        backend_objective = getattr(chat_backend, "objective", None)
+        if backend_objective is not None:
+            try:
+                backend_objective = AgentObjective(backend_objective)
+            except (TypeError, ValueError) as error:
+                raise AgenticConfigurationError("chat_backend.objective must be answer or context") from error
+            if backend_objective is not self.config.objective:
+                raise AgenticConfigurationError("chat_backend.objective must match runtime objective")
         if trace_sink is None:
             if self.config.trace_required:
                 raise AgenticConfigurationError("trace_sink is required when trace_required is true")
@@ -514,6 +533,10 @@ class AgenticRAGRuntime:
                 return
 
             remaining_retrievals = self.config.max_retrieval_calls - state.retrieval_index
+            if self.config.objective is AgentObjective.CONTEXT and remaining_retrievals <= 0:
+                state.termination_reason = TerminationReason.MAX_RETRIEVAL_CALLS
+                state.budget_dimension = "max_retrieval_calls"
+                return
             builder = self._new_step(state)
             try:
                 request = PlannerRequest(
@@ -522,6 +545,7 @@ class AgenticRAGRuntime:
                     context_documents=tuple(state.context.values()),
                     remaining_retrieval_calls=max(remaining_retrievals, 0),
                     remaining_steps=max(self.config.max_steps - len(state.steps) - 1, 0),
+                    objective=self.config.objective,
                 )
                 reply = await self._call_planner(state, builder, request)
                 builder.action = reply.decision.action
@@ -534,6 +558,11 @@ class AgenticRAGRuntime:
                 state.answer = decision.answer.strip() if decision.answer is not None else None
                 state.final_cited_document_ids = decision.cited_document_ids
                 state.termination_reason = TerminationReason.ANSWERED
+                return
+            if decision.action is AgentAction.STOP:
+                state.answer = None
+                state.final_cited_document_ids = ()
+                state.termination_reason = TerminationReason.AGENT_STOP
                 return
 
             assert decision.query is not None
@@ -717,15 +746,17 @@ class AgenticRAGRuntime:
                 timeout=self.config.planner_timeout_seconds,
                 timing=timing,
             )
-            if not isinstance(reply, PlannerReply) or reply.decision.action not in {
-                AgentAction.SEARCH,
-                AgentAction.ANSWER,
-            }:
+            allowed_actions = (
+                {AgentAction.SEARCH, AgentAction.ANSWER}
+                if self.config.objective is AgentObjective.ANSWER
+                else {AgentAction.SEARCH, AgentAction.STOP}
+            )
+            if not isinstance(reply, PlannerReply) or reply.decision.action not in allowed_actions:
                 raise _InvalidPlannerReply("planner returned an unsupported decision")
             try:
                 if reply.decision.action is AgentAction.SEARCH:
                     _validate_question(reply.decision.query, self.config.max_query_chars, name="planner query")
-                else:
+                elif reply.decision.action is AgentAction.ANSWER:
                     _validate_answer(reply.decision.answer, self.config.max_answer_chars)
                 _validate_optional_text(reply.decision.reason, self.config.max_reason_chars, "planner reason")
                 if len(reply.decision.cited_document_ids) > self.config.max_context_documents:
@@ -951,6 +982,7 @@ class AgenticRAGRuntime:
             experiment_id=self.config.experiment_id,
             variant=self.config.variant,
             seed=self.config.seed,
+            objective=self.config.objective,
             config_fingerprint=self.config_fingerprint,
             planner_config_fingerprint=self.planner_config_fingerprint,
             retrieval_config_fingerprint=self.retrieval_config_fingerprint,
@@ -1130,6 +1162,7 @@ class AgenticRAGRuntime:
 
     def _fingerprint_config(self) -> str:
         payload = {
+            "objective": self.config.objective.value,
             "max_steps": self.config.max_steps,
             "max_retrieval_calls": self.config.max_retrieval_calls,
             "max_llm_calls": self.config.max_llm_calls,
@@ -1235,6 +1268,7 @@ async def build_agentic_runtime(
     trace_max_pending_writes = _integer(trace, "max_pending_writes", 64)
 
     runtime_config = AgenticRuntimeConfig(
+        objective=config.get("objective", AgentObjective.ANSWER.value),
         max_steps=_integer(config, "max_steps", 4),
         max_retrieval_calls=_integer(config, "max_retrieval_calls", 3),
         max_llm_calls=_integer(config, "max_llm_calls", 3),
@@ -1278,6 +1312,7 @@ async def build_agentic_runtime(
         ),
         system_prompt=_optional_string(planner.get("system_prompt"), "agentic.planner.system_prompt"),
         transport=transport,
+        objective=runtime_config.objective,
     )
     sink: TraceSink
     if trace_path is None:
@@ -1507,6 +1542,7 @@ def _planner_config_fingerprint(backend: Any) -> str:
         "backend_type": _type_name(backend),
         "backend_name": getattr(backend, "backend_name", None),
         "model_name": getattr(backend, "model_name", None),
+        "objective": _fingerprint_scalar(getattr(backend, "objective", None)),
         "prompt_fingerprint": getattr(backend, "prompt_fingerprint", None),
     }
     return sha256_text(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False))

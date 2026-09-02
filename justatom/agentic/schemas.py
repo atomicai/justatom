@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from enum import Enum
 from typing import Any
 
-TRACE_SCHEMA_VERSION = 1
+TRACE_SCHEMA_VERSION = 2
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -16,6 +16,11 @@ class AgentAction(str, Enum):
     SEARCH = "search"
     ANSWER = "answer"
     STOP = "stop"
+
+
+class AgentObjective(str, Enum):
+    ANSWER = "answer"
+    CONTEXT = "context"
 
 
 class RunStatus(str, Enum):
@@ -281,8 +286,8 @@ class DecisionTrace:
     def __post_init__(self) -> None:
         if not isinstance(self.action, AgentAction):
             raise ValueError("action must be an AgentAction")
-        if self.action not in {AgentAction.SEARCH, AgentAction.ANSWER}:
-            raise ValueError("decision traces only support search or answer")
+        if self.action not in {AgentAction.SEARCH, AgentAction.ANSWER, AgentAction.STOP}:
+            raise ValueError("decision traces only support search, answer, or stop")
         if any(not isinstance(document_id, str) or not document_id for document_id in self.cited_document_ids):
             raise ValueError("cited_document_ids must contain non-empty strings")
         for name in (
@@ -295,6 +300,21 @@ class DecisionTrace:
             "reason_text",
         ):
             _optional_string(getattr(self, name), name)
+        query_fields = (self.query_sha256, self.normalized_query_sha256, self.query_text)
+        answer_fields = (self.answer_sha256, self.answer_text)
+        if self.action is AgentAction.SEARCH:
+            if any(value is not None for value in answer_fields):
+                raise ValueError("search decision traces must not contain an answer")
+            if self.cited_document_ids:
+                raise ValueError("search decision traces must not contain citations")
+        elif self.action is AgentAction.ANSWER:
+            if any(value is not None for value in query_fields):
+                raise ValueError("answer decision traces must not contain a query")
+        else:
+            if any(value is not None for value in (*query_fields, *answer_fields)):
+                raise ValueError("stop decision traces must not contain a query or answer")
+            if self.cited_document_ids:
+                raise ValueError("stop decision traces must not contain citations")
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,10 +404,20 @@ class RunLimits:
     max_retrieval_calls: int
     max_llm_calls: int
     max_tokens: int | None
+    top_k: int
+    max_context_documents: int
+    max_context_chars: int
     max_duration_ms: float
 
     def __post_init__(self) -> None:
-        for name in ("max_steps", "max_retrieval_calls", "max_llm_calls"):
+        for name in (
+            "max_steps",
+            "max_retrieval_calls",
+            "max_llm_calls",
+            "top_k",
+            "max_context_documents",
+            "max_context_chars",
+        ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
@@ -407,6 +437,7 @@ class RunTrace:
     experiment_id: str | None
     variant: str | None
     seed: int | None
+    objective: AgentObjective
     config_fingerprint: str
     planner_config_fingerprint: str
     retrieval_config_fingerprint: str
@@ -454,16 +485,24 @@ class RunTrace:
             raise ValueError("status must be a RunStatus")
         if not isinstance(self.termination_reason, TerminationReason):
             raise ValueError("termination_reason must be a TerminationReason")
+        if not isinstance(self.limits, RunLimits):
+            raise ValueError("limits must be RunLimits")
         for name in ("duration_ms", "queue_latency_ms", "execution_ms"):
             _nonnegative_optional_float(getattr(self, name), name)
         if self.seed is not None and (isinstance(self.seed, bool) or not isinstance(self.seed, int)):
             raise ValueError("seed must be an integer or null")
+        if not isinstance(self.objective, AgentObjective):
+            raise ValueError("objective must be an AgentObjective")
         if (
             isinstance(self.final_context_chars, bool)
             or not isinstance(self.final_context_chars, int)
             or self.final_context_chars < 0
         ):
             raise ValueError("final_context_chars must be a non-negative integer")
+        if self.final_context_chars > self.limits.max_context_chars:
+            raise ValueError("final_context_chars must not exceed limits.max_context_chars")
+        if len(self.final_context_document_ids) > self.limits.max_context_documents:
+            raise ValueError("final context documents must not exceed limits.max_context_documents")
         for field_name, document_ids in (
             ("final_context_document_ids", self.final_context_document_ids),
             ("final_cited_document_ids", self.final_cited_document_ids),
@@ -472,6 +511,20 @@ class RunTrace:
                 raise ValueError(f"{field_name} must contain non-empty strings")
         if self.termination_reason is TerminationReason.ANSWERED and self.status is not RunStatus.COMPLETED:
             raise ValueError("answered traces must have completed status")
+        if self.objective is AgentObjective.ANSWER:
+            if self.termination_reason is TerminationReason.AGENT_STOP:
+                raise ValueError("answer-objective traces must not terminate with agent_stop")
+            if any(step.decision is not None and step.decision.action is AgentAction.STOP for step in self.steps):
+                raise ValueError("answer-objective traces must not contain stop decisions")
+        else:
+            if self.termination_reason is TerminationReason.ANSWERED:
+                raise ValueError("context-objective traces must not terminate with answered")
+            if self.answer_sha256 is not None or self.answer_text is not None:
+                raise ValueError("context-objective traces must not contain an answer")
+            if self.final_cited_document_ids:
+                raise ValueError("context-objective traces must not contain final citations")
+            if any(step.decision is not None and step.decision.action is AgentAction.ANSWER for step in self.steps):
+                raise ValueError("context-objective traces must not contain answer decisions")
         if (self.status is RunStatus.CANCELLED) != (self.termination_reason is TerminationReason.CANCELLED):
             raise ValueError("cancelled status and termination reason must agree")
         allowed_reasons = {
@@ -547,7 +600,7 @@ class RunTrace:
 
     @classmethod
     def from_dict(cls, value: Any) -> RunTrace:
-        """Decode one strict schema-v1 trace produced by :meth:`to_dict`."""
+        """Decode one strict current-schema trace produced by :meth:`to_dict`."""
 
         from justatom.agentic.serialization import run_trace_from_dict
 
@@ -576,6 +629,11 @@ class PlannerRequest:
     context_documents: tuple[EvidenceDocument, ...]
     remaining_retrieval_calls: int
     remaining_steps: int
+    objective: AgentObjective = AgentObjective.ANSWER
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.objective, AgentObjective):
+            raise ValueError("objective must be an AgentObjective")
 
 
 @dataclass(frozen=True, slots=True)
@@ -599,8 +657,15 @@ class PlannerDecision:
                 raise ValueError("answer decisions require a non-empty answer")
             if self.query is not None:
                 raise ValueError("answer decisions must not include a query")
+        elif self.action is AgentAction.STOP:
+            if self.query is not None:
+                raise ValueError("stop decisions must not include a query")
+            if self.answer is not None:
+                raise ValueError("stop decisions must not include an answer")
+            if self.cited_document_ids:
+                raise ValueError("stop decisions must not include citations")
         else:
-            raise ValueError("planner decisions only support search or answer")
+            raise ValueError("planner decisions only support search, answer, or stop")
         if any(not isinstance(document_id, str) or not document_id.strip() for document_id in self.cited_document_ids):
             raise ValueError("cited_document_ids must contain non-empty strings")
 
@@ -621,6 +686,7 @@ class PlannerReply:
 __all__ = [
     "TRACE_SCHEMA_VERSION",
     "AgentAction",
+    "AgentObjective",
     "AttemptTrace",
     "CallKind",
     "CallStatus",

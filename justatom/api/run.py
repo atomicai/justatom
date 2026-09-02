@@ -14,7 +14,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from justatom.agentic.contracts import TracePersistenceError
 from justatom.agentic.runtime import AgenticCapacityError, AgenticRAGRuntime, build_agentic_runtime
-from justatom.agentic.schemas import RunStatus, TerminationReason
+from justatom.agentic.schemas import AgentObjective, RunStatus, TerminationReason
 from justatom.api.dataset_input import documents_from_input
 from justatom.configuring.scenarios import load_scenario_config
 from justatom.retrieval.errors import ConfigurationError, EmbeddingBackendError, EmbeddingResponseError
@@ -347,20 +347,25 @@ def create_app(
         except TracePersistenceError as trace_error:
             logger.error("required agentic trace persistence failed [{}]", trace_error.code)
             return {"error": "required trace persistence unavailable"}, 503
+        evidence = []
+        for document in result.evidence:
+            item = {
+                "id": document.document_id,
+                "rank": document.rank,
+                "score": document.score,
+            }
+            if result.trace.objective is AgentObjective.CONTEXT:
+                item["content"] = document.content
+            evidence.append(item)
+
         body = {
             "run_id": result.run_id,
+            "objective": result.trace.objective.value,
             "answer": result.answer,
             "status": result.trace.status.value,
             "termination_reason": result.trace.termination_reason.value,
             "cited_document_ids": list(result.trace.final_cited_document_ids),
-            "evidence": [
-                {
-                    "id": document.document_id,
-                    "rank": document.rank,
-                    "score": document.score,
-                }
-                for document in result.evidence
-            ],
+            "evidence": evidence,
             "metrics": result.metrics,
         }
         if result.trace.status is RunStatus.TIMED_OUT:

@@ -9,15 +9,28 @@ import httpx
 import pytest
 
 from justatom.agentic.openai_compatible import (
+    DEFAULT_CONTEXT_SYSTEM_PROMPT,
     DEFAULT_SYSTEM_PROMPT,
     OpenAICompatibleChatBackend,
     OpenAICompatibleChatError,
     OpenAICompatibleResponseError,
 )
-from justatom.agentic.schemas import AgentAction, CallStatus, ErrorCategory, EvidenceDocument, PlannerRequest, SearchObservation
+from justatom.agentic.schemas import (
+    AgentAction,
+    AgentObjective,
+    CallStatus,
+    ErrorCategory,
+    EvidenceDocument,
+    PlannerRequest,
+    SearchObservation,
+)
 
 
-def _planner_request(question: str = "What is the answer?") -> PlannerRequest:
+def _planner_request(
+    question: str = "What is the answer?",
+    *,
+    objective: AgentObjective = AgentObjective.ANSWER,
+) -> PlannerRequest:
     document = EvidenceDocument(
         document_id="doc-1",
         content="The supporting passage.",
@@ -31,6 +44,7 @@ def _planner_request(question: str = "What is the answer?") -> PlannerRequest:
         context_documents=(document,),
         remaining_retrieval_calls=2,
         remaining_steps=3,
+        objective=objective,
     )
 
 
@@ -47,6 +61,7 @@ def test_chat_backend_posts_strict_schema_and_maps_success_telemetry():
         assert body["temperature"] == 0.0
         assert body["max_tokens"] == 512
         assert body["seed"] == 17
+        assert json.loads(body["messages"][1]["content"])["objective"] == "answer"
         assert body["response_format"]["type"] == "json_schema"
         assert body["response_format"]["json_schema"]["strict"] is True
         schema = body["response_format"]["json_schema"]["schema"]
@@ -206,6 +221,129 @@ def test_chat_backend_accepts_nullable_usage_fields_and_completion_id_fallback()
     assert reply.usage.cached_input_tokens is None
     assert reply.usage.reasoning_tokens is None
     assert reply.cost is None
+
+
+def test_context_objective_posts_search_stop_schema_and_accepts_stop() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        schema = body["response_format"]["json_schema"]["schema"]
+        assert body["response_format"]["json_schema"]["name"] == "agentic_context_planner_decision"
+        assert [branch["properties"]["action"]["const"] for branch in schema["oneOf"]] == [
+            "search",
+            "stop",
+        ]
+        stop_schema = schema["oneOf"][1]
+        assert stop_schema["properties"]["query"] == {"type": "null"}
+        assert stop_schema["properties"]["answer"] == {"type": "null"}
+        assert stop_schema["properties"]["reason"] == {"type": ["string", "null"]}
+        assert stop_schema["properties"]["cited_document_ids"]["items"] == {
+            "type": "string",
+            "minLength": 1,
+        }
+        assert stop_schema["properties"]["cited_document_ids"]["maxItems"] == 0
+        assert json.loads(body["messages"][1]["content"])["objective"] == "context"
+        assert "Do not generate a final answer" in body["messages"][0]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action": "stop",
+                                    "query": None,
+                                    "answer": None,
+                                    "reason": "context is sufficient",
+                                    "cited_document_ids": [],
+                                }
+                            )
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        )
+
+    backend = OpenAICompatibleChatBackend(
+        "http://chat.test/v1",
+        "planner-model",
+        transport=httpx.MockTransport(handler),
+        objective="context",
+    )
+    reply = asyncio.run(backend.plan(_planner_request(objective=AgentObjective.CONTEXT)))
+    asyncio.run(backend.close())
+
+    assert backend.objective is AgentObjective.CONTEXT
+    assert reply.decision.action is AgentAction.STOP
+    assert reply.decision.query is None
+    assert reply.decision.answer is None
+    assert reply.decision.cited_document_ids == ()
+
+
+@pytest.mark.parametrize(
+    ("objective", "decision"),
+    [
+        (
+            AgentObjective.ANSWER,
+            {
+                "action": "stop",
+                "query": None,
+                "answer": None,
+                "reason": None,
+                "cited_document_ids": [],
+            },
+        ),
+        (
+            AgentObjective.CONTEXT,
+            {
+                "action": "answer",
+                "query": None,
+                "answer": "not allowed",
+                "reason": None,
+                "cited_document_ids": ["doc-1"],
+            },
+        ),
+    ],
+)
+def test_chat_backend_rejects_action_from_the_other_objective(
+    objective: AgentObjective,
+    decision: dict[str, object],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": json.dumps(decision)}}]},
+        )
+
+    backend = OpenAICompatibleChatBackend(
+        "http://chat.test",
+        "planner-model",
+        transport=httpx.MockTransport(handler),
+        objective=objective,
+    )
+    with pytest.raises(OpenAICompatibleResponseError):
+        asyncio.run(backend.plan(_planner_request(objective=objective)))
+    asyncio.run(backend.close())
+
+
+def test_chat_backend_rejects_request_objective_mismatch_before_transport() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("transport must not be called")
+
+    backend = OpenAICompatibleChatBackend(
+        "http://chat.test",
+        "planner-model",
+        transport=httpx.MockTransport(handler),
+        objective=AgentObjective.CONTEXT,
+    )
+
+    with pytest.raises(OpenAICompatibleChatError, match="objective does not match") as exc_info:
+        asyncio.run(backend.plan(_planner_request()))
+
+    assert exc_info.value.attempts[0].error is not None
+    assert exc_info.value.attempts[0].error.code == "objective_mismatch"
+    asyncio.run(backend.close())
 
 
 def test_chat_backend_keeps_absent_usage_absent():
@@ -375,16 +513,21 @@ def test_chat_backend_prompt_fingerprint_is_stable_and_prompt_specific():
     first = OpenAICompatibleChatBackend("http://chat.test", "model-a")
     second = OpenAICompatibleChatBackend("http://other.test", "model-b")
     custom = OpenAICompatibleChatBackend("http://chat.test", "model-a", system_prompt="A custom planner prompt")
+    context = OpenAICompatibleChatBackend("http://chat.test", "model-a", objective="context")
 
     assert first.backend_name == "openai-compatible"
     assert first.model_name == "model-a"
+    assert first.objective is AgentObjective.ANSWER
     assert first.prompt_fingerprint == hashlib.sha256(DEFAULT_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
     assert second.prompt_fingerprint == first.prompt_fingerprint
     assert custom.prompt_fingerprint != first.prompt_fingerprint
+    assert context.prompt_fingerprint == hashlib.sha256(DEFAULT_CONTEXT_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
+    assert context.prompt_fingerprint != first.prompt_fingerprint
 
     asyncio.run(first.close())
     asyncio.run(second.close())
     asyncio.run(custom.close())
+    asyncio.run(context.close())
 
 
 def test_backend_config_fingerprint_excludes_api_key_and_covers_sampling_config():
@@ -404,6 +547,28 @@ def test_backend_config_fingerprint_excludes_api_key_and_covers_sampling_config(
         await asyncio.gather(first.close(), same.close(), hotter.close(), other_seed.close(), smaller_response.close())
 
     asyncio.run(close_all())
+
+
+def test_backend_config_fingerprint_covers_objective_even_with_a_shared_prompt() -> None:
+    answer = OpenAICompatibleChatBackend("http://chat.test", "model-a", system_prompt="shared prompt")
+    context = OpenAICompatibleChatBackend(
+        "http://chat.test",
+        "model-a",
+        system_prompt="shared prompt",
+        objective=AgentObjective.CONTEXT,
+    )
+
+    assert answer.prompt_fingerprint == context.prompt_fingerprint
+    assert answer.config_fingerprint != context.config_fingerprint
+
+    asyncio.run(answer.close())
+    asyncio.run(context.close())
+
+
+@pytest.mark.parametrize("objective", [None, "", "generation", 1])
+def test_chat_backend_rejects_invalid_objective(objective: object) -> None:
+    with pytest.raises(ValueError, match="objective must be answer or context"):
+        OpenAICompatibleChatBackend("http://chat.test", "model-a", objective=objective)
 
 
 def test_usage_total_is_inferred_when_provider_reports_both_components():

@@ -6,7 +6,9 @@ from enum import Enum
 from typing import Any, TypeVar
 
 from justatom.agentic.schemas import (
+    TRACE_SCHEMA_VERSION,
     AgentAction,
+    AgentObjective,
     AttemptTrace,
     CallKind,
     CallStatus,
@@ -241,14 +243,22 @@ def _limits(value: Any, name: str) -> RunLimits:
         max_retrieval_calls=_required(data, "max_retrieval_calls", name),
         max_llm_calls=_required(data, "max_llm_calls", name),
         max_tokens=_required(data, "max_tokens", name),
+        top_k=_required(data, "top_k", name),
+        max_context_documents=_required(data, "max_context_documents", name),
+        max_context_chars=_required(data, "max_context_chars", name),
         max_duration_ms=_required(data, "max_duration_ms", name),
     )
 
 
 def run_trace_from_dict(value: Any) -> RunTrace:
-    """Decode a JSON-compatible schema-v1 mapping into immutable trace objects."""
+    """Decode a JSON-compatible current-schema mapping into immutable trace objects."""
 
     data = _mapping(value, "trace")
+    schema_version = _required(data, "schema_version", "trace")
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        raise ValueError("schema_version must be an integer")
+    if schema_version != TRACE_SCHEMA_VERSION:
+        raise ValueError(f"unsupported trace schema version: {schema_version}")
     _reject_unknown(data, RunTrace, "trace")
     steps = _sequence(_required(data, "steps", "trace"), "trace.steps")
     context_ids = _sequence(_required(data, "final_context_document_ids", "trace"), "trace.final_context_document_ids")
@@ -256,12 +266,13 @@ def run_trace_from_dict(value: Any) -> RunTrace:
     metadata = data.get("metadata")
     filters = data.get("filters")
     return RunTrace(
-        schema_version=_required(data, "schema_version", "trace"),
+        schema_version=schema_version,
         run_id=_required(data, "run_id", "trace"),
         request_id=_required(data, "request_id", "trace"),
         experiment_id=_required(data, "experiment_id", "trace"),
         variant=_required(data, "variant", "trace"),
         seed=_required(data, "seed", "trace"),
+        objective=_enum(AgentObjective, _required(data, "objective", "trace"), "trace.objective"),
         config_fingerprint=_required(data, "config_fingerprint", "trace"),
         planner_config_fingerprint=_required(data, "planner_config_fingerprint", "trace"),
         retrieval_config_fingerprint=_required(data, "retrieval_config_fingerprint", "trace"),

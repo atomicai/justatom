@@ -1,14 +1,24 @@
 # Agentic RAG
 
-Agentic RAG adds a planner-controlled search-and-answer loop on top of the
-retrieval runtime. It is deliberately bounded: every admitted run has explicit
+Agentic RAG adds a planner-controlled retrieval loop on top of the retrieval
+runtime. The configured `objective` determines what the loop produces:
+
+- `answer` runs a `search | answer` planner and returns a generated answer with
+  citations.
+- `context` runs a `search | stop` planner and returns only the accumulated
+  evidence context. It never asks the planner to generate a final answer.
+
+Both objectives are deliberately bounded: every admitted run has explicit
 work, observed-token, content-size, and wall-clock budgets, and every admitted
 exit is recorded in a structured trace. Pre-admission capacity rejection is a
 separate process-level event because no run ID or trajectory is created.
 
-The trace contract is currently **schema v1**. Consumers should check
+The trace contract is currently **schema v2**. Consumers should check
 `schema_version` and reject versions they do not understand instead of
 assuming forward compatibility.
+Schema v1 was the pre-merge answer-only prototype; v2 makes `objective` and
+the retrieval/context budget fields mandatory and deliberately rejects v1
+artifacts rather than guessing missing benchmark settings.
 
 ## Bounded Loop
 
@@ -18,10 +28,19 @@ A run proceeds as follows:
    original question, so a planner cannot skip the baseline retrieval.
 2. Give the planner the question, accumulated search observations, current
    context, and its remaining step and retrieval budgets.
-3. Accept one structured action: `search` with another query, or `answer` with
-   a final answer.
+3. Accept one objective-specific structured action. The `answer` objective
+   allows `search | answer`; the `context` objective allows `search | stop`.
 4. For `search`, retrieve another bounded `top_k` result set, merge it into the
-   context, and repeat. For `answer`, finish the run.
+   context, and repeat. `answer` finishes an answer-producing run. `stop`
+   finishes a context-only run without generating an answer or citations.
+
+The two decision schemas are disjoint. In context mode a `stop` decision has
+`query: null`, `answer: null`, and `cited_document_ids: []`; an `answer` action
+is invalid. The completed result and HTTP response likewise contain
+`answer: null` and an empty citation list, while `evidence` contains the final
+context, including its bounded passage text. A planner-selected stop uses the
+`agent_stop` termination reason; a hard budget or progress guard retains its
+more specific reason.
 
 `max_steps`, `max_retrieval_calls`, and `max_llm_calls` are local hard limits
 rather than tuning hints. `total_timeout_seconds` is a response deadline for
@@ -43,7 +62,7 @@ cannot be enforced for calls with missing usage. `planner.max_tokens`
 separately sets the provider's per-call output limit. Token coverage makes
 missing usage visible. Normalized repeated queries and no-progress states also
 stop the loop. The trace records a specific
-`termination_reason`, such as `answered`, `max_steps`,
+`termination_reason`, such as `answered`, `agent_stop`, `max_steps`,
 `max_retrieval_calls`, `max_llm_calls`, `max_tokens`, `max_duration`,
 `no_progress`, or `repeated_query`.
 
@@ -56,6 +75,11 @@ execution time.
 Search observations carry query/rank/document references. Passage text is sent
 once, through the deduplicated context, so `max_context_chars` remains a real
 upper bound instead of being bypassed by duplicated observation text.
+
+The trace records `objective` explicitly. Its limits also retain `top_k`,
+`max_context_documents`, and `max_context_chars`, so a context benchmark can
+reconstruct both the permitted retrieval work and the context delivered to a
+downstream consumer.
 
 Every accepted planner decision is attached to its step before runtime routing.
 This keeps a planned search observable even when a retrieval, step, token,
@@ -88,6 +112,7 @@ per run.
 ```python
 import os
 
+from justatom.agentic import AgentObjective
 from justatom.agentic.openai_compatible import OpenAICompatibleChatBackend
 from justatom.agentic.runtime import AgenticRAGRuntime, AgenticRuntimeConfig
 from justatom.agentic.telemetry import JsonlTraceSink
@@ -101,11 +126,13 @@ chat = OpenAICompatibleChatBackend(
     temperature=0.0,
     max_tokens=512,
     seed=42,
+    objective=AgentObjective.ANSWER,
 )
 agent = AgenticRAGRuntime(
     retrieval,
     chat,
     config=AgenticRuntimeConfig(
+        objective=AgentObjective.ANSWER,
         max_steps=6,
         max_retrieval_calls=4,
         max_llm_calls=6,
@@ -131,6 +158,14 @@ try:
 finally:
     await agent.close()
 ```
+
+For context acquisition, set `objective=AgentObjective.CONTEXT` on both
+`AgenticRuntimeConfig` and `OpenAICompatibleChatBackend`. The runtime rejects a
+mismatch rather than sending an answer-mode schema to a context-mode loop. The
+config-driven builder propagates the single top-level `agentic.objective`
+setting to both components automatically. In context mode, consume
+`result.evidence`; `result.answer` is always `None` and the trace has no final
+citations.
 
 The result exposes `run_id`, `answer`, `evidence`, `trace`, and `metrics`. Keep
 `result.trace` when an experiment needs offline evidence evaluation; the
@@ -166,6 +201,7 @@ built retrieval runtime rather than creating another store or embedder.
 ```yaml
 agentic:
   enabled: true
+  objective: answer
   max_steps: 6
   max_retrieval_calls: 4
   max_llm_calls: 6
@@ -242,6 +278,12 @@ sink performs filesystem I/O off-loop, accepts at most
 Runtime shutdown drains accepted writes before closing the sink, so shutdown
 may wait for slow storage even though request handling does not.
 
+`objective` is a service-level choice, not a per-request override. Use
+`answer` for answer generation or `context` for adaptive context acquisition.
+Changing it changes the planner schema and is included in the trace and
+configuration fingerprints, so benchmark variants cannot silently mix the two
+contracts.
+
 The top-level `seed` labels the experiment. In config-driven construction it is
 also sent to the OpenAI-compatible planner unless `planner.seed` explicitly
 overrides it with a non-null value. Provider support and determinism still
@@ -255,10 +297,13 @@ the endpoint accepts that request field and returns the decision as a JSON
 string in `choices[0].message.content` with exactly `action`, `query`, `answer`,
 `reason`, and `cited_document_ids`. The wire schema intentionally avoids regex
 constraints so it remains compatible with providers such as `llama-server`
-that implement a subset of JSON Schema; the client still rejects empty or
-whitespace-only decision values after decoding. It performs one provider
-attempt per planner call and does not retry automatically; custom
-`ChatBackend` implementations may report multiple attempts in the same trace.
+that implement a subset of JSON Schema. The schema permits `search | answer`
+for the `answer` objective and `search | stop` for `context`; the context
+schema requires null `query` and `answer` plus empty citations on `stop`. The
+client still rejects empty or whitespace-only decision values after decoding.
+The backend performs one provider attempt per planner call and does not retry
+automatically; custom `ChatBackend` implementations may report multiple
+attempts in the same trace.
 
 `trace.required: true` is appropriate when losing a run record invalidates an
 experiment: it requires a non-null `trace.path`, and a sink failure or timeout
@@ -280,10 +325,12 @@ POST /searching/agentic
 Content-Type: application/json
 ```
 
-Use this endpoint for answer-producing agent runs. Continue to use
-`POST /searching` when the caller only needs retrieved documents. Runtime
-composition, planner credentials, budgets, and trace paths belong in service
-configuration and are not accepted as per-request overrides.
+Use this endpoint for the configured agent objective. In `answer` mode it
+returns a generated answer; in `context` mode it returns adaptively collected
+evidence without a final generator call. Continue to use `POST /searching` for
+a single, static retrieval request. Runtime composition, objective, planner
+credentials, budgets, and trace paths belong in service configuration and are
+not accepted as per-request overrides.
 When `agentic.enabled` is false, the route returns `503` instead of starting a
 run. A required trace that cannot be accepted or confirmed also returns a
 sanitized `503`; the trajectory result is not represented as a successfully
@@ -310,6 +357,7 @@ and optional `metadata`. A successful response has the following shape:
 ```json
 {
   "run_id": "...",
+  "objective": "answer",
   "answer": "...",
   "status": "completed",
   "termination_reason": "answered",
@@ -321,9 +369,33 @@ and optional `metadata`. A successful response has the following shape:
 }
 ```
 
+With `agentic.objective: context`, the same request shape produces a
+context-only response:
+
+```json
+{
+  "run_id": "...",
+  "objective": "context",
+  "answer": null,
+  "status": "completed",
+  "termination_reason": "agent_stop",
+  "cited_document_ids": [],
+  "evidence": [
+    {"id": "document-17", "rank": 1, "score": 0.91, "content": "..."},
+    {"id": "document-29", "rank": 2, "score": 0.87, "content": "..."}
+  ],
+  "metrics": {}
+}
+```
+
 `status: "completed"` means the run completed operationally; inspect
-`termination_reason` to distinguish an answer from a bounded stop. The metrics
-object is derived from the same raw `RunTrace` passed to the configured sink.
+`objective` and `termination_reason` to distinguish an answer, a
+planner-selected context stop, and a bounded stop. `evidence` identifies the
+deduplicated final context in both modes. To preserve the answer-mode API's
+minimal disclosure, passage `content` is included only for the `context`
+objective; it is already bounded by `max_document_chars` and
+`max_context_chars`. The metrics object is derived from the same raw `RunTrace`
+passed to the configured sink.
 Timed-out and failed runs return the same diagnostic shape with HTTP `504` and
 `502`, respectively. An unexpected internal runtime failure is distinguished
 from an upstream planner/retrieval failure and returns `500`.
@@ -364,6 +436,10 @@ The capture policy controls persisted trace fields only. The planner still
 receives the raw question, every raw observation query, remaining-budget
 counts, and each bounded context document's ID, content, score, rank, and
 retrieval index. The retriever receives raw search queries and request filters.
+The `context` HTTP objective also returns bounded passage content to its caller,
+independently of the trace capture policy, because that content is the endpoint's
+product. Protect it with the same authorization and transport controls as
+`POST /searching`.
 Treat those endpoints as data processors and require trusted TLS transport,
 appropriate retention, and access controls; `capture_text: none` does not
 redact outbound provider payloads.
@@ -378,18 +454,20 @@ container, mount a writable volume owned by UID/GID `10001:10001`.
 
 ## Metrics Semantics
 
-The raw schema-v1 trace is the source of truth. `derive_run_metrics(trace)` is
+The raw schema-v2 trace is the source of truth. `derive_run_metrics(trace)` is
 a reproducible operational summary, not a replacement for the trace and not a
 quality score.
 
 | Field | Meaning |
 | --- | --- |
 | experiment/config identity fields | Schema version, experiment ID, variant, seed, and overall/planner/retrieval fingerprints copied from the trace. |
+| `objective` | The run contract: `answer` or `context`. |
 | `duration_ms` | Queue plus trajectory duration, excluding trace-sink persistence. |
 | `queue_latency_ms` | Time waiting for the concurrency slot. |
 | `execution_ms` | Time spent executing the bounded loop. |
 | `operational_success` | The run completed operationally. This is distinct from answering. |
 | `answered` | The run completed with termination reason `answered`. It does not assert correctness or groundedness. |
+| `agent_stopped` | The context planner explicitly selected `stop`; budget and progress-guard exits remain false. |
 | `calls_by_kind`, `calls_by_status` | Counts reconstructed from recorded calls. |
 | call error/attempt fields | Sanitized error categories, attempt status counts, retry counts, and attempt latency. |
 | `call_latency_ms_by_kind` | Count, sum, and mean latency for retrieval, planner, reranker, and answer calls. Every latency summary includes `sum_overflow`; an overflowing sum and its mean are reported as `null`, never `Infinity`. |
@@ -399,9 +477,13 @@ quality score.
 | `token_budget` | Configured limit, effective observed total, coverage, reached state, and exact overrun when fully observed. |
 | cost/cache/TTFT fields | Known totals or rates plus coverage; unavailable provider data stays `null`. Cost-sum overflow is explicit and never emitted as non-standard `Infinity`. |
 | `retrieval_query_hash_coverage` | Number of retrieval calls with a captured normalized-query hash divided by all retrieval calls. |
+| `retrieval_requested_slot_count` | Sum of `top_k_requested` across retrieval calls, including failed calls with a retrieval payload. |
+| `retrieval_slot_budget` | Configured maximum retrieval slots, `max_retrieval_calls * top_k`. |
+| `retrieval_slot_budget_utilization` | Requested slots divided by the configured retrieval-slot budget, with explicit numerator and denominator. |
 | retrieval query/document diversity | Within-run unique normalized queries or documents divided by their within-run occurrence counts. |
 | per-hop novelty/Jaccard | New evidence contributed by each retrieval and overlap with the previous/all earlier hops. |
 | context/citation fields | Final context size and the fraction of answer citations that refer to context documents. |
+| `final_context_document_budget`, `final_context_char_budget` | Final context cardinality or characters divided by the corresponding configured limit. |
 | backend/truncation fields | Upstream result counts, their coverage, and documents discarded by the local `top_k` guard. |
 
 Missing token counts remain unknown; they are not silently converted to zero.
@@ -422,12 +504,15 @@ coverage. `retrieval_*_diversity` combines per-run numerators and denominators;
 coverage across all runs. Repeating the same evaluation query over several
 seeds therefore does not masquerade as agent redundancy.
 Aggregate output also includes value counts for schema version, experiment ID,
-variant, and seed, plus fingerprint counts and homogeneous flags. Inspect this
-composition and group incompatible configurations before comparing variants;
-the aggregator deliberately reports mixtures instead of silently guessing a
-grouping policy. Filter-hash counts, coverage, and homogeneity do the same for
-per-request retrieval policies; `capture_text: none` intentionally leaves
-that identity unknown.
+variant, seed, and objective, plus fingerprint counts and homogeneous flags.
+`homogeneous_objective` explicitly detects a mixed `answer`/`context` report.
+Inspect this composition and group incompatible configurations before
+comparing variants; the aggregator deliberately reports mixtures instead of
+silently guessing a grouping policy. Filter-hash counts, coverage, and
+homogeneity do the same for per-request retrieval policies; `capture_text:
+none` intentionally leaves that identity unknown. Requested-slot and final
+context utilization are also aggregated from summed numerators and
+denominators rather than averaging per-run rates.
 
 A retrieval `CallTrace.latency_ms` measures the complete component call:
 `call latency = component-capacity queue latency + component execution
@@ -459,7 +544,7 @@ labels = EvidenceLabels(
     ),
 )
 
-report = evaluate_trace(result.trace, labels, k=10)
+report = evaluate_trace(result.trace, labels, k=10, context_k=20)
 ```
 
 Persisted artifacts round-trip back into the same immutable schema objects:
@@ -469,7 +554,7 @@ from justatom.agentic.telemetry import iter_jsonl_traces
 
 for trace in iter_jsonl_traces(".data/traces/agentic-rag.jsonl"):
     runtime_metrics = derive_run_metrics(trace)
-    evidence_metrics = evaluate_trace(trace, labels, k=10)
+    evidence_metrics = evaluate_trace(trace, labels, k=10, context_k=20)
 ```
 
 The loader rejects malformed lines, unknown schema fields, and unsupported
@@ -479,6 +564,39 @@ them.
 Positive qrels have relevance greater than zero. Each required-evidence group
 contains interchangeable documents for one evidence slot; a run completes the
 target only after it has retrieved at least one document from every group.
+The labels are evaluator-only data: do not put qrels, positive IDs, required
+groups, or any derived hint into the planner prompt, request metadata, filters,
+or online stopping rule.
+
+### Static vs Agentic Context Benchmark
+
+Compare static and adaptive retrieval under the same maximum number of ranked
+slots. For agentic per-hop depth `K` and maximum retrieval-call count `H`,
+define the budget as `B = H * K`.
+
+Use the following paired configuration:
+
+| Variant | Retrieval configuration | Context/evaluation depth |
+| --- | --- | --- |
+| Static | one `/searching` call with `top_k=B` | evaluate the returned top `B` |
+| Agentic context | `objective=context`, `top_k=K`, `max_retrieval_calls=H` | `max_context_documents=B`; call `evaluate_trace(..., k=K, context_k=B)` |
+
+The initial original-query retrieval is one of the agent's `H` calls; it is
+not a free extra hop. Keep the corpus/index revision, retriever mode, filters,
+embedding model, character budget, and query set identical. Make
+`max_steps`, `max_llm_calls`, and the wall-clock limit large enough that they do
+not become an unintended tighter retrieval cap, then report any guard exits.
+
+This equalizes the maximum retrieval-slot opportunity, not necessarily the
+work actually spent: a context agent may select `stop` before `H` calls.
+Report `retrieval_requested_slot_count`,
+`retrieval_slot_budget_utilization`, retrieval/LLM calls, and latency alongside
+quality. This supports both a quality-under-cap comparison and
+quality-versus-actual-work curves without treating an early stop as if it had
+spent all `B` slots. Keep `max_context_documents=B` and a common
+`max_context_chars`; apply the same document truncation, deduplication, and
+character cap when constructing the static context so clipping does not
+silently favor either variant.
 
 The report evaluates each retrieval hop, cumulative ranked slots, the
 final context, and the final cited documents independently. It includes
@@ -489,17 +607,26 @@ claim that the generated answer is correct, faithful, or sufficiently cited;
 answer-quality evaluation needs a separate labelled or human-reviewed
 protocol.
 
+For the `context` objective, `final_context` is the primary output-quality
+view. `final_citations` and `final_citation_set` are intentionally empty
+because that mode does not select citations or generate an answer. The report
+copies the trace `objective`, so downstream analysis can reject accidental
+mixtures of answer-producing and context-only runs.
+
 nDCG uses the same linear graded-qrel gain as the repository's retrieval
 benchmarks. Gains are divided by their maximum finite grade before DCG is
 summed; the shared scale cancels in the nDCG ratio and prevents finite qrels
 from overflowing.
 
-Per-hop and final-context ranking metrics use `evaluation_depth=k`; missing
-result slots are zero-filled for standard precision/nDCG semantics. Cumulative
-metrics use the spent retrieval depth `hop * k` and preserve repeated document
-slots, so duplicates cannot artificially improve a later document's reciprocal
-rank or nDCG. Every retrieval call with a payload consumes one hop: a non-OK
-call contributes no observed documents but still spends `k` cumulative slots.
+Per-hop ranking metrics use `evaluation_depth=k`; final-context metrics use
+`evaluation_depth=context_k`. When `context_k` is omitted it defaults to `k`
+for answer-mode traces and to the recorded `max_context_documents` for
+context-mode traces. Missing result slots are zero-filled for standard
+precision/nDCG semantics. Cumulative metrics use the spent retrieval
+depth `hop * k` and preserve repeated document slots, so duplicates cannot
+artificially improve a later document's reciprocal rank or nDCG. Every
+retrieval call with a payload consumes one hop: a non-OK call contributes no
+observed documents but still spends `k` cumulative slots.
 `retrieval_hop_count`, `successful_hop_count`, and `failed_hop_count` make that
 distinction explicit, and each per-hop and cumulative entry includes its call
 `status` and `successful` flag. Evidence completion is deduplicated separately.
