@@ -44,12 +44,12 @@ _DECISION_SCHEMA: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "const": AgentAction.SEARCH.value},
-                "query": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+                "query": {"type": "string", "minLength": 1},
                 "answer": {"type": "null"},
-                "reason": {"type": ["string", "null"], "pattern": ".*\\S.*"},
+                "reason": {"type": ["string", "null"]},
                 "cited_document_ids": {
                     "type": "array",
-                    "items": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+                    "items": {"type": "string", "minLength": 1},
                     "maxItems": 0,
                 },
             },
@@ -61,11 +61,11 @@ _DECISION_SCHEMA: dict[str, Any] = {
             "properties": {
                 "action": {"type": "string", "const": AgentAction.ANSWER.value},
                 "query": {"type": "null"},
-                "answer": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-                "reason": {"type": ["string", "null"], "pattern": ".*\\S.*"},
+                "answer": {"type": "string", "minLength": 1},
+                "reason": {"type": ["string", "null"]},
                 "cited_document_ids": {
                     "type": "array",
-                    "items": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+                    "items": {"type": "string", "minLength": 1},
                 },
             },
             "required": ["action", "query", "answer", "reason", "cited_document_ids"],

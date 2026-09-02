@@ -55,14 +55,23 @@ def test_chat_backend_posts_strict_schema_and_maps_success_telemetry():
         assert schema["oneOf"][0]["additionalProperties"] is False
         assert schema["oneOf"][0]["properties"]["action"] == {"type": "string", "const": "search"}
         assert schema["oneOf"][0]["properties"]["answer"] == {"type": "null"}
-        assert schema["oneOf"][0]["properties"]["query"]["pattern"] == ".*\\S.*"
+        assert schema["oneOf"][0]["properties"]["query"] == {"type": "string", "minLength": 1}
+        assert schema["oneOf"][0]["properties"]["reason"] == {"type": ["string", "null"]}
+        assert schema["oneOf"][0]["properties"]["cited_document_ids"]["items"] == {
+            "type": "string",
+            "minLength": 1,
+        }
         assert schema["oneOf"][0]["required"] == ["action", "query", "answer", "reason", "cited_document_ids"]
         assert schema["oneOf"][1]["additionalProperties"] is False
         assert schema["oneOf"][1]["properties"]["action"] == {"type": "string", "const": "answer"}
         assert schema["oneOf"][1]["properties"]["query"] == {"type": "null"}
         assert schema["oneOf"][1]["required"] == ["action", "query", "answer", "reason", "cited_document_ids"]
-        assert schema["oneOf"][1]["properties"]["cited_document_ids"]["items"]["minLength"] == 1
-        assert schema["oneOf"][1]["properties"]["answer"]["pattern"] == ".*\\S.*"
+        assert schema["oneOf"][1]["properties"]["answer"] == {"type": "string", "minLength": 1}
+        assert schema["oneOf"][1]["properties"]["reason"] == {"type": ["string", "null"]}
+        assert schema["oneOf"][1]["properties"]["cited_document_ids"]["items"] == {
+            "type": "string",
+            "minLength": 1,
+        }
 
         assert "For search, query must be a non-empty string" in body["messages"][0]["content"]
         assert "For answer, query must be null" in body["messages"][0]["content"]

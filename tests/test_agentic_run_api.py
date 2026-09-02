@@ -109,7 +109,7 @@ def test_agentic_endpoint_is_explicitly_unavailable_when_disabled() -> None:
         app = create_app(runtime=retrieval, start_mq=False)
 
         async with app.test_app() as test_app:
-            response = await test_app.test_client().post("/agentic-rag", json={"question": "question"})
+            response = await test_app.test_client().post("/searching/agentic", json={"text": "question"})
 
         assert response.status_code == 503
         assert await response.get_json() == {"error": "agentic runtime is disabled"}
@@ -199,9 +199,9 @@ def test_agentic_endpoint_forwards_request_and_returns_safe_evidence_and_metrics
 
         async with app.test_app() as test_app:
             response = await test_app.test_client().post(
-                "/agentic-rag",
+                "/searching/agentic",
                 json={
-                    "question": "  answer this  ",
+                    "text": "  answer this  ",
                     "request_id": "request-123",
                     "filter_by": {"language": "en"},
                     "metadata": {"experiment": "smoke"},
@@ -258,7 +258,7 @@ def test_agentic_endpoint_maps_runtime_status(status: RunStatus, reason: Termina
             start_mq=False,
         )
         async with app.test_app() as test_app:
-            response = await test_app.test_client().post("/agentic-rag", json={"question": "question"})
+            response = await test_app.test_client().post("/searching/agentic", json={"text": "question"})
             body = await response.get_json()
 
         assert response.status_code == expected_status
@@ -276,13 +276,13 @@ def test_agentic_endpoint_rejects_invalid_payloads_without_running_agent() -> No
         async with app.test_app() as test_app:
             client = test_app.test_client()
             responses = [
-                await client.post("/agentic-rag", json=[]),
-                await client.post("/agentic-rag", json={}),
-                await client.post("/agentic-rag", json={"question": "  "}),
-                await client.post("/agentic-rag", json={"question": "q", "request_id": 7}),
-                await client.post("/agentic-rag", json={"question": "q", "filter_by": "all"}),
-                await client.post("/agentic-rag", json={"question": "q", "metadata": []}),
-                await client.post("/agentic-rag", json={"question": "q", "top_k": 10}),
+                await client.post("/searching/agentic", json=[]),
+                await client.post("/searching/agentic", json={}),
+                await client.post("/searching/agentic", json={"text": "  "}),
+                await client.post("/searching/agentic", json={"text": "q", "request_id": 7}),
+                await client.post("/searching/agentic", json={"text": "q", "filter_by": "all"}),
+                await client.post("/searching/agentic", json={"text": "q", "metadata": []}),
+                await client.post("/searching/agentic", json={"text": "q", "top_k": 10}),
             ]
 
         assert all(response.status_code == 400 for response in responses)
@@ -303,8 +303,8 @@ def test_agentic_endpoint_rejects_body_before_unbounded_json_buffering() -> None
 
         async with app.test_app() as test_app:
             response = await test_app.test_client().post(
-                "/agentic-rag",
-                data=b'{"question":"' + b"x" * 64 + b'"}',
+                "/searching/agentic",
+                data=b'{"text":"' + b"x" * 64 + b'"}',
                 headers={"Content-Type": "application/json"},
             )
 
@@ -322,8 +322,8 @@ def test_agentic_runtime_validation_error_is_a_bad_request() -> None:
 
         async with app.test_app() as test_app:
             response = await test_app.test_client().post(
-                "/agentic-rag",
-                json={"question": "question", "metadata": {"value": "invalid downstream"}},
+                "/searching/agentic",
+                json={"text": "question", "metadata": {"value": "invalid downstream"}},
             )
 
         assert response.status_code == 400
@@ -338,7 +338,7 @@ def test_required_trace_persistence_failure_is_service_unavailable() -> None:
         app = create_app(runtime=FakeRetrievalRuntime(), agentic_runtime=agent, start_mq=False)
 
         async with app.test_app() as test_app:
-            response = await test_app.test_client().post("/agentic-rag", json={"question": "question"})
+            response = await test_app.test_client().post("/searching/agentic", json={"text": "question"})
 
         assert response.status_code == 503
         assert await response.get_json() == {"error": "required trace persistence unavailable"}
@@ -352,7 +352,7 @@ def test_agentic_capacity_exhaustion_is_retryable_too_many_requests() -> None:
         app = create_app(runtime=FakeRetrievalRuntime(), agentic_runtime=agent, start_mq=False)
 
         async with app.test_app() as test_app:
-            response = await test_app.test_client().post("/agentic-rag", json={"question": "question"})
+            response = await test_app.test_client().post("/searching/agentic", json={"text": "question"})
 
         assert response.status_code == 429
         assert response.headers["Retry-After"] == "1"

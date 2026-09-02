@@ -220,7 +220,7 @@ The character-limit settings bound generated queries, answers, planner reasons,
 request/document/citation identifiers, canonical filter/metadata JSON,
 individual documents, and accumulated context;
 `max_context_documents` also caps context cardinality and final citation count.
-At the HTTP boundary, `max_request_bytes` rejects an oversized `/agentic-rag`
+At the HTTP boundary, `max_request_bytes` rejects an oversized `/searching/agentic`
 body with `413` while Quart is receiving it, before JSON parsing and the
 smaller field-level limits.
 Keep them finite even when the upstream chat service enforces a token limit.
@@ -253,9 +253,12 @@ The built-in planner calls an OpenAI-compatible `/chat/completions` endpoint
 with strict `response_format.type: json_schema`. Compatibility therefore means
 the endpoint accepts that request field and returns the decision as a JSON
 string in `choices[0].message.content` with exactly `action`, `query`, `answer`,
-`reason`, and `cited_document_ids`. It performs one provider attempt per
-planner call and does not retry automatically; custom `ChatBackend`
-implementations may report multiple attempts in the same trace.
+`reason`, and `cited_document_ids`. The wire schema intentionally avoids regex
+constraints so it remains compatible with providers such as `llama-server`
+that implement a subset of JSON Schema; the client still rejects empty or
+whitespace-only decision values after decoding. It performs one provider
+attempt per planner call and does not retry automatically; custom
+`ChatBackend` implementations may report multiple attempts in the same trace.
 
 `trace.required: true` is appropriate when losing a run record invalidates an
 experiment: it requires a non-null `trace.path`, and a sink failure or timeout
@@ -273,7 +276,7 @@ capture policy.
 The service route is:
 
 ```text
-POST /agentic-rag
+POST /searching/agentic
 Content-Type: application/json
 ```
 
@@ -291,17 +294,17 @@ available from `await runtime.admission_metrics()` and emit a sanitized service
 warning, so admission pressure can still be exported by monitoring.
 
 ```console
-curl -sS http://localhost:5555/agentic-rag \
+curl -sS http://localhost:5555/searching/agentic \
   -H 'Content-Type: application/json' \
   -d '{
-    "question": "Which documents explain the deployment architecture?",
+    "text": "Which documents explain the deployment architecture?",
     "request_id": "request-42",
     "filter_by": {"language": "en"},
     "metadata": {"experiment": "bounded-loop-v1"}
   }'
 ```
 
-The request fields are `question`, optional `request_id`, optional `filter_by`,
+The request fields are `text`, optional `request_id`, optional `filter_by`,
 and optional `metadata`. A successful response has the following shape:
 
 ```json

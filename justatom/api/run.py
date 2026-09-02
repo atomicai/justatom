@@ -37,7 +37,7 @@ def _bounded_agentic_request_class(max_request_bytes: int) -> type[QuartRequest]
     class BoundedAgenticRequest(QuartRequest):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             path = kwargs.get("path", args[2] if len(args) > 2 else None)
-            if path == "/agentic-rag":
+            if path == "/searching/agentic":
                 global_limit = kwargs.get("max_content_length")
                 kwargs["max_content_length"] = max_request_bytes if global_limit is None else min(global_limit, max_request_bytes)
             super().__init__(*args, **kwargs)
@@ -302,8 +302,8 @@ def create_app(
         documents = await _runtime().retrieve(query.strip(), top_k=top_k, filters=filter_by)
         return {"docs": [document.to_dict(uuid_to_str=True) for document in documents]}
 
-    @app.post("/agentic-rag")
-    async def agentic_rag():
+    @app.post("/searching/agentic")
+    async def agentic_search():
         agent_runtime = _agentic_runtime()
         if agent_runtime is None:
             return {"error": "agentic runtime is disabled"}, 503
@@ -311,13 +311,13 @@ def create_app(
         if error is not None:
             return error
         assert payload is not None
-        rejected = _reject_unknown_fields(payload, {"question", "request_id", "filter_by", "metadata"})
+        rejected = _reject_unknown_fields(payload, {"text", "request_id", "filter_by", "metadata"})
         if rejected is not None:
             return rejected
 
-        question = payload.get("question")
-        if not isinstance(question, str) or not question.strip():
-            return {"error": "question must be a non-empty string"}, 400
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return {"error": "text must be a non-empty string"}, 400
         request_id = payload.get("request_id")
         if request_id is not None and (not isinstance(request_id, str) or not request_id.strip()):
             return {"error": "request_id must be a non-empty string when provided"}, 400
@@ -330,7 +330,7 @@ def create_app(
 
         try:
             result = await agent_runtime.run(
-                question.strip(),
+                text.strip(),
                 request_id=request_id,
                 filters=filter_by,
                 metadata=metadata,
