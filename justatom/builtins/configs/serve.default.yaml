@@ -1,8 +1,54 @@
 retrieval:
   mode: keyword
   alpha: 0.5
+  index_revision: null
   store:
     collection: Document
     url: null
     grpc_port: 50051
     grpc_secure: false
+
+agentic:
+  enabled: false
+  max_steps: 4
+  max_retrieval_calls: 3
+  max_llm_calls: 3
+  max_tokens: null
+  total_timeout_seconds: 60.0
+  retrieval_timeout_seconds: 30.0
+  planner_timeout_seconds: 30.0
+  max_concurrency: 2
+  max_queued_runs: 8
+  top_k: 10
+  max_request_bytes: 65536
+  max_query_chars: 512
+  max_answer_chars: 16000
+  max_reason_chars: 4000
+  max_identifier_chars: 512
+  max_filter_chars: 16000
+  max_metadata_chars: 8000
+  max_document_chars: 2000
+  max_context_chars: 24000
+  max_context_documents: 50
+  no_progress_limit: 2
+  experiment_id: null
+  variant: null
+  seed: null
+  metadata: {}
+  planner:
+    backend: openai-compatible
+    base_url: null
+    model: null
+    api_key: null
+    timeout_seconds: 30.0
+    temperature: 0.0
+    max_tokens: 512
+    max_response_bytes: 1048576
+    seed: null
+    system_prompt: null
+  trace:
+    path: null
+    capture_text: hash
+    required: true
+    timeout_seconds: 5.0
+    max_pending_writes: 64

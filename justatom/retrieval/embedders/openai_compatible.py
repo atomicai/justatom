@@ -24,6 +24,7 @@ class OpenAICompatibleEmbedder:
     ) -> None:
         self.base_url = f"{base_url.rstrip('/')}/"
         self.model = model
+        self.timeout = float(timeout)
         self.profile = profile or EmbeddingProfile()
         self.encoding_format = encoding_format
         try:
@@ -33,7 +34,7 @@ class OpenAICompatibleEmbedder:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
-            timeout=timeout,
+            timeout=self.timeout,
             headers=headers,
             transport=transport,
         )

@@ -555,6 +555,10 @@ def test_builder_validates_exact_config_shape_before_opening_resources(monkeypat
         ({"mode": "keyword", "store": {"collection": "Docs", "grpc_port": 0}}, "grpc_port must be in"),
         ({"mode": "keyword", "store": {"collection": "Docs", "grpc_secure": 1}}, "grpc_secure must be a boolean"),
         (
+            {"mode": "keyword", "index_revision": "", "store": {"collection": "Docs"}},
+            "index_revision must be a non-empty string",
+        ),
+        (
             {
                 "mode": "vector",
                 "embedding": {"backend": "local", "model": "model", "batch_size": True},
@@ -651,6 +655,7 @@ def test_builder_passes_typed_store_values_and_copies_extra_body(monkeypatch):
         runtime_module.build_runtime(
             {
                 "mode": "vector",
+                "index_revision": "corpus-v1",
                 "embedding": {
                     "backend": "openai-compatible",
                     "base_url": "http://encoder/v1",
@@ -668,6 +673,7 @@ def test_builder_passes_typed_store_values_and_copies_extra_body(monkeypatch):
     extra_body["options"]["pooling"] = "max"
     assert captured["embedder"]["extra_body"] == {"options": {"pooling": "mean"}}
     assert runtime.store is store
+    assert runtime.index_revision == "corpus-v1"
     asyncio.run(runtime.close())
 
 

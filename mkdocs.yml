@@ -39,6 +39,7 @@ nav:
   - Architecture: architecture.md
   - Modules:
     - Overview: modules/index.md
+    - Agentic RAG: modules/agentic-rag.md
     - API CLI: modules/api-cli.md
     - Runtime: modules/runtime.md
     - Data Processing: modules/data-processing.md

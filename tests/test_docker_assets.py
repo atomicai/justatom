@@ -77,6 +77,8 @@ def _assert_dockerfile_contract(path, dockerfile):
 
     if path == "Dockerfile.api":
         assert ".[serve]" in dockerfile
+        assert "mkdir -p /app/.data/traces" in dockerfile
+        assert "chown -R 10001:10001 /app/.data" in dockerfile
         assert environment == {
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONUNBUFFERED": "1",

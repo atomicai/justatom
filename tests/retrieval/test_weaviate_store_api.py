@@ -171,6 +171,12 @@ def test_connect_parses_explicit_secure_url_and_forwards_only_client_options(fak
         "additional_headers": {"X-API-Key": "secret"},
         "skip_init_checks": True,
     }
+    assert store._url == "https://weaviate.example:8443"
+    assert store._grpc_port == 7443
+    assert store._grpc_secure is True
+    init_parameters = store.to_dict()["init_parameters"]
+    assert init_parameters["grpc_port"] == 7443
+    assert init_parameters["grpc_secure"] is True
     asyncio.run(store.close())
 
 

@@ -7,14 +7,42 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from quart import Quart, request
+from quart import Quart
+from quart import Request as QuartRequest
+from quart import request
+from werkzeug.exceptions import RequestEntityTooLarge
 
+from justatom.agentic.contracts import TracePersistenceError
+from justatom.agentic.runtime import AgenticCapacityError, AgenticRAGRuntime, build_agentic_runtime
+from justatom.agentic.schemas import RunStatus, TerminationReason
 from justatom.api.dataset_input import documents_from_input
 from justatom.configuring.scenarios import load_scenario_config
 from justatom.retrieval.errors import ConfigurationError, EmbeddingBackendError, EmbeddingResponseError
 from justatom.retrieval.runtime import RetrievalRuntime, build_runtime
 
 _ENV_PLACEHOLDER = re.compile(r"\$\{([A-Z0-9_]+)\}")
+_DEFAULT_AGENTIC_MAX_REQUEST_BYTES = 65_536
+
+
+def _agentic_request_limit(config: object) -> int:
+    if not isinstance(config, dict):
+        return _DEFAULT_AGENTIC_MAX_REQUEST_BYTES
+    value = config.get("max_request_bytes", _DEFAULT_AGENTIC_MAX_REQUEST_BYTES)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return _DEFAULT_AGENTIC_MAX_REQUEST_BYTES
+    return value
+
+
+def _bounded_agentic_request_class(max_request_bytes: int) -> type[QuartRequest]:
+    class BoundedAgenticRequest(QuartRequest):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            path = kwargs.get("path", args[2] if len(args) > 2 else None)
+            if path == "/agentic-rag":
+                global_limit = kwargs.get("max_content_length")
+                kwargs["max_content_length"] = max_request_bytes if global_limit is None else min(global_limit, max_request_bytes)
+            super().__init__(*args, **kwargs)
+
+    return BoundedAgenticRequest
 
 
 def _unresolved_environment(node: object) -> set[str]:
@@ -87,10 +115,35 @@ def _begin_runtime_close(app: Quart) -> asyncio.Task[None] | None:
     return close_task
 
 
+def _begin_agentic_runtime_close(app: Quart) -> asyncio.Task[None] | None:
+    runtime = app.extensions.pop("agentic_runtime", None)
+    if runtime is None:
+        return None
+    close_task = asyncio.create_task(runtime.close())
+    app.extensions["agentic_runtime_close_task"] = close_task
+    return close_task
+
+
+async def _close_agentic_runtime(app: Quart) -> BaseException | None:
+    close_task = _begin_agentic_runtime_close(app)
+    if close_task is None:
+        return None
+    try:
+        await _finish_cleanup(close_task)
+    except BaseException as error:
+        return error
+    finally:
+        app.extensions.pop("agentic_runtime_close_task", None)
+    return None
+
+
 async def _rollback_startup(app: Quart, startup_error: BaseException) -> None:
     app.extensions.pop("retrieval_mq_task", None)
+    agentic_close_error = await _close_agentic_runtime(app)
     close_task = _begin_runtime_close(app)
     if close_task is None:
+        if agentic_close_error is not None:
+            raise startup_error from agentic_close_error
         raise startup_error
 
     try:
@@ -98,10 +151,12 @@ async def _rollback_startup(app: Quart, startup_error: BaseException) -> None:
     except asyncio.CancelledError as cancellation:
         raise startup_error from cancellation
     except BaseException as cleanup_error:
-        raise startup_error from cleanup_error
+        raise startup_error from (agentic_close_error or cleanup_error)
     finally:
         app.extensions.pop("retrieval_runtime_close_task", None)
 
+    if agentic_close_error is not None:
+        raise startup_error from agentic_close_error
     raise startup_error
 
 
@@ -122,6 +177,9 @@ async def _shutdown(app: Quart) -> None:
     except BaseException as error:
         primary_error = error
     finally:
+        agentic_close_error = await _close_agentic_runtime(app)
+        if primary_error is None and agentic_close_error is not None:
+            primary_error = agentic_close_error
         close_task = _begin_runtime_close(app)
         if close_task is not None:
             try:
@@ -139,6 +197,7 @@ def create_app(
     config_path: str | Path | None = None,
     config: dict[str, Any] | None = None,
     runtime: RetrievalRuntime | None = None,
+    agentic_runtime: AgenticRAGRuntime | None = None,
     start_mq: bool = True,
 ) -> Quart:
     scenario_config = load_scenario_config("serve", config_path=config_path, config=config)
@@ -146,12 +205,19 @@ def create_app(
     if unresolved:
         raise ConfigurationError(f"unresolved environment variables: {', '.join(unresolved)}")
     retrieval_config = scenario_config["retrieval"]
+    agentic_config = scenario_config.get("agentic")
+    if agentic_config is None:
+        agentic_config = {"enabled": False}
     app = Quart(__name__, static_folder=None)
+    app.request_class = _bounded_agentic_request_class(_agentic_request_limit(agentic_config))
     app.json.ensure_ascii = False
     app.config.setdefault("PROVIDE_AUTOMATIC_OPTIONS", True)
     app.extensions["retrieval_config"] = retrieval_config
+    app.extensions["agentic_config"] = agentic_config
     if runtime is not None:
         app.extensions["retrieval_runtime"] = runtime
+    if agentic_runtime is not None:
+        app.extensions["agentic_runtime"] = agentic_runtime
 
     @app.errorhandler(EmbeddingBackendError)
     @app.errorhandler(EmbeddingResponseError)
@@ -159,14 +225,29 @@ def create_app(
         logger.error("embedding request failed [{}]", type(error).__name__)
         return {"error": "embedding backend unavailable"}, 502
 
+    @app.errorhandler(RequestEntityTooLarge)
+    async def request_too_large(_error):
+        return {"error": "request body exceeds max_request_bytes"}, 413
+
     def _runtime() -> RetrievalRuntime:
         return app.extensions["retrieval_runtime"]
+
+    def _agentic_runtime() -> AgenticRAGRuntime | None:
+        return app.extensions.get("agentic_runtime")
 
     @app.before_serving
     async def start() -> None:
         try:
             if "retrieval_runtime" not in app.extensions:
                 app.extensions["retrieval_runtime"] = await build_runtime(app.extensions["retrieval_config"])
+
+            if "agentic_runtime" not in app.extensions:
+                built_agentic = await build_agentic_runtime(
+                    app.extensions["agentic_config"],
+                    app.extensions["retrieval_runtime"],
+                )
+                if built_agentic is not None:
+                    app.extensions["agentic_runtime"] = built_agentic
 
             if not start_mq:
                 return
@@ -220,6 +301,73 @@ def create_app(
 
         documents = await _runtime().retrieve(query.strip(), top_k=top_k, filters=filter_by)
         return {"docs": [document.to_dict(uuid_to_str=True) for document in documents]}
+
+    @app.post("/agentic-rag")
+    async def agentic_rag():
+        agent_runtime = _agentic_runtime()
+        if agent_runtime is None:
+            return {"error": "agentic runtime is disabled"}, 503
+        payload, error = await _payload()
+        if error is not None:
+            return error
+        assert payload is not None
+        rejected = _reject_unknown_fields(payload, {"question", "request_id", "filter_by", "metadata"})
+        if rejected is not None:
+            return rejected
+
+        question = payload.get("question")
+        if not isinstance(question, str) or not question.strip():
+            return {"error": "question must be a non-empty string"}, 400
+        request_id = payload.get("request_id")
+        if request_id is not None and (not isinstance(request_id, str) or not request_id.strip()):
+            return {"error": "request_id must be a non-empty string when provided"}, 400
+        filter_by = payload.get("filter_by")
+        if filter_by is not None and not isinstance(filter_by, dict):
+            return {"error": "filter_by must be an object"}, 400
+        metadata = payload.get("metadata")
+        if metadata is not None and not isinstance(metadata, dict):
+            return {"error": "metadata must be an object"}, 400
+
+        try:
+            result = await agent_runtime.run(
+                question.strip(),
+                request_id=request_id,
+                filters=filter_by,
+                metadata=metadata,
+            )
+        except ValueError as validation_error:
+            return {"error": str(validation_error)}, 400
+        except AgenticCapacityError as capacity_error:
+            logger.warning("agentic runtime admission rejected: capacity exhausted")
+            return (
+                {"error": "agentic runtime capacity exhausted"},
+                429,
+                {"Retry-After": str(capacity_error.retry_after_seconds)},
+            )
+        except TracePersistenceError as trace_error:
+            logger.error("required agentic trace persistence failed [{}]", trace_error.code)
+            return {"error": "required trace persistence unavailable"}, 503
+        body = {
+            "run_id": result.run_id,
+            "answer": result.answer,
+            "status": result.trace.status.value,
+            "termination_reason": result.trace.termination_reason.value,
+            "cited_document_ids": list(result.trace.final_cited_document_ids),
+            "evidence": [
+                {
+                    "id": document.document_id,
+                    "rank": document.rank,
+                    "score": document.score,
+                }
+                for document in result.evidence
+            ],
+            "metrics": result.metrics,
+        }
+        if result.trace.status is RunStatus.TIMED_OUT:
+            return body, 504
+        if result.trace.status is RunStatus.FAILED:
+            return body, 500 if result.trace.termination_reason is TerminationReason.ERROR else 502
+        return body
 
     @app.post("/indexing")
     async def index():

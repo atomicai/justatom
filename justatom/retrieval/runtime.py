@@ -16,7 +16,7 @@ HuggingFaceEmbedder: Any | None = None
 OpenAICompatibleEmbedder: Any | None = None
 WeaviateDocumentStore: Any | None = None
 
-_ROOT_KEYS = {"mode", "alpha", "embedding", "store"}
+_ROOT_KEYS = {"mode", "alpha", "index_revision", "embedding", "store"}
 _STORE_KEYS = {"collection", "url", "grpc_port", "grpc_secure"}
 _LOCAL_KEYS = {
     "backend",
@@ -169,7 +169,9 @@ def _validate_embedding(values: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _validate_config(config: Mapping[str, Any]) -> tuple[SearchMode, int | float, dict[str, Any], dict[str, Any] | None]:
+def _validate_config(
+    config: Mapping[str, Any],
+) -> tuple[SearchMode, int | float, str | None, dict[str, Any], dict[str, Any] | None]:
     _reject_unknown(config, _ROOT_KEYS, "retrieval")
     mode_value = _require_string(config, "mode")
     try:
@@ -178,6 +180,7 @@ def _validate_config(config: Mapping[str, Any]) -> tuple[SearchMode, int | float
         raise ConfigurationError(f"Unsupported retrieval mode: {mode_value!r}") from error
 
     alpha = _validate_alpha(config.get("alpha", 0.5))
+    index_revision = _optional_string(config, "index_revision")
     if "store" not in config:
         raise ConfigurationError("store is required")
     store = _validate_store(_require_mapping(config["store"], "store"))
@@ -187,7 +190,7 @@ def _validate_config(config: Mapping[str, Any]) -> tuple[SearchMode, int | float
         embedding = _validate_embedding(_require_mapping(config["embedding"], "embedding"))
     elif mode is not SearchMode.KEYWORD:
         raise ConfigurationError("embedding is required")
-    return mode, alpha, store, embedding
+    return mode, alpha, index_revision, store, embedding
 
 
 def _build_embedder(embedding: Mapping[str, Any]) -> Embedder:
@@ -250,7 +253,7 @@ async def _cleanup_after_failure(store: DocumentStore | None, embedder: Embedder
 
 async def build_runtime(config: Mapping[str, Any]) -> RetrievalRuntime:
     config = _require_mapping(config, "retrieval")
-    mode, alpha, store_config, embedding_config = _validate_config(config)
+    mode, alpha, index_revision, store_config, embedding_config = _validate_config(config)
     embedder: Embedder | None = None
     store: DocumentStore | None = None
     try:
@@ -267,7 +270,13 @@ async def build_runtime(config: Mapping[str, Any]) -> RetrievalRuntime:
             grpc_port=store_config.get("grpc_port", 50051),
             grpc_secure=store_config.get("grpc_secure", False),
         )
-        return RetrievalRuntime(store=store, embedder=embedder, mode=mode, alpha=alpha)
+        return RetrievalRuntime(
+            store=store,
+            embedder=embedder,
+            mode=mode,
+            alpha=alpha,
+            index_revision=index_revision,
+        )
     except BaseException as primary_error:
         cleanup_error = await _cleanup_after_failure(store, embedder)
         if cleanup_error is not None:
@@ -282,6 +291,7 @@ class RetrievalRuntime:
         embedder: Embedder | None,
         mode: SearchMode | str,
         alpha: float = 0.5,
+        index_revision: str | None = None,
     ) -> None:
         try:
             self.mode = mode if isinstance(mode, SearchMode) else SearchMode(mode)
@@ -289,9 +299,12 @@ class RetrievalRuntime:
             raise ConfigurationError(f"Unsupported retrieval mode: {mode!r}") from error
         if self.mode is not SearchMode.KEYWORD and embedder is None:
             raise ConfigurationError(f"{self.mode.value} retrieval requires an embedder")
+        if index_revision is not None and (not isinstance(index_revision, str) or not index_revision.strip()):
+            raise ConfigurationError("index_revision must be a non-empty string or null")
 
         self.store = store
         self.embedder = embedder
+        self.index_revision = index_revision.strip() if index_revision is not None else None
         self.indexer = Indexer(store, embedder)
         match self.mode:
             case SearchMode.KEYWORD:
