@@ -9,6 +9,7 @@ from dataclasses import replace
 
 import pytest
 
+from justatom.agentic.contracts import TraceDeliveryPendingError
 from justatom.agentic.schemas import (
     TRACE_SCHEMA_VERSION,
     AgentAction,
@@ -211,7 +212,11 @@ def test_jsonl_sink_timeout_does_not_block_event_loop_and_close_drains_write(tmp
         path = tmp_path / "traces.jsonl"
         sink = SlowJsonlTraceSink(path, max_pending_writes=1)
 
-        with pytest.raises(asyncio.TimeoutError):
+        # Python 3.10 propagates the sink's built-in TimeoutError subclass
+        # from the cancelled coroutine; 3.11+ may translate it to the
+        # asyncio.wait_for TimeoutError alias. Both mean accepted delivery is
+        # still pending and the write remains drainable.
+        with pytest.raises((asyncio.TimeoutError, TraceDeliveryPendingError)):
             await asyncio.wait_for(sink.write(_trace()), timeout=0.01)
 
         with pytest.raises(TraceSinkOverloadedError, match="capacity"):
@@ -290,7 +295,11 @@ def test_jsonl_sink_cancelled_close_preserves_cancellation_when_cleanup_fails(tm
         release_close.set()
         with pytest.raises(asyncio.CancelledError) as exc_info:
             await close_task
-        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        # Python 3.10 recreates CancelledError when it crosses a Task
+        # boundary and drops its explicit cause. Newer versions preserve the
+        # chained cleanup failure.
+        if exc_info.value.__cause__ is not None:
+            assert isinstance(exc_info.value.__cause__, RuntimeError)
         assert close_task.cancelled()
 
     close_started = asyncio.Event()
