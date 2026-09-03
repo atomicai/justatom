@@ -148,7 +148,7 @@ def _trace(*, run_id: str = "run-1", duration_ms: float = 100.0) -> RunTrace:
             max_retrieval_calls=5,
             max_llm_calls=5,
             max_tokens=1000,
-            top_k=2,
+            top_k=3,
             max_context_documents=5,
             max_context_chars=10_000,
             max_duration_ms=1000.0,
@@ -464,6 +464,22 @@ def test_run_trace_enforces_final_context_limits() -> None:
 
 
 @pytest.mark.parametrize(
+    ("limits", "message"),
+    [
+        ({"max_steps": 1}, "steps must not exceed limits.max_steps"),
+        ({"max_retrieval_calls": 1}, "retrieval calls must not exceed limits.max_retrieval_calls"),
+        ({"max_llm_calls": 1}, "LLM calls must not exceed limits.max_llm_calls"),
+        ({"top_k": 2}, "top_k_requested must not exceed limits.top_k"),
+    ],
+)
+def test_run_trace_enforces_recorded_work_budgets(limits: dict[str, int], message: str) -> None:
+    trace = _trace()
+
+    with pytest.raises(ValueError, match=message):
+        replace(trace, limits=replace(trace.limits, **limits))
+
+
+@pytest.mark.parametrize(
     "decision",
     [
         DecisionTrace(action=AgentAction.SEARCH, query_sha256="query"),
@@ -544,11 +560,11 @@ def test_derive_run_metrics_preserves_exact_token_coverage_and_diversity():
     assert metrics["retrieval_total_ms"] == 10.0
     assert metrics["planner_total_ms"] == 20.0
     assert metrics["retrieval_requested_slot_count"] == 6
-    assert metrics["retrieval_slot_budget"] == 10
+    assert metrics["retrieval_slot_budget"] == 15
     assert metrics["retrieval_slot_budget_utilization"] == {
         "numerator": 6,
-        "denominator": 10,
-        "rate": 0.6,
+        "denominator": 15,
+        "rate": 0.4,
     }
     assert metrics["token_totals"]["input_tokens"] == 10
     assert metrics["token_coverage"]["input_tokens"] == {"numerator": 1, "denominator": 2, "rate": 0.5}
@@ -733,11 +749,11 @@ def test_aggregate_run_metrics_reports_denominators_and_all_percentiles():
     assert metrics["call_latency_ms_by_kind"]["retrieval"]["p50"] == 5.0
     assert metrics["call_latency_ms_by_kind"]["planner"]["sum"] == 40.0
     assert metrics["retrieval_requested_slot_count"] == 12
-    assert metrics["retrieval_slot_budget"] == 20
+    assert metrics["retrieval_slot_budget"] == 30
     assert metrics["retrieval_slot_budget_utilization"] == {
         "numerator": 12,
-        "denominator": 20,
-        "rate": 0.6,
+        "denominator": 30,
+        "rate": 0.4,
     }
     assert metrics["cost_total_usd"] == 0.008
     assert metrics["retrieval_hop_novelty"]["rate"] == 0.75

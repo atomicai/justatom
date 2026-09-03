@@ -43,16 +43,18 @@ context, including its bounded passage text. A planner-selected stop uses the
 more specific reason.
 
 `max_steps`, `max_retrieval_calls`, and `max_llm_calls` are local hard limits
-rather than tuning hints. `total_timeout_seconds` is a response deadline for
-async components that yield control to the event loop. Already-started backend
-work is not coroutine-cancelled at that deadline: it is detached and tracked,
-and retains its backend-capacity permit until it really exits. This matters for
-`to_thread`, executor, native, and GPU work, whose worker can outlive a
-cancelled asyncio task. No asyncio runtime can preempt third-party code that
-synchronously blocks the event-loop thread. The
-initial search counts against the retrieval-call and step budgets. A local
-`top_k` slice is applied even if a retriever over-returns; the trace records the
-backend count and number discarded.
+rather than tuning hints. The LLM limit counts logical `planner`, `reranker`,
+and `answer` calls; provider attempts remain nested within one logical call and
+do not consume additional slots. `total_timeout_seconds` is a response deadline
+for async components that yield control to the event loop. Already-started
+backend work is not coroutine-cancelled at that deadline: it is detached and
+tracked, and retains its backend-capacity permit until it really exits. This
+matters for `to_thread`, executor, native, and GPU work, whose worker can outlive
+a cancelled asyncio task. No asyncio runtime can preempt third-party code that
+synchronously blocks the event-loop thread. The initial search counts against
+the retrieval-call and step budgets. A local `top_k` slice is applied even if a
+retriever over-returns; the trace records the backend count and number
+discarded.
 
 `max_tokens` is a **post-call observed-usage budget**. It prevents the next
 planner/search action after reported `total_tokens` reaches the limit; when a
@@ -79,7 +81,9 @@ upper bound instead of being bypassed by duplicated observation text.
 The trace records `objective` explicitly. Its limits also retain `top_k`,
 `max_context_documents`, and `max_context_chars`, so a context benchmark can
 reconstruct both the permitted retrieval work and the context delivered to a
-downstream consumer.
+downstream consumer. Strict schema-v2 decoding rejects traces whose recorded
+steps, retrieval calls, LLM calls, or per-call `top_k_requested` exceed those
+hard limits.
 
 Every accepted planner decision is attached to its step before runtime routing.
 This keeps a planned search observable even when a retrieval, step, token,
@@ -363,7 +367,13 @@ and optional `metadata`. A successful response has the following shape:
   "termination_reason": "answered",
   "cited_document_ids": ["document-17"],
   "evidence": [
-    {"id": "document-17", "rank": 1, "score": 0.91}
+    {
+      "id": "document-17",
+      "rank": 1,
+      "score": 0.91,
+      "retrieval_index": 0,
+      "retrieval_rank": 1
+    }
   ],
   "metrics": {}
 }
@@ -381,8 +391,22 @@ context-only response:
   "termination_reason": "agent_stop",
   "cited_document_ids": [],
   "evidence": [
-    {"id": "document-17", "rank": 1, "score": 0.91, "content": "..."},
-    {"id": "document-29", "rank": 2, "score": 0.87, "content": "..."}
+    {
+      "id": "document-17",
+      "rank": 1,
+      "score": 0.91,
+      "retrieval_index": 0,
+      "retrieval_rank": 1,
+      "content": "..."
+    },
+    {
+      "id": "document-29",
+      "rank": 2,
+      "score": 0.87,
+      "retrieval_index": 1,
+      "retrieval_rank": 1,
+      "content": "..."
+    }
   ],
   "metrics": {}
 }
@@ -391,7 +415,10 @@ context-only response:
 `status: "completed"` means the run completed operationally; inspect
 `objective` and `termination_reason` to distinguish an answer, a
 planner-selected context stop, and a bounded stop. `evidence` identifies the
-deduplicated final context in both modes. To preserve the answer-mode API's
+deduplicated final context in both modes. Its one-based `rank` is the document's
+position in that final context; zero-based `retrieval_index` and one-based
+`retrieval_rank` preserve the source hop and position within that hop. To
+preserve the answer-mode API's
 minimal disclosure, passage `content` is included only for the `context`
 objective; it is already bounded by `max_document_chars` and
 `max_context_chars`. The metrics object is derived from the same raw `RunTrace`

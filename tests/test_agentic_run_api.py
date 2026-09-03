@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -246,7 +247,15 @@ def test_agentic_endpoint_forwards_request_and_returns_safe_evidence_and_metrics
             "status": "completed",
             "termination_reason": "answered",
             "cited_document_ids": ["doc-a"],
-            "evidence": [{"id": "doc-a", "rank": 1, "score": 0.91}],
+            "evidence": [
+                {
+                    "id": "doc-a",
+                    "rank": 1,
+                    "score": 0.91,
+                    "retrieval_index": 0,
+                    "retrieval_rank": 1,
+                }
+            ],
             "metrics": {
                 "duration_ms": 12.0,
                 "retrieval_call_count": 1,
@@ -268,6 +277,24 @@ def test_context_objective_returns_ranked_evidence_without_an_answer_or_citation
         result = _result(
             reason=TerminationReason.AGENT_STOP,
             objective=AgentObjective.CONTEXT,
+        )
+        result = replace(
+            result,
+            evidence=(
+                result.evidence[0],
+                EvidenceDocument(
+                    document_id="doc-b",
+                    content="second supporting text",
+                    score=0.82,
+                    rank=1,
+                    retrieval_index=1,
+                ),
+            ),
+            trace=replace(
+                result.trace,
+                final_context_document_ids=("doc-a", "doc-b"),
+                final_context_chars=45,
+            ),
         )
         app = create_app(
             runtime=FakeRetrievalRuntime(),
@@ -293,8 +320,18 @@ def test_context_objective_returns_ranked_evidence_without_an_answer_or_citation
                 "id": "doc-a",
                 "rank": 1,
                 "score": 0.91,
+                "retrieval_index": 0,
+                "retrieval_rank": 1,
                 "content": "private supporting text",
-            }
+            },
+            {
+                "id": "doc-b",
+                "rank": 2,
+                "score": 0.82,
+                "retrieval_index": 1,
+                "retrieval_rank": 1,
+                "content": "second supporting text",
+            },
         ]
 
     asyncio.run(scenario())

@@ -348,11 +348,13 @@ def create_app(
             logger.error("required agentic trace persistence failed [{}]", trace_error.code)
             return {"error": "required trace persistence unavailable"}, 503
         evidence = []
-        for document in result.evidence:
+        for context_rank, document in enumerate(result.evidence, start=1):
             item = {
                 "id": document.document_id,
-                "rank": document.rank,
+                "rank": context_rank,
                 "score": document.score,
+                "retrieval_index": document.retrieval_index,
+                "retrieval_rank": document.rank,
             }
             if result.trace.objective is AgentObjective.CONTEXT:
                 item["content"] = document.content

@@ -487,6 +487,17 @@ class RunTrace:
             raise ValueError("termination_reason must be a TerminationReason")
         if not isinstance(self.limits, RunLimits):
             raise ValueError("limits must be RunLimits")
+        if len(self.steps) > self.limits.max_steps:
+            raise ValueError("steps must not exceed limits.max_steps")
+        calls = tuple(call for step in self.steps for call in step.calls)
+        retrieval_calls = tuple(call for call in calls if call.kind is CallKind.RETRIEVAL)
+        if len(retrieval_calls) > self.limits.max_retrieval_calls:
+            raise ValueError("retrieval calls must not exceed limits.max_retrieval_calls")
+        llm_calls = tuple(call for call in calls if call.kind in {CallKind.PLANNER, CallKind.RERANKER, CallKind.ANSWER})
+        if len(llm_calls) > self.limits.max_llm_calls:
+            raise ValueError("LLM calls must not exceed limits.max_llm_calls")
+        if any(call.retrieval is not None and call.retrieval.top_k_requested > self.limits.top_k for call in retrieval_calls):
+            raise ValueError("retrieval top_k_requested must not exceed limits.top_k")
         for name in ("duration_ms", "queue_latency_ms", "execution_ms"):
             _nonnegative_optional_float(getattr(self, name), name)
         if self.seed is not None and (isinstance(self.seed, bool) or not isinstance(self.seed, int)):
