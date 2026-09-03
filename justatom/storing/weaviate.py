@@ -182,6 +182,9 @@ class WeaviateDocumentStore:
             raise
 
         self._url = normalized_url
+        grpc_connection = getattr(connection_params, "grpc", None)
+        self._grpc_port = getattr(grpc_connection, "port", grpc_port)
+        self._grpc_secure = getattr(grpc_connection, "secure", grpc_secure)
         self._auth_client_secret = auth_client_secret
         self._additional_headers = additional_headers
         self._embedded_options = embedded_options
@@ -200,6 +203,8 @@ class WeaviateDocumentStore:
         return default_to_dict(
             self,
             url=self._url,
+            grpc_port=self._grpc_port,
+            grpc_secure=self._grpc_secure,
             collection_settings=self.collection_settings,
             auth_client_secret=(self._auth_client_secret.to_dict() if self._auth_client_secret else None),
             additional_headers=self._additional_headers,

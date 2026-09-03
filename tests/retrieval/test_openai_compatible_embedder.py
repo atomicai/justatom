@@ -26,6 +26,7 @@ def test_remote_embedder_applies_role_prefix_and_restores_index_order():
         base_url="http://embedding.test/v1",
         model="test-model",
         api_key=None,
+        timeout=12.5,
         profile=EmbeddingProfile(query_prefix="query: "),
         transport=httpx.MockTransport(handler),
     )
@@ -33,6 +34,7 @@ def test_remote_embedder_applies_role_prefix_and_restores_index_order():
     asyncio.run(embedder.close())
 
     assert vectors == [[1.0, 0.0], [2.0, 0.0]]
+    assert embedder.timeout == 12.5
     assert "authorization" not in requests[0].headers
 
 
