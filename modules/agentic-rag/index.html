@@ -1,0 +1,1543 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Neural retrieval, indexing, training, and evaluation toolkit.">
+      
+      
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../api-cli/">
+      
+      
+      <link rel="icon" href="../../Logo.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.7">
+    
+    
+      
+        <title>Agentic RAG - justatom</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8608ea7d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#agentic-rag" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="justatom" class="md-header__button md-logo" aria-label="justatom" data-md-component="logo">
+      
+  <img src="../../Logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            justatom
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Agentic RAG
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="amber"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="justatom" class="md-nav__button md-logo" aria-label="justatom" data-md-component="logo">
+      
+  <img src="../../Logo.png" alt="logo">
+
+    </a>
+    justatom
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../launch-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Launch Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Training
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Modules
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Modules
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Agentic RAG
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Agentic RAG
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#bounded-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bounded Loop
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#library-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      Library Components
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Configuration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP API
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trace-privacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trace Privacy
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metrics Semantics
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#offline-evidence-evaluation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Offline Evidence Evaluation
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Offline Evidence Evaluation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#static-vs-agentic-context-benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      Static vs Agentic Context Benchmark
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API CLI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Processing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../storage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Storage
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modeling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Modeling
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#bounded-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bounded Loop
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#library-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      Library Components
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Configuration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP API
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trace-privacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trace Privacy
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metrics Semantics
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#offline-evidence-evaluation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Offline Evidence Evaluation
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Offline Evidence Evaluation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#static-vs-agentic-context-benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      Static vs Agentic Context Benchmark
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="agentic-rag">Agentic RAG<a class="headerlink" href="#agentic-rag" title="Permanent link">&para;</a></h1>
+<p>Agentic RAG adds a planner-controlled retrieval loop on top of the retrieval
+runtime. The configured <code>objective</code> determines what the loop produces:</p>
+<ul>
+<li><code>answer</code> runs a <code>search | answer</code> planner and returns a generated answer with
+  citations.</li>
+<li><code>context</code> runs a <code>search | stop</code> planner and returns only the accumulated
+  evidence context. It never asks the planner to generate a final answer.</li>
+</ul>
+<p>Both objectives are deliberately bounded: every admitted run has explicit
+work, observed-token, content-size, and wall-clock budgets, and every admitted
+exit is recorded in a structured trace. Pre-admission capacity rejection is a
+separate process-level event because no run ID or trajectory is created.</p>
+<p>The trace contract is currently <strong>schema v2</strong>. Consumers should check
+<code>schema_version</code> and reject versions they do not understand instead of
+assuming forward compatibility.
+Schema v1 was the pre-merge answer-only prototype; v2 makes <code>objective</code> and
+the retrieval/context budget fields mandatory and deliberately rejects v1
+artifacts rather than guessing missing benchmark settings.</p>
+<h2 id="bounded-loop">Bounded Loop<a class="headerlink" href="#bounded-loop" title="Permanent link">&para;</a></h2>
+<p>A run proceeds as follows:</p>
+<ol>
+<li>Retrieve evidence for the original question. The first search is always the
+   original question, so a planner cannot skip the baseline retrieval.</li>
+<li>Give the planner the question, accumulated search observations, current
+   context, and its remaining step and retrieval budgets.</li>
+<li>Accept one objective-specific structured action. The <code>answer</code> objective
+   allows <code>search | answer</code>; the <code>context</code> objective allows <code>search | stop</code>.</li>
+<li>For <code>search</code>, retrieve another bounded <code>top_k</code> result set, merge it into the
+   context, and repeat. <code>answer</code> finishes an answer-producing run. <code>stop</code>
+   finishes a context-only run without generating an answer or citations.</li>
+</ol>
+<p>The two decision schemas are disjoint. In context mode a <code>stop</code> decision has
+<code>query: null</code>, <code>answer: null</code>, and <code>cited_document_ids: []</code>; an <code>answer</code> action
+is invalid. The completed result and HTTP response likewise contain
+<code>answer: null</code> and an empty citation list, while <code>evidence</code> contains the final
+context, including its bounded passage text. A planner-selected stop uses the
+<code>agent_stop</code> termination reason; a hard budget or progress guard retains its
+more specific reason.</p>
+<p><code>max_steps</code>, <code>max_retrieval_calls</code>, and <code>max_llm_calls</code> are local hard limits
+rather than tuning hints. The LLM limit counts logical <code>planner</code>, <code>reranker</code>,
+and <code>answer</code> calls; provider attempts remain nested within one logical call and
+do not consume additional slots. <code>total_timeout_seconds</code> is a response deadline
+for async components that yield control to the event loop. Already-started
+backend work is not coroutine-cancelled at that deadline: it is detached and
+tracked, and retains its backend-capacity permit until it really exits. This
+matters for <code>to_thread</code>, executor, native, and GPU work, whose worker can outlive
+a cancelled asyncio task. No asyncio runtime can preempt third-party code that
+synchronously blocks the event-loop thread. The initial search counts against
+the retrieval-call and step budgets. A local <code>top_k</code> slice is applied even if a
+retriever over-returns; the trace records the backend count and number
+discarded.</p>
+<p><code>max_tokens</code> is a <strong>post-call observed-usage budget</strong>. It prevents the next
+planner/search action after reported <code>total_tokens</code> reaches the limit; when a
+provider omits the total, input plus output is used if both are present. It
+cannot predict input size or undo the call that crossed the threshold, and it
+cannot be enforced for calls with missing usage. <code>planner.max_tokens</code>
+separately sets the provider's per-call output limit. Token coverage makes
+missing usage visible. Normalized repeated queries and no-progress states also
+stop the loop. The trace records a specific
+<code>termination_reason</code>, such as <code>answered</code>, <code>agent_stop</code>, <code>max_steps</code>,
+<code>max_retrieval_calls</code>, <code>max_llm_calls</code>, <code>max_tokens</code>, <code>max_duration</code>,
+<code>no_progress</code>, or <code>repeated_query</code>.</p>
+<p><code>max_concurrency</code> bounds active runs in one agentic runtime and
+<code>max_queued_runs</code> bounds admitted waiters. Separate component and trace permits
+prevent cancellation-draining work from accumulating behind apparently free
+run slots. Time spent waiting for a run slot is recorded separately from
+execution time.</p>
+<p>Search observations carry query/rank/document references. Passage text is sent
+once, through the deduplicated context, so <code>max_context_chars</code> remains a real
+upper bound instead of being bypassed by duplicated observation text.</p>
+<p>The trace records <code>objective</code> explicitly. Its limits also retain <code>top_k</code>,
+<code>max_context_documents</code>, and <code>max_context_chars</code>, so a context benchmark can
+reconstruct both the permitted retrieval work and the context delivered to a
+downstream consumer. Strict schema-v2 decoding rejects traces whose recorded
+steps, retrieval calls, LLM calls, or per-call <code>top_k_requested</code> exceed those
+hard limits.</p>
+<p>Every accepted planner decision is attached to its step before runtime routing.
+This keeps a planned search observable even when a retrieval, step, token,
+repeat-query, or no-progress guard blocks its execution.</p>
+<h2 id="library-components">Library Components<a class="headerlink" href="#library-components" title="Permanent link">&para;</a></h2>
+<p>The public components are intentionally small and composable:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.agentic.openai_compatible</span><span class="w"> </span><span class="kn">import</span> <span class="n">OpenAICompatibleChatBackend</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.agentic.runtime</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">AgenticRAGRuntime</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">AgenticRuntimeConfig</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">build_agentic_runtime</span><span class="p">,</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">)</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.agentic.telemetry</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">JsonlTraceSink</span><span class="p">,</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">derive_run_metrics</span><span class="p">,</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">iter_jsonl_traces</span><span class="p">,</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="p">)</span>
+</code></pre></div>
+<p><code>AgenticRAGRuntime</code> accepts any retriever implementing <code>AgentRetriever</code>, so an
+existing <code>RetrievalRuntime</code> can be reused. <code>OpenAICompatibleChatBackend</code> sends
+structured planner requests to <code>/chat/completions</code>; it does not own retrieval
+or indexing. <code>JsonlTraceSink</code> appends one complete, compact UTF-8 JSON object
+per run.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.agentic</span><span class="w"> </span><span class="kn">import</span> <span class="n">AgentObjective</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.agentic.openai_compatible</span><span class="w"> </span><span class="kn">import</span> <span class="n">OpenAICompatibleChatBackend</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.agentic.runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">AgenticRAGRuntime</span><span class="p">,</span> <span class="n">AgenticRuntimeConfig</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.agentic.telemetry</span><span class="w"> </span><span class="kn">import</span> <span class="n">JsonlTraceSink</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># `retrieval` is an existing RetrievalRuntime (or another AgentRetriever).</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">chat</span> <span class="o">=</span> <span class="n">OpenAICompatibleChatBackend</span><span class="p">(</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">base_url</span><span class="o">=</span><span class="s2">"http://localhost:8000/v1"</span><span class="p">,</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">"planner-model"</span><span class="p">,</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="n">api_key</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"CHAT_API_KEY"</span><span class="p">),</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    <span class="n">timeout_seconds</span><span class="o">=</span><span class="mf">30.0</span><span class="p">,</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>    <span class="n">temperature</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="n">max_tokens</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="n">seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>    <span class="n">objective</span><span class="o">=</span><span class="n">AgentObjective</span><span class="o">.</span><span class="n">ANSWER</span><span class="p">,</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="p">)</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">AgenticRAGRuntime</span><span class="p">(</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>    <span class="n">retrieval</span><span class="p">,</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>    <span class="n">chat</span><span class="p">,</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>    <span class="n">config</span><span class="o">=</span><span class="n">AgenticRuntimeConfig</span><span class="p">(</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>        <span class="n">objective</span><span class="o">=</span><span class="n">AgentObjective</span><span class="o">.</span><span class="n">ANSWER</span><span class="p">,</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>        <span class="n">max_steps</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span>
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>        <span class="n">max_retrieval_calls</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>        <span class="n">max_llm_calls</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span>
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>        <span class="n">max_tokens</span><span class="o">=</span><span class="mi">4096</span><span class="p">,</span>
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>        <span class="n">total_timeout_seconds</span><span class="o">=</span><span class="mf">45.0</span><span class="p">,</span>
+<a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>        <span class="n">trace_timeout_seconds</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span>
+<a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>        <span class="n">top_k</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>        <span class="n">seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span>
+<a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>    <span class="p">),</span>
+<a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>    <span class="n">trace_sink</span><span class="o">=</span><span class="n">JsonlTraceSink</span><span class="p">(</span><span class="s2">".data/traces/agentic-rag.jsonl"</span><span class="p">),</span>
+<a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="p">)</span>
+<a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>
+<a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a><span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>    <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+<a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>        <span class="s2">"Which documents explain the deployment architecture?"</span><span class="p">,</span>
+<a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a>        <span class="n">request_id</span><span class="o">=</span><span class="s2">"request-42"</span><span class="p">,</span>
+<a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a>        <span class="n">filters</span><span class="o">=</span><span class="p">{</span><span class="s2">"language"</span><span class="p">:</span> <span class="s2">"en"</span><span class="p">},</span>
+<a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a>        <span class="n">metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">"experiment"</span><span class="p">:</span> <span class="s2">"bounded-loop-v1"</span><span class="p">},</span>
+<a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a>    <span class="p">)</span>
+<a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">answer</span><span class="p">)</span>
+<a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">evidence</span><span class="p">)</span>
+<a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a>    <span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">metrics</span><span class="p">)</span>
+<a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a><span class="k">finally</span><span class="p">:</span>
+<a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a>    <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</code></pre></div>
+<p>For context acquisition, set <code>objective=AgentObjective.CONTEXT</code> on both
+<code>AgenticRuntimeConfig</code> and <code>OpenAICompatibleChatBackend</code>. The runtime rejects a
+mismatch rather than sending an answer-mode schema to a context-mode loop. The
+config-driven builder propagates the single top-level <code>agentic.objective</code>
+setting to both components automatically. In context mode, consume
+<code>result.evidence</code>; <code>result.answer</code> is always <code>None</code> and the trace has no final
+citations.</p>
+<p>The result exposes <code>run_id</code>, <code>answer</code>, <code>evidence</code>, <code>trace</code>, and <code>metrics</code>. Keep
+<code>result.trace</code> when an experiment needs offline evidence evaluation; the
+metrics mapping is only a derived view of that trace.</p>
+<p>Each trace stores the overall, planner, and retrieval configuration
+fingerprints. Planner sampling/output settings and prompt hash are covered;
+retrieval mode, implementation types, collection/index revision, hybrid alpha,
+resolved store endpoint/gRPC settings, local device, and available embedder
+settings are covered. Credentials are excluded and endpoint URLs are hashed.
+Set <code>retrieval.index_revision</code> to an immutable corpus/index build identifier;
+without one, changing documents in the same collection cannot be inferred
+from runtime configuration alone.</p>
+<p>For a measured benchmark window, treat the corpus as immutable: finish
+indexing first, set a new <code>retrieval.index_revision</code>, start a fresh service
+runtime, and do not call <code>/indexing</code> or <code>/delete</code> until the window ends. The
+fingerprint identifies runtime configuration and the declared revision; it is
+not a content hash and cannot detect an in-place corpus mutation by itself.</p>
+<p>The config-driven <code>build_agentic_runtime</code> is the service-oriented counterpart
+to direct construction with <code>AgenticRuntimeConfig</code>,
+<code>OpenAICompatibleChatBackend</code>, and <code>JsonlTraceSink</code>. In both forms, close the
+agentic runtime during application shutdown so its owned backend and trace sink
+can flush and close. The shared retriever remains caller-owned and must be
+closed separately.</p>
+<h2 id="service-configuration">Service Configuration<a class="headerlink" href="#service-configuration" title="Permanent link">&para;</a></h2>
+<p>The <code>agentic</code> section is separate from <code>retrieval</code>; the agent uses the already
+built retrieval runtime rather than creating another store or embedder.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">agentic</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">objective</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">answer</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">max_steps</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">6</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">max_retrieval_calls</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">max_llm_calls</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">6</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">max_tokens</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4096</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">total_timeout_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">45.0</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">retrieval_timeout_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15.0</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="nt">planner_timeout_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30.0</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span><span class="nt">max_concurrency</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">  </span><span class="nt">max_queued_runs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">16</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">  </span><span class="nt">top_k</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">  </span><span class="nt">max_request_bytes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65536</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">  </span><span class="nt">max_query_chars</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2000</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">  </span><span class="nt">max_answer_chars</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">16000</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">  </span><span class="nt">max_reason_chars</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4000</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">  </span><span class="nt">max_identifier_chars</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">  </span><span class="nt">max_filter_chars</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">16000</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="w">  </span><span class="nt">max_metadata_chars</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8000</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="w">  </span><span class="nt">max_document_chars</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12000</span>
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="w">  </span><span class="nt">max_context_chars</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">48000</span>
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="w">  </span><span class="nt">max_context_documents</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20</span>
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="w">  </span><span class="nt">no_progress_limit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a><span class="w">  </span><span class="nt">seed</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">42</span>
+<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a>
+<a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a><span class="w">  </span><span class="nt">planner</span><span class="p">:</span>
+<a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a><span class="w">    </span><span class="nt">backend</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openai-compatible</span>
+<a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a><span class="w">    </span><span class="nt">base_url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${CHAT_BASE_URL}</span>
+<a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a><span class="w">    </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${CHAT_MODEL}</span>
+<a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a><span class="w">    </span><span class="nt">api_key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${CHAT_API_KEY}</span>
+<a id="__codelineno-2-32" name="__codelineno-2-32" href="#__codelineno-2-32"></a><span class="w">    </span><span class="nt">timeout_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30.0</span>
+<a id="__codelineno-2-33" name="__codelineno-2-33" href="#__codelineno-2-33"></a><span class="w">    </span><span class="nt">temperature</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.0</span>
+<a id="__codelineno-2-34" name="__codelineno-2-34" href="#__codelineno-2-34"></a><span class="w">    </span><span class="nt">max_tokens</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
+<a id="__codelineno-2-35" name="__codelineno-2-35" href="#__codelineno-2-35"></a><span class="w">    </span><span class="nt">max_response_bytes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1048576</span>
+<a id="__codelineno-2-36" name="__codelineno-2-36" href="#__codelineno-2-36"></a><span class="w">    </span><span class="nt">seed</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span>
+<a id="__codelineno-2-37" name="__codelineno-2-37" href="#__codelineno-2-37"></a>
+<a id="__codelineno-2-38" name="__codelineno-2-38" href="#__codelineno-2-38"></a><span class="w">  </span><span class="nt">trace</span><span class="p">:</span>
+<a id="__codelineno-2-39" name="__codelineno-2-39" href="#__codelineno-2-39"></a><span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.data/traces/agentic-rag.jsonl</span>
+<a id="__codelineno-2-40" name="__codelineno-2-40" href="#__codelineno-2-40"></a><span class="w">    </span><span class="nt">capture_text</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hash</span>
+<a id="__codelineno-2-41" name="__codelineno-2-41" href="#__codelineno-2-41"></a><span class="w">    </span><span class="nt">required</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-2-42" name="__codelineno-2-42" href="#__codelineno-2-42"></a><span class="w">    </span><span class="nt">timeout_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5.0</span>
+<a id="__codelineno-2-43" name="__codelineno-2-43" href="#__codelineno-2-43"></a><span class="w">    </span><span class="nt">max_pending_writes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
+</code></pre></div>
+<p>The shared retrieval section may declare the corpus build used by both normal
+and agentic search:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">retrieval</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">index_revision</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">habr-ir-corpus-2026-09-01</span>
+</code></pre></div>
+<p>The character-limit settings bound generated queries, answers, planner reasons,
+request/document/citation identifiers, canonical filter/metadata JSON,
+individual documents, and accumulated context;
+<code>max_context_documents</code> also caps context cardinality and final citation count.
+At the HTTP boundary, <code>max_request_bytes</code> rejects an oversized <code>/searching/agentic</code>
+body with <code>413</code> while Quart is receiving it, before JSON parsing and the
+smaller field-level limits.
+Keep them finite even when the upstream chat service enforces a token limit.
+<code>planner.max_response_bytes</code> caps decoded response bytes while they stream, so
+an untrusted or misconfigured endpoint cannot make the client buffer an
+unbounded body before schema validation.
+The retrieval and planner timeouts bound individual calls, while
+<code>total_timeout_seconds</code> bounds queueing plus the search/planner trajectory.
+At most <code>max_concurrency</code> runs execute and at most <code>max_queued_runs</code> additional
+runs wait for admission. A larger burst is rejected immediately instead of
+retaining an unbounded set of request payloads and tasks.
+Trace persistence happens after that trajectory and has its own
+<code>trace.timeout_seconds</code>, so a slow external sink cannot hold the response
+past its confirmation deadline as long as the sink does not synchronously
+block the event loop. A timed-out asynchronous sink write is cancelled,
+tracked, and keeps a bounded trace permit until it exits. The built-in JSONL
+sink performs filesystem I/O off-loop, accepts at most
+<code>trace.max_pending_writes</code>, and fails fast when that bounded backlog is full.
+Runtime shutdown drains accepted writes before closing the sink, so shutdown
+may wait for slow storage even though request handling does not.</p>
+<p><code>objective</code> is a service-level choice, not a per-request override. Use
+<code>answer</code> for answer generation or <code>context</code> for adaptive context acquisition.
+Changing it changes the planner schema and is included in the trace and
+configuration fingerprints, so benchmark variants cannot silently mix the two
+contracts.</p>
+<p>The top-level <code>seed</code> labels the experiment. In config-driven construction it is
+also sent to the OpenAI-compatible planner unless <code>planner.seed</code> explicitly
+overrides it with a non-null value. Provider support and determinism still
+depend on that provider.
+For direct library construction, pass the same seed to both
+<code>AgenticRuntimeConfig</code> and <code>OpenAICompatibleChatBackend</code> when required.</p>
+<p>The built-in planner calls an OpenAI-compatible <code>/chat/completions</code> endpoint
+with strict <code>response_format.type: json_schema</code>. Compatibility therefore means
+the endpoint accepts that request field and returns the decision as a JSON
+string in <code>choices[0].message.content</code> with exactly <code>action</code>, <code>query</code>, <code>answer</code>,
+<code>reason</code>, and <code>cited_document_ids</code>. The wire schema intentionally avoids regex
+constraints so it remains compatible with providers such as <code>llama-server</code>
+that implement a subset of JSON Schema. The schema permits <code>search | answer</code>
+for the <code>answer</code> objective and <code>search | stop</code> for <code>context</code>; the context
+schema requires null <code>query</code> and <code>answer</code> plus empty citations on <code>stop</code>. The
+client still rejects empty or whitespace-only decision values after decoding.
+The backend performs one provider attempt per planner call and does not retry
+automatically; custom <code>ChatBackend</code> implementations may report multiple
+attempts in the same trace.</p>
+<p><code>trace.required: true</code> is appropriate when losing a run record invalidates an
+experiment: it requires a non-null <code>trace.path</code>, and a sink failure or timeout
+is surfaced instead of being treated as a fully recorded success. With
+<code>required: false</code>, <code>path: null</code> explicitly selects a discard sink; failures of
+another best-effort sink do not turn an otherwise completed trajectory into an
+error. Best-effort failures emit a sanitized warning for service monitoring.
+Direct construction likewise rejects a sink explicitly marked
+<code>required: false</code> when <code>AgenticRuntimeConfig.trace_required</code> is true.
+The sink serializes the already-redacted <code>RunTrace</code> and does not apply a second
+capture policy.</p>
+<h2 id="http-api">HTTP API<a class="headerlink" href="#http-api" title="Permanent link">&para;</a></h2>
+<p>The service route is:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>POST /searching/agentic
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>Content-Type: application/json
+</code></pre></div>
+<p>Use this endpoint for the configured agent objective. In <code>answer</code> mode it
+returns a generated answer; in <code>context</code> mode it returns adaptively collected
+evidence without a final generator call. Continue to use <code>POST /searching</code> for
+a single, static retrieval request. Runtime composition, objective, planner
+credentials, budgets, and trace paths belong in service configuration and are
+not accepted as per-request overrides.
+When <code>agentic.enabled</code> is false, the route returns <code>503</code> instead of starting a
+run. A required trace that cannot be accepted or confirmed also returns a
+sanitized <code>503</code>; the trajectory result is not represented as a successfully
+recorded experiment in that case. A full run queue returns <code>429</code> with a
+<code>Retry-After</code> header; rejected requests do not create a run trace because no
+run was admitted. They increment the process-local <code>rejected_run_count</code>
+available from <code>await runtime.admission_metrics()</code> and emit a sanitized service
+warning, so admission pressure can still be exported by monitoring.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="go">curl -sS http://localhost:5555/searching/agentic \</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="go">  -H 'Content-Type: application/json' \</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="go">  -d '{</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="go">    "text": "Which documents explain the deployment architecture?",</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="go">    "request_id": "request-42",</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="go">    "filter_by": {"language": "en"},</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="go">    "metadata": {"experiment": "bounded-loop-v1"}</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="go">  }'</span>
+</code></pre></div>
+<p>The request fields are <code>text</code>, optional <code>request_id</code>, optional <code>filter_by</code>,
+and optional <code>metadata</code>. A successful response has the following shape:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">"run_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">"objective"</span><span class="p">:</span><span class="w"> </span><span class="s2">"answer"</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">"answer"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"completed"</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">"termination_reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"answered"</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">"cited_document_ids"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"document-17"</span><span class="p">],</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="nt">"evidence"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">      </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"document-17"</span><span class="p">,</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">      </span><span class="nt">"rank"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">      </span><span class="nt">"score"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.91</span><span class="p">,</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">      </span><span class="nt">"retrieval_index"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">      </span><span class="nt">"retrieval_rank"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">  </span><span class="nt">"metrics"</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="p">}</span>
+</code></pre></div>
+<p>With <code>agentic.objective: context</code>, the same request shape produces a
+context-only response:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">"run_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">"objective"</span><span class="p">:</span><span class="w"> </span><span class="s2">"context"</span><span class="p">,</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">"answer"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"completed"</span><span class="p">,</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="nt">"termination_reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"agent_stop"</span><span class="p">,</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="nt">"cited_document_ids"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="nt">"evidence"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">      </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"document-17"</span><span class="p">,</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">      </span><span class="nt">"rank"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">      </span><span class="nt">"score"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.91</span><span class="p">,</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">      </span><span class="nt">"retrieval_index"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">      </span><span class="nt">"retrieval_rank"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">      </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="w">      </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"document-29"</span><span class="p">,</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="w">      </span><span class="nt">"rank"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="w">      </span><span class="nt">"score"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.87</span><span class="p">,</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="w">      </span><span class="nt">"retrieval_index"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="w">      </span><span class="nt">"retrieval_rank"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="w">      </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span>
+<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a><span class="w">  </span><span class="nt">"metrics"</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
+<a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>status: "completed"</code> means the run completed operationally; inspect
+<code>objective</code> and <code>termination_reason</code> to distinguish an answer, a
+planner-selected context stop, and a bounded stop. <code>evidence</code> identifies the
+deduplicated final context in both modes. Its one-based <code>rank</code> is the document's
+position in that final context; zero-based <code>retrieval_index</code> and one-based
+<code>retrieval_rank</code> preserve the source hop and position within that hop. To
+preserve the answer-mode API's
+minimal disclosure, passage <code>content</code> is included only for the <code>context</code>
+objective; it is already bounded by <code>max_document_chars</code> and
+<code>max_context_chars</code>. The metrics object is derived from the same raw <code>RunTrace</code>
+passed to the configured sink.
+Timed-out and failed runs return the same diagnostic shape with HTTP <code>504</code> and
+<code>502</code>, respectively. An unexpected internal runtime failure is distinguished
+from an upstream planner/retrieval failure and returns <code>500</code>.</p>
+<h2 id="trace-privacy">Trace Privacy<a class="headerlink" href="#trace-privacy" title="Permanent link">&para;</a></h2>
+<p>Text capture is an explicit deployment choice. Clear-text questions, generated
+queries, retrieved passages, and answers may contain personal or confidential
+information.</p>
+<table>
+<thead>
+<tr>
+<th><code>capture_text</code></th>
+<th>Trace content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code></td>
+<td>Raw text is omitted and the corresponding text hashes are <code>null</code>.</td>
+</tr>
+<tr>
+<td><code>hash</code></td>
+<td>Raw text is omitted; SHA-256 values are retained for equality and diversity analysis. This is the default.</td>
+</tr>
+<tr>
+<td><code>full</code></td>
+<td>Captured text and its hashes are retained; document text remains subject to configured length limits.</td>
+</tr>
+</tbody>
+</table>
+<p>The same policy applies to request filters: <code>none</code> stores neither filters nor a
+hash, <code>hash</code> stores only a hash of canonical JSON, and <code>full</code> stores both. This
+allows runs to be grouped by identical filter policy without exposing tenant or
+attribute values in the default trace.</p>
+<p>The selected policy is stored in every trace. Planner decisions use the same
+policy for planned queries, answers, and reasons. <code>DocumentTrace.content_chars</code>
+and its hash describe the full retriever value, while clear-text <code>content</code> in
+<code>full</code> mode is clipped to <code>max_document_chars</code>.</p>
+<p>Prefer <code>hash</code> or <code>none</code> for normal operations; use <code>full</code> only for controlled
+evaluation with an access policy, retention period, and secured trace
+directory.</p>
+<p>Hashes are pseudonymous identifiers, not anonymization. Low-entropy questions
+and known corpus passages may be recoverable by dictionary comparison. Also
+avoid placing secrets in <code>request_id</code>, <code>experiment_id</code>, <code>variant</code>, document
+IDs, or free-form metadata because those identifiers remain useful even when
+text is redacted.</p>
+<p>The capture policy controls persisted trace fields only. The planner still
+receives the raw question, every raw observation query, remaining-budget
+counts, and each bounded context document's ID, content, score, rank, and
+retrieval index. The retriever receives raw search queries and request filters.
+The <code>context</code> HTTP objective also returns bounded passage content to its caller,
+independently of the trace capture policy, because that content is the endpoint's
+product. Protect it with the same authorization and transport controls as
+<code>POST /searching</code>.
+Treat those endpoints as data processors and require trusted TLS transport,
+appropriate retention, and access controls; <code>capture_text: none</code> does not
+redact outbound provider payloads.</p>
+<p><code>JsonlTraceSink</code> writes exactly the trace it receives. It appends one line and
+flushes it for each <code>RunTrace</code>; it does not re-redact fields. Treat the
+resulting JSONL as sensitive data under the selected capture policy. On POSIX,
+new trace directories/files are restricted to <code>0700</code>/<code>0600</code>; existing trace
+files are tightened to <code>0600</code>. The API image pre-creates
+<code>/app/.data/traces</code> for its non-root user. When another path is used in a
+container, mount a writable volume owned by UID/GID <code>10001:10001</code>.</p>
+<h2 id="metrics-semantics">Metrics Semantics<a class="headerlink" href="#metrics-semantics" title="Permanent link">&para;</a></h2>
+<p>The raw schema-v2 trace is the source of truth. <code>derive_run_metrics(trace)</code> is
+a reproducible operational summary, not a replacement for the trace and not a
+quality score.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>experiment/config identity fields</td>
+<td>Schema version, experiment ID, variant, seed, and overall/planner/retrieval fingerprints copied from the trace.</td>
+</tr>
+<tr>
+<td><code>objective</code></td>
+<td>The run contract: <code>answer</code> or <code>context</code>.</td>
+</tr>
+<tr>
+<td><code>duration_ms</code></td>
+<td>Queue plus trajectory duration, excluding trace-sink persistence.</td>
+</tr>
+<tr>
+<td><code>queue_latency_ms</code></td>
+<td>Time waiting for the concurrency slot.</td>
+</tr>
+<tr>
+<td><code>execution_ms</code></td>
+<td>Time spent executing the bounded loop.</td>
+</tr>
+<tr>
+<td><code>operational_success</code></td>
+<td>The run completed operationally. This is distinct from answering.</td>
+</tr>
+<tr>
+<td><code>answered</code></td>
+<td>The run completed with termination reason <code>answered</code>. It does not assert correctness or groundedness.</td>
+</tr>
+<tr>
+<td><code>agent_stopped</code></td>
+<td>The context planner explicitly selected <code>stop</code>; budget and progress-guard exits remain false.</td>
+</tr>
+<tr>
+<td><code>calls_by_kind</code>, <code>calls_by_status</code></td>
+<td>Counts reconstructed from recorded calls.</td>
+</tr>
+<tr>
+<td>call error/attempt fields</td>
+<td>Sanitized error categories, attempt status counts, retry counts, and attempt latency.</td>
+</tr>
+<tr>
+<td><code>call_latency_ms_by_kind</code></td>
+<td>Count, sum, and mean latency for retrieval, planner, reranker, and answer calls. Every latency summary includes <code>sum_overflow</code>; an overflowing sum and its mean are reported as <code>null</code>, never <code>Infinity</code>.</td>
+</tr>
+<tr>
+<td>call queue/execution latency fields</td>
+<td>Backend-capacity wait and <code>call_latency - queue_latency</code>, with coverage for traces that predate queue timing. Admission timeouts create no backend attempt.</td>
+</tr>
+<tr>
+<td><code>token_totals</code></td>
+<td>Sum of provider- or tokenizer-reported values that are actually present.</td>
+</tr>
+<tr>
+<td><code>token_coverage</code></td>
+<td>Numerator, denominator, and rate showing how much token accounting was observed.</td>
+</tr>
+<tr>
+<td><code>token_budget</code></td>
+<td>Configured limit, effective observed total, coverage, reached state, and exact overrun when fully observed.</td>
+</tr>
+<tr>
+<td>cost/cache/TTFT fields</td>
+<td>Known totals or rates plus coverage; unavailable provider data stays <code>null</code>. Cost-sum overflow is explicit and never emitted as non-standard <code>Infinity</code>.</td>
+</tr>
+<tr>
+<td><code>retrieval_query_hash_coverage</code></td>
+<td>Number of retrieval calls with a captured normalized-query hash divided by all retrieval calls.</td>
+</tr>
+<tr>
+<td><code>retrieval_requested_slot_count</code></td>
+<td>Sum of <code>top_k_requested</code> across retrieval calls, including failed calls with a retrieval payload.</td>
+</tr>
+<tr>
+<td><code>retrieval_slot_budget</code></td>
+<td>Configured maximum retrieval slots, <code>max_retrieval_calls * top_k</code>.</td>
+</tr>
+<tr>
+<td><code>retrieval_slot_budget_utilization</code></td>
+<td>Requested slots divided by the configured retrieval-slot budget, with explicit numerator and denominator.</td>
+</tr>
+<tr>
+<td>retrieval query/document diversity</td>
+<td>Within-run unique normalized queries or documents divided by their within-run occurrence counts.</td>
+</tr>
+<tr>
+<td>per-hop novelty/Jaccard</td>
+<td>New evidence contributed by each retrieval and overlap with the previous/all earlier hops.</td>
+</tr>
+<tr>
+<td>context/citation fields</td>
+<td>Final context size and the fraction of answer citations that refer to context documents.</td>
+</tr>
+<tr>
+<td><code>final_context_document_budget</code>, <code>final_context_char_budget</code></td>
+<td>Final context cardinality or characters divided by the corresponding configured limit.</td>
+</tr>
+<tr>
+<td>backend/truncation fields</td>
+<td>Upstream result counts, their coverage, and documents discarded by the local <code>top_k</code> guard.</td>
+</tr>
+</tbody>
+</table>
+<p>Missing token counts remain unknown; they are not silently converted to zero.
+The raw call retains the usage source (<code>provider</code>, <code>tokenizer</code>, or <code>unknown</code>).
+Per-call cost data is aggregated only when a backend supplies a numeric USD
+value. <code>cost_coverage</code> prevents a partial provider report from looking like a
+complete run cost. Cache-hit rate and time-to-first-token follow the same
+known-value-plus-coverage rule.</p>
+<p>Citation IDs are preserved as the planner emitted them. Duplicate or
+out-of-context IDs are not silently accepted as grounded evidence: the metrics
+report unique counts and in-context coverage so evaluation can reject or score
+them explicitly.</p>
+<p>Aggregate reports deliberately separate trajectory behavior from workload
+coverage. <code>retrieval_*_diversity</code> combines per-run numerators and denominators;
+<code>workload_unique_query_count</code> and <code>corpus_unique_document_count</code> describe global
+coverage across all runs. Repeating the same evaluation query over several
+seeds therefore does not masquerade as agent redundancy.
+Aggregate output also includes value counts for schema version, experiment ID,
+variant, seed, and objective, plus fingerprint counts and homogeneous flags.
+<code>homogeneous_objective</code> explicitly detects a mixed <code>answer</code>/<code>context</code> report.
+Inspect this composition and group incompatible configurations before
+comparing variants; the aggregator deliberately reports mixtures instead of
+silently guessing a grouping policy. Filter-hash counts, coverage, and
+homogeneity do the same for per-request retrieval policies; <code>capture_text:
+none</code> intentionally leaves that identity unknown. Requested-slot and final
+context utilization are also aggregated from summed numerators and
+denominators rather than averaging per-run rates.</p>
+<p>A retrieval <code>CallTrace.latency_ms</code> measures the complete component call:
+<code>call latency = component-capacity queue latency + component execution
+latency</code>. The per-component timeout covers both terms. With the current
+retrieval runtime, execution includes query embedding <strong>and</strong> document-store
+search; it is not store-only latency. <code>AttemptTrace.latency_ms</code> covers only the
+reported/synthesized backend attempt after admission. Provider-attempt,
+component-queue, and whole-run latency therefore have different boundaries.</p>
+<p>These are application-runtime metrics, not host telemetry. CPU, RSS, GPU
+utilization, power, and VRAM are intentionally outside the core trace so the
+agent package stays portable and does not require <code>psutil</code>, PyTorch, or NVML;
+collect those alongside the JSONL artifact when a hardware benchmark needs
+them.</p>
+<h2 id="offline-evidence-evaluation">Offline Evidence Evaluation<a class="headerlink" href="#offline-evidence-evaluation" title="Permanent link">&para;</a></h2>
+<p>Gold relevance labels stay outside the online loop. Evaluate a completed
+<code>RunTrace</code> offline with <code>EvidenceLabels</code> and <code>evaluate_trace</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.agentic.evaluation</span><span class="w"> </span><span class="kn">import</span> <span class="n">EvidenceLabels</span><span class="p">,</span> <span class="n">evaluate_trace</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">labels</span> <span class="o">=</span> <span class="n">EvidenceLabels</span><span class="p">(</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">qrels</span><span class="o">=</span><span class="p">{</span><span class="s2">"doc-17"</span><span class="p">:</span> <span class="mf">2.0</span><span class="p">,</span> <span class="s2">"doc-29"</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">},</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">required_evidence_groups</span><span class="o">=</span><span class="p">(</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>        <span class="p">{</span><span class="s2">"doc-17"</span><span class="p">,</span> <span class="s2">"doc-17-duplicate"</span><span class="p">},</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>        <span class="p">{</span><span class="s2">"doc-29"</span><span class="p">},</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="p">),</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="p">)</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="n">report</span> <span class="o">=</span> <span class="n">evaluate_trace</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">trace</span><span class="p">,</span> <span class="n">labels</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">context_k</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+</code></pre></div>
+<p>Persisted artifacts round-trip back into the same immutable schema objects:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">justatom.agentic.telemetry</span><span class="w"> </span><span class="kn">import</span> <span class="n">iter_jsonl_traces</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">for</span> <span class="n">trace</span> <span class="ow">in</span> <span class="n">iter_jsonl_traces</span><span class="p">(</span><span class="s2">".data/traces/agentic-rag.jsonl"</span><span class="p">):</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">runtime_metrics</span> <span class="o">=</span> <span class="n">derive_run_metrics</span><span class="p">(</span><span class="n">trace</span><span class="p">)</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">evidence_metrics</span> <span class="o">=</span> <span class="n">evaluate_trace</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span> <span class="n">labels</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">context_k</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+</code></pre></div>
+<p>The loader rejects malformed lines, unknown schema fields, and unsupported
+schema versions with the file and line number instead of silently skipping
+them.</p>
+<p>Positive qrels have relevance greater than zero. Each required-evidence group
+contains interchangeable documents for one evidence slot; a run completes the
+target only after it has retrieved at least one document from every group.
+The labels are evaluator-only data: do not put qrels, positive IDs, required
+groups, or any derived hint into the planner prompt, request metadata, filters,
+or online stopping rule.</p>
+<h3 id="static-vs-agentic-context-benchmark">Static vs Agentic Context Benchmark<a class="headerlink" href="#static-vs-agentic-context-benchmark" title="Permanent link">&para;</a></h3>
+<p>Compare static and adaptive retrieval under the same maximum number of ranked
+slots. For agentic per-hop depth <code>K</code> and maximum retrieval-call count <code>H</code>,
+define the budget as <code>B = H * K</code>.</p>
+<p>Use the following paired configuration:</p>
+<table>
+<thead>
+<tr>
+<th>Variant</th>
+<th>Retrieval configuration</th>
+<th>Context/evaluation depth</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Static</td>
+<td>one <code>/searching</code> call with <code>top_k=B</code></td>
+<td>evaluate the returned top <code>B</code></td>
+</tr>
+<tr>
+<td>Agentic context</td>
+<td><code>objective=context</code>, <code>top_k=K</code>, <code>max_retrieval_calls=H</code></td>
+<td><code>max_context_documents=B</code>; call <code>evaluate_trace(..., k=K, context_k=B)</code></td>
+</tr>
+</tbody>
+</table>
+<p>The initial original-query retrieval is one of the agent's <code>H</code> calls; it is
+not a free extra hop. Keep the corpus/index revision, retriever mode, filters,
+embedding model, character budget, and query set identical. Make
+<code>max_steps</code>, <code>max_llm_calls</code>, and the wall-clock limit large enough that they do
+not become an unintended tighter retrieval cap, then report any guard exits.</p>
+<p>This equalizes the maximum retrieval-slot opportunity, not necessarily the
+work actually spent: a context agent may select <code>stop</code> before <code>H</code> calls.
+Report <code>retrieval_requested_slot_count</code>,
+<code>retrieval_slot_budget_utilization</code>, retrieval/LLM calls, and latency alongside
+quality. This supports both a quality-under-cap comparison and
+quality-versus-actual-work curves without treating an early stop as if it had
+spent all <code>B</code> slots. Keep <code>max_context_documents=B</code> and a common
+<code>max_context_chars</code>; apply the same document truncation, deduplication, and
+character cap when constructing the static context so clipping does not
+silently favor either variant.</p>
+<p>The report evaluates each retrieval hop, cumulative ranked slots, the
+final context, and the final cited documents independently. It includes
+precision, recall, hit rate, reciprocal rank, nDCG, first-hit position, and
+evidence-completion position with their explicit denominators. These are
+evidence-retrieval and citation-selection metrics. They do not
+claim that the generated answer is correct, faithful, or sufficiently cited;
+answer-quality evaluation needs a separate labelled or human-reviewed
+protocol.</p>
+<p>For the <code>context</code> objective, <code>final_context</code> is the primary output-quality
+view. <code>final_citations</code> and <code>final_citation_set</code> are intentionally empty
+because that mode does not select citations or generate an answer. The report
+copies the trace <code>objective</code>, so downstream analysis can reject accidental
+mixtures of answer-producing and context-only runs.</p>
+<p>nDCG uses the same linear graded-qrel gain as the repository's retrieval
+benchmarks. Gains are divided by their maximum finite grade before DCG is
+summed; the shared scale cancels in the nDCG ratio and prevents finite qrels
+from overflowing.</p>
+<p>Per-hop ranking metrics use <code>evaluation_depth=k</code>; final-context metrics use
+<code>evaluation_depth=context_k</code>. When <code>context_k</code> is omitted it defaults to <code>k</code>
+for answer-mode traces and to the recorded <code>max_context_documents</code> for
+context-mode traces. Missing result slots are zero-filled for standard
+precision/nDCG semantics. Cumulative metrics use the spent retrieval
+depth <code>hop * k</code> and preserve repeated document slots, so duplicates cannot
+artificially improve a later document's reciprocal rank or nDCG. Every
+retrieval call with a payload consumes one hop: a non-OK call contributes no
+observed documents but still spends <code>k</code> cumulative slots.
+<code>retrieval_hop_count</code>, <code>successful_hop_count</code>, and <code>failed_hop_count</code> make that
+distinction explicit, and each per-hop and cumulative entry includes its call
+<code>status</code> and <code>successful</code> flag. Evidence completion is deduplicated separately.
+Final citations expose two views. <code>final_citations</code> preserves the first <code>k</code>
+emitted occurrences: duplicates consume slots, receive zero gain after their
+first occurrence, and <code>selection_precision</code> divides by observed occurrences.
+<code>final_citation_set</code> deduplicates the full emitted list before taking <code>k</code> and
+reports set-selection precision separately. Occurrence, unique, and duplicate
+counts make the distinction explicit. Every section reports both
+<code>evaluation_depth</code> and <code>observed_depth</code>.</p>
+<p>Evidence evaluation uses recorded document IDs, so it works with all three
+text-capture policies. Text-based answer evaluation is different: it requires
+the answer from the runtime result or a suitably protected <code>full</code> trace.</p>
+<p>Archive the raw JSONL trace alongside the immutable qrels, evaluation config,
+secret-stripped resolved service config, exact planner prompt, corpus/index and
+model revisions or artifact digests, code revision, dependency lock or
+container digest, and a short hardware/runtime manifest. The fingerprints
+verify equality but cannot reconstruct missing inputs. With those artifacts,
+derived reports can be recomputed when a metric definition changes without
+rerunning the online agent.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.f8cc74c7.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c8b220af.min.js"></script>
+      
+    
+  </body>
+</html>
