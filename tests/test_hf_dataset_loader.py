@@ -31,7 +31,13 @@ class _FakeHFDataset:
 
 
 def _clear_hf_tokens(monkeypatch):
-    for name in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_HUB_TOKEN", "HF_API_KEY"):
+    for name in (
+        "HF_TOKEN",
+        "HUGGINGFACE_API_KEY",
+        "HUGGINGFACE_HUB_TOKEN",
+        "HF_HUB_TOKEN",
+        "HF_API_KEY",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -82,6 +88,38 @@ def test_hf_lazy_uses_streaming_config_token_and_bounded_iteration(monkeypatch):
             },
         )
     ]
+
+
+def test_hf_revision_is_forwarded_to_dataset_and_parquet_fallback(tmp_path, monkeypatch):
+    parquet_path = tmp_path / "train-00000-of-00001.parquet"
+    pl.DataFrame([{"id": 1}]).write_parquet(parquet_path)
+    load_calls = []
+    list_calls = []
+    download_calls = []
+
+    def fake_load_dataset(*args, **kwargs):
+        load_calls.append((args, kwargs))
+        raise TypeError("force fallback")
+
+    def fake_list_repo_files(*args, **kwargs):
+        list_calls.append((args, kwargs))
+        return ["data/train-00000-of-00001.parquet"]
+
+    def fake_hf_hub_download(*args, **kwargs):
+        download_calls.append((args, kwargs))
+        return str(parquet_path)
+
+    monkeypatch.setattr(readers, "load_dataset", fake_load_dataset)
+    monkeypatch.setattr(readers, "list_repo_files", fake_list_repo_files)
+    monkeypatch.setattr(readers, "hf_hub_download", fake_hf_hub_download)
+    readers._repo_files.cache_clear()
+
+    rows = DatasetLoader.read("owner/data", lazy=False, split="train", revision="abc123").to_dicts()
+
+    assert rows == [{"id": 1}]
+    assert load_calls[0][1]["revision"] == "abc123"
+    assert list_calls[0][1]["revision"] == "abc123"
+    assert download_calls[0][1]["revision"] == "abc123"
 
 
 def test_hf_eager_uses_arrow_to_polars_without_pandas(monkeypatch):
@@ -220,6 +258,37 @@ def test_hf_parquet_fallback_filters_files_by_config(tmp_path, monkeypatch):
 
     assert result.to_dicts() == [{"id": "ru"}]
     assert download_calls == ["russian/train-00000-of-00001.parquet"]
+
+
+def test_hf_parquet_fallback_prefers_canonical_data_shards_over_qrels(tmp_path, monkeypatch):
+    data_path = tmp_path / "data.parquet"
+    qrels_path = tmp_path / "qrels.parquet"
+    pl.DataFrame([{"query_id": "q1", "query": "question"}]).write_parquet(data_path)
+    pl.DataFrame([{"query_id": "q1", "passage_id": "d1"}]).write_parquet(qrels_path)
+    download_calls = []
+
+    monkeypatch.setattr(readers, "load_dataset", lambda *args, **kwargs: (_ for _ in ()).throw(TypeError("fallback")))
+    monkeypatch.setattr(
+        readers,
+        "list_repo_files",
+        lambda *args, **kwargs: [
+            "artifacts/qrels/train.parquet",
+            "data/train-00000-of-00001.parquet",
+        ],
+    )
+
+    def fake_download(*args, **kwargs):
+        filename = kwargs["filename"]
+        download_calls.append(filename)
+        return str(data_path if filename.startswith("data/") else qrels_path)
+
+    monkeypatch.setattr(readers, "hf_hub_download", fake_download)
+    readers._repo_files.cache_clear()
+
+    result = DatasetLoader.read("owner/retrieval", lazy=False, split="train")
+
+    assert result.to_dicts() == [{"query_id": "q1", "query": "question"}]
+    assert download_calls == ["data/train-00000-of-00001.parquet"]
 
 
 def test_hf_requires_datasets_dependency(monkeypatch):

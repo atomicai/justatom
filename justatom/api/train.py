@@ -5,9 +5,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from justatom.configuring.environment import load_runtime_environment
 from justatom.configuring.scenarios import deep_merge, load_scenario_config, parse_unknown_overrides
 from justatom.training.config import TrainConfig, TrainingMethod, parse_train_config
 from justatom.training.job import TrainingJob, TrainingResult
+
+load_runtime_environment()
 
 
 def load_train_config(

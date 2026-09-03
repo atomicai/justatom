@@ -41,6 +41,22 @@ class Qwen3EmbeddingModelTest(unittest.TestCase):
         self.assertIsInstance(lm, Qwen3EmbeddingModel)
         mocked.assert_called_once_with("Qwen/Qwen3-Embedding-0.6B")
 
+    def test_ilanguage_model_load_forwards_pinned_revision(self):
+        with patch(
+            "justatom.modeling.prime.AutoModel.from_pretrained",
+            return_value=_FakeQwenModel(),
+        ) as mocked:
+            lm = ILanguageModel.load(
+                "Qwen/Qwen3-Embedding-0.6B",
+                revision="snapshot-123",
+            )
+
+        self.assertIsInstance(lm, Qwen3EmbeddingModel)
+        mocked.assert_called_once_with(
+            "Qwen/Qwen3-Embedding-0.6B",
+            revision="snapshot-123",
+        )
+
     def test_forward_pos_branch_with_target_dim(self):
         model = Qwen3EmbeddingModel(model_name_or_instance=_FakeQwenModel())
         input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])

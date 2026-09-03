@@ -93,7 +93,13 @@ class _LocalEncoder:
         self._torch = None
 
 
-def _build_local_encoder(model: str, device: str, max_length: int) -> _LocalEncoder:
+def _build_local_encoder(
+    model: str,
+    device: str,
+    max_length: int,
+    *,
+    revision: str | None = None,
+) -> _LocalEncoder:
     try:
         import torch
 
@@ -105,12 +111,12 @@ def _build_local_encoder(model: str, device: str, max_length: int) -> _LocalEnco
         raise ConfigurationError(_LOCAL_DEPENDENCY_ERROR) from exc
 
     processor = RuntimeProcessor(
-        tokenizer=ITokenizer.from_pretrained(model),
+        tokenizer=ITokenizer.from_pretrained(model, revision=revision),
         max_seq_len=max_length,
         prefix="",
     )
     runner = EncoderRunner(
-        model=ILanguageModel.load(model),
+        model=ILanguageModel.load(model, revision=revision),
         prediction_heads=[],
         device=device,
         processor=processor,
@@ -126,13 +132,29 @@ def _build_local_encoder(model: str, device: str, max_length: int) -> _LocalEnco
 
 
 class HuggingFaceEmbedder:
-    def __init__(self, model: str, device: str = "auto", profile: EmbeddingProfile | None = None) -> None:
+    def __init__(
+        self,
+        model: str,
+        device: str = "auto",
+        profile: EmbeddingProfile | None = None,
+        revision: str | None = None,
+    ) -> None:
         if not model.strip():
             raise ConfigurationError("model must be non-empty")
         self.model = model
+        self.revision = revision
         self.profile = profile or EmbeddingProfile()
         self.device = resolve_device(device)
-        self._encoder: _LocalEncoder | None = _build_local_encoder(model, self.device, self.profile.max_length)
+        self._encoder: _LocalEncoder | None
+        if revision is None:
+            self._encoder = _build_local_encoder(model, self.device, self.profile.max_length)
+        else:
+            self._encoder = _build_local_encoder(
+                model,
+                self.device,
+                self.profile.max_length,
+                revision=revision,
+            )
         self._lifecycle_lock = asyncio.Lock()
         self._inference_lock = asyncio.Lock()
         self._idle = asyncio.Event()

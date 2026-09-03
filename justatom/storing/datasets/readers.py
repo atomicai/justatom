@@ -34,7 +34,13 @@ from justatom.storing.datasets.source import (
 _STREAMING_EXTENSIONS = {".csv", ".jsonl", ".ndjson", ".parquet"}
 _EAGER_ONLY_EXTENSIONS = {".json", ".xlsx"}
 _SUPPORTED_EXTENSIONS = _STREAMING_EXTENSIONS | _EAGER_ONLY_EXTENSIONS
-_HF_TOKEN_ENV_NAMES = ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_HUB_TOKEN", "HF_API_KEY")
+_HF_TOKEN_ENV_NAMES = (
+    "HF_TOKEN",
+    "HUGGINGFACE_HUB_TOKEN",
+    "HF_HUB_TOKEN",
+    "HUGGINGFACE_API_KEY",
+    "HF_API_KEY",
+)
 
 
 def _unsupported_format(path: Path) -> UnsupportedDatasetFormatError:
@@ -148,11 +154,11 @@ def _split_candidates(split: str | None) -> tuple[str, ...]:
 
 
 @lru_cache(maxsize=64)
-def _repo_files(repo_id: str, token: str | None) -> tuple[str, ...]:
+def _repo_files(repo_id: str, token: str | None, revision: str | None) -> tuple[str, ...]:
     if list_repo_files is None:
         return ()
     try:
-        return tuple(list_repo_files(repo_id=repo_id, repo_type="dataset", token=token))
+        return tuple(list_repo_files(repo_id=repo_id, repo_type="dataset", token=token, revision=revision))
     except Exception:
         return ()
 
@@ -185,7 +191,12 @@ def _parquet_files_for_split(
             continue
         if f"/{normalized_split}/" in normalized_file or f"/{normalized_split}-" in normalized_file:
             matches.append(repo_file)
-    return sorted(matches)
+    matches = sorted(matches)
+    # Canonical HF-generated shards live under data/. Repositories may also
+    # publish auxiliary parquet files such as artifacts/qrels/train.parquet;
+    # mixing those schemas into the dataset split corrupts the fallback load.
+    data_matches = [repo_file for repo_file in matches if Path(repo_file).parts[:1] == ("data",)]
+    return data_matches or matches
 
 
 def _load_parquet_fallback(
@@ -195,10 +206,11 @@ def _load_parquet_fallback(
     config: str | None,
     lazy: bool,
     token: str | None,
+    revision: str | None,
 ) -> pl.LazyFrame | pl.DataFrame | None:
     if hf_hub_download is None:
         return None
-    parquet_files = _parquet_files_for_split(_repo_files(source.repo_id, token), split, config)
+    parquet_files = _parquet_files_for_split(_repo_files(source.repo_id, token, revision), split, config)
     if not parquet_files:
         return None
     local_paths: list[str] = []
@@ -210,6 +222,7 @@ def _load_parquet_fallback(
                     filename=repo_file,
                     repo_type="dataset",
                     token=token,
+                    revision=revision,
                 )
             )
         except Exception:
@@ -234,6 +247,8 @@ def _load_hf_source(
             "split": candidate,
             "streaming": streaming,
         }
+        if options.revision is not None:
+            kwargs["revision"] = options.revision
         if token is not None:
             kwargs["token"] = token
         try:
@@ -246,6 +261,7 @@ def _load_hf_source(
                 config=options.config,
                 lazy=streaming,
                 token=token,
+                revision=options.revision,
             )
             if fallback is not None:
                 return fallback

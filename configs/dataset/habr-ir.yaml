@@ -1,0 +1,43 @@
+display_name: Habr IR
+source: justatom/habr-ir
+name_or_path: justatom/habr-ir
+revision: 304cd8e1d1df49f9641c931f8d2bba5daebb330a
+lazy: true
+config: default
+labels_field: query
+content_field: positive
+split: train
+limit: null
+chunk_id_col: positive_doc_id
+keywords_col: null
+keywords_nested_col: null
+explanation_nested_col: null
+
+train:
+  name_or_path: justatom/habr-ir
+  revision: 304cd8e1d1df49f9641c931f8d2bba5daebb330a
+  config: default
+  split: train
+  labels_field: query
+  content_field: positive
+  chunk_id_col: positive_doc_id
+
+eval:
+  name_or_path: justatom/habr-ir
+  revision: 304cd8e1d1df49f9641c931f8d2bba5daebb330a
+  config: default
+  split: dev
+  query_id_col: query_id
+  query_field: query
+  relevant_id_col: positive_doc_id
+  group_id_col: article_id
+
+corpus:
+  name_or_path: justatom/habr-ir
+  revision: 304cd8e1d1df49f9641c931f8d2bba5daebb330a
+  config: default
+  split: corpus
+  document_id_col: doc_id
+  content_field: content
+
+manifest_path: https://huggingface.co/datasets/justatom/habr-ir/resolve/304cd8e1d1df49f9641c931f8d2bba5daebb330a/manifest.json
