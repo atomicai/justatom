@@ -20,6 +20,7 @@ GRANTED_MODEL_NAMES = [
     "E5SModel",
     "E5LModel",
     "Qwen3EmbeddingModel",
+    "Qwen3VLEmbeddingModel",
     "MBERTModel",
     "BGEModel",
     "PosFreeEncoderModel",
@@ -129,16 +130,23 @@ class ILanguageModel(nn.Module, abc.ABC):
         **kwargs,
     ):
         config_file = Path(model_name_or_path) / "config.json"
-        # assert config_file.exists(), "The config is not found, couldn't load the model"
+        from justatom.modeling.prime import HF_CLASS_MAPPING, Qwen3VLEmbeddingModel
+
+        if revision is not None:
+            kwargs["revision"] = revision
         if config_file.exists():
             logger.info(f"Model found locally at {model_name_or_path}")
             # it's a local directory in FARM format
             with open(config_file) as f:
                 config = json.load(f)
-            language_model = cls.subclasses[config["klass"]].load(model_name_or_path, **kwargs)
+            if "klass" in config:
+                klass = cls.subclasses[config["klass"]]
+            elif config.get("model_type") == "qwen3_vl":
+                klass = Qwen3VLEmbeddingModel
+            else:
+                raise ValueError("Local encoder config requires a JustAtom 'klass' or supported model_type")
+            language_model = klass.load(model_name_or_path, **kwargs)
         else:
-            from justatom.modeling.prime import HF_CLASS_MAPPING
-
             logger.info(f'Loading from huggingface hub via "{model_name_or_path}"')
             klass = HF_CLASS_MAPPING[model_name_or_path]
             language_model = klass.load(model_name_or_path, **kwargs)

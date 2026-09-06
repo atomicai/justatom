@@ -1,3 +1,4 @@
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -62,7 +63,8 @@ class Qwen3EmbeddingModel(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        model_kwargs = {} if kwargs.get("revision") is None else {"revision": kwargs["revision"]}
+        model = AutoModel.from_pretrained(model_name_or_path, **model_kwargs)
         return cls(model, **kwargs)
 
     def last_token_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
@@ -145,6 +147,62 @@ class Qwen3EmbeddingModel(EmbeddingPoolingWrapper):
         return (response,)
 
 
+class Qwen3VLEmbeddingModel(Qwen3EmbeddingModel):
+    """Text-only Qwen3-VL embeddings; no generation head or vision adapters."""
+
+    def __init__(
+        self,
+        model_name_or_instance: str | nn.Module = "Qwen/Qwen3-VL-Embedding-2B",
+        device: str = "cpu",
+        **kwargs,
+    ):
+        if isinstance(model_name_or_instance, str):
+            # Lazy import keeps older encoders usable without the VL architecture.
+            from transformers import Qwen3VLModel
+
+            model_name_or_instance = Qwen3VLModel.from_pretrained(model_name_or_instance, **kwargs)
+        super().__init__(model_name_or_instance, device=device)
+        self.name = "Qwen/Qwen3-VL-Embedding-2B"
+        self.model.visual.requires_grad_(False)
+        self.model.config.use_cache = False
+        self.model.config.text_config.use_cache = False
+
+    @classmethod
+    def load(cls, model_name_or_path: str, **kwargs):
+        return cls(str(model_name_or_path), **kwargs)
+
+    @property
+    def output_dims(self):
+        return self.model.config.text_config.hidden_size
+
+    def last_token_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        positions = attention_mask.shape[1] - 1 - attention_mask.flip([1]).long().argmax(dim=1)
+        return last_hidden_states[torch.arange(last_hidden_states.shape[0], device=last_hidden_states.device), positions]
+
+    def encode(self, input_ids, attention_mask, norm=True, layer_idx=-1, target_dim=None):
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        if target_dim is not None and not 64 <= target_dim <= self.output_dims:
+            raise ValueError(f"target_dim must be in [64, {self.output_dims}], got {target_dim}")
+        return super().encode(input_ids, attention_mask, norm=norm, layer_idx=layer_idx, target_dim=target_dim)
+
+    def resolve_lora_targets(self, requested: str | tuple[str, ...]) -> list[str]:
+        """Resolve PEFT targets explicitly inside the language tower only."""
+        targets = []
+        for name, module in self.model.named_modules():
+            if not name.startswith("language_model.") or not isinstance(module, nn.Linear):
+                continue
+            if isinstance(requested, str):
+                matches = requested == "all-linear" or re.fullmatch(requested, name) is not None
+            else:
+                matches = any(name == item or name.endswith("." + item) for item in requested)
+            if matches:
+                targets.append(name)
+        if not targets:
+            raise ValueError("Qwen3-VL text LoRA requires target_modules matching language_model linear layers")
+        return targets
+
+
 class E5Model(EmbeddingPoolingWrapper):
     """Base E5 family semantic model from hugging face"""
 
@@ -163,7 +221,8 @@ class E5Model(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        model_kwargs = {} if kwargs.get("revision") is None else {"revision": kwargs["revision"]}
+        model = AutoModel.from_pretrained(model_name_or_path, **model_kwargs)
         return cls(model, **kwargs)
 
     def forward(
@@ -214,7 +273,8 @@ class E5SModel(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        model_kwargs = {} if kwargs.get("revision") is None else {"revision": kwargs["revision"]}
+        model = AutoModel.from_pretrained(model_name_or_path, **model_kwargs)
         return cls(model, **kwargs)
 
     def forward(
@@ -268,7 +328,8 @@ class E5LModel(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        model_kwargs = {} if kwargs.get("revision") is None else {"revision": kwargs["revision"]}
+        model = AutoModel.from_pretrained(model_name_or_path, **model_kwargs)
         return cls(model, **kwargs)
 
     def forward(
@@ -318,7 +379,8 @@ class E5LInstructModel(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        model_kwargs = {} if kwargs.get("revision") is None else {"revision": kwargs["revision"]}
+        model = AutoModel.from_pretrained(model_name_or_path, **model_kwargs)
         return cls(model, **kwargs)
 
     def forward(
@@ -367,7 +429,8 @@ class MBERTModel(ILanguageModel):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        model_kwargs = {} if kwargs.get("revision") is None else {"revision": kwargs["revision"]}
+        model = AutoModel.from_pretrained(model_name_or_path, **model_kwargs)
         return cls(model, **kwargs)
 
     def maybe_norm(self, xs, norm: bool):
@@ -414,7 +477,8 @@ class BGEModel(ILanguageModel):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model = AutoModel.from_pretrained(model_name_or_path)
+        model_kwargs = {} if kwargs.get("revision") is None else {"revision": kwargs["revision"]}
+        model = AutoModel.from_pretrained(model_name_or_path, **model_kwargs)
         return cls(model, **kwargs)
 
     def maybe_norm(self, xs, norm: bool):
@@ -550,6 +614,7 @@ HF_CLASS_MAPPING = {
     "intfloat/multilingual-e5-small": E5SModel,
     "intfloat/multilingual-e5-large": E5LModel,
     "Qwen/Qwen3-Embedding-0.6B": Qwen3EmbeddingModel,
+    "Qwen/Qwen3-VL-Embedding-2B": Qwen3VLEmbeddingModel,
     "google-bert/bert-base-multilingual-cased": MBERTModel,
     "deepvk/USER-bge-m3": BGEModel,
     "justatom/pfbert": PosFreeEncoderModel,
@@ -567,6 +632,7 @@ __all__ = [
     "E5SModel",
     "E5Model",
     "Qwen3EmbeddingModel",
+    "Qwen3VLEmbeddingModel",
     "BGEModel",
     "E5LModel",
 ]

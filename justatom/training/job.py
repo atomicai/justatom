@@ -182,7 +182,8 @@ def write_collection_metadata_from_config(run_dir: Path, config: TrainConfig) ->
 
 def build_training_loader(config: TrainConfig):
     rows = prepare_training_data_from_config(config)
-    tokenizer = ITokenizer.from_pretrained(config.model.name_or_path)
+    tokenizer_kwargs = {} if config.model.revision is None else {"revision": config.model.revision}
+    tokenizer = ITokenizer.from_pretrained(config.model.name_or_path, **tokenizer_kwargs)
     processor = TrainWithContrastiveProcessor(
         tokenizer=tokenizer,
         max_seq_len=config.model.max_seq_len,
@@ -232,6 +233,12 @@ def apply_lora_adapter(language_model: ILanguageModel, config: LoraAdapterConfig
     from peft import LoraConfig, TaskType, get_peft_model
 
     target_modules = list(config.target_modules) if isinstance(config.target_modules, tuple) else config.target_modules
+    if hasattr(language_model, "resolve_lora_targets"):
+        if config.bias != "none":
+            raise ValueError("Qwen3-VL text LoRA requires bias=none to keep the base and visual tower frozen")
+        target_modules = language_model.resolve_lora_targets(config.target_modules)
+    revision = getattr(getattr(language_model.model, "config", None), "_commit_hash", None)
+    adapter_kwargs = {} if revision is None else {"revision": revision}
     language_model.model = get_peft_model(
         language_model.model,
         LoraConfig(
@@ -243,18 +250,25 @@ def apply_lora_adapter(language_model: ILanguageModel, config: LoraAdapterConfig
             target_modules=target_modules,
             use_rslora=config.use_rslora,
             bias=config.bias,
+            **adapter_kwargs,
         ),
     )
     return language_model
 
 
 def load_encoder(config: TrainConfig, processor: TrainWithContrastiveProcessor) -> EncoderRunner:
-    language_model = ILanguageModel.load(model_name_or_path=config.model.name_or_path)
+    model_kwargs = {} if config.model.revision is None else {"revision": config.model.revision}
+    language_model = ILanguageModel.load(model_name_or_path=config.model.name_or_path, **model_kwargs)
+    device = resolve_torch_device(config.runtime)
+    if config.model.dtype is not None:
+        # CPU/MPS remain float32; frozen CUDA weights may use a lower-precision dtype.
+        dtype = getattr(torch, config.model.dtype) if device.startswith("cuda") else torch.float32
+        language_model.to(dtype=dtype)
     if config.runtime.gradient_checkpointing:
         backbone = language_model.model
         if not hasattr(backbone, "gradient_checkpointing_enable"):
             raise ValueError(f"{config.model.name_or_path} does not support gradient checkpointing")
-        backbone.gradient_checkpointing_enable()
+        backbone.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         if hasattr(backbone, "enable_input_require_grads"):
             backbone.enable_input_require_grads()
         if hasattr(backbone, "config") and hasattr(backbone.config, "use_cache"):
@@ -264,7 +278,7 @@ def load_encoder(config: TrainConfig, processor: TrainWithContrastiveProcessor) 
         model=language_model,
         processor=processor,
         prediction_heads=[],
-        device=resolve_torch_device(config.runtime),
+        device=device,
     )
 
 
