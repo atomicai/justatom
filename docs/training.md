@@ -332,7 +332,7 @@ path. Image/video training and multimodal serving are not implemented here.
 instruction `Represent the user's input.` and an assistant generation prefix,
 following the [official embedder](https://huggingface.co/Qwen/Qwen3-VL-Embedding-2B/blob/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/scripts/qwen3_vl_embedding.py).
 This happens for both training and local retrieval, including exported encoders.
-Keep `query_prefix` and `content_prefix` empty in this recipe; nonempty prefixes
+Keep `query_prefix` and `content_prefix` empty for this format; nonempty prefixes
 are prepended to the user text, not substituted into the system instruction.
 Sequence limits apply to the complete formatted prompt, with the same right
 truncation as the official text path. Last-valid-token pooling yields normalized
@@ -343,48 +343,13 @@ layers. The visual tower remains frozen, and LoRA requires `bias: none`.
 Geometry AnchorBank uses the same adapter-disabled frozen base and the same
 one-sided projection as before: no reranker or negative-bank denominator is added.
 
-Two matched starting configs are provided:
-
-```bash
-conda activate justatom-env
-python -m justatom.api.train --config configs/experiments/qwen3-vl-2b-lora-vanilla.yaml
-python -m justatom.api.train --config configs/experiments/qwen3-vl-2b-lora-geometry-anchor-bank.yaml
-```
-
-These are starting configs, not evaluated benchmark results: one seed/epoch,
-3,000 sampled JustAtom pairs, rank 16 / alpha 32 / rsLoRA, learning rate 2e-5,
-query/document lengths 128/512 and a microbatch of 4. Accumulation
-of 8 gives 32 pairs per optimizer update, **not** 32 in-batch candidates. Hold the
-microbatch fixed in matched comparisons, and establish a disjoint train/dev/test
-protocol separately before measuring quality. Use a fresh `artifacts.save_dir`
-for each real run. The configs disable the large optional research checkpoint;
-the PEFT adapter and merged encoder are still exported.
-
-A four-step CUDA smoke at microbatch 8 / document length 512 passed on a 24 GB
-RTX 5090 Laptop, but reserved about 23.2 GiB. The starting configs use microbatch
-4 (about 13.7 GiB reserved in the same smoke) to leave headroom; that changes the contrastive negative count, so it must also
-be used in the matched control. Short synthetic smokes are not long-run memory or
-thermal guarantees.
-
 `model.revision` pins both model and tokenizer. `model.dtype` optionally controls
 CUDA backbone storage (`float32`, `float16`, `bfloat16`); null preserves existing
 loading behavior. CPU/MPS use float32 when this field is set. This is distinct
 from `runtime.precision`, which controls Lightning's numerical execution mode.
-The VL configs use BF16 storage on CUDA and non-reentrant gradient checkpointing.
+Gradient checkpointing is non-reentrant when enabled through the training runtime.
 AnchorBank's deterministic eval-mode student view retains its graph, so measure
 its memory separately; gradient checkpointing does not eliminate that overhead.
-
-With the pinned model already cached, run a short offline synthetic check:
-
-```bash
-python scripts/smoke_qwen3_vl_lora.py --device cuda
-```
-
-This checks live adapter updates and the active geometry constraint for both
-configs, logs batch metrics and peak CUDA allocated/reserved memory, and saves
-manifests under a fresh `.tmp_runs/qwen3-vl-lora-smoke-*` directory. It does not
-download models, save large weights, or estimate retrieval quality. `--device cpu`
-and `--device mps` use the same path; actual MPS validation needs Apple hardware.
 
 ## Artifacts
 

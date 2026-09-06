@@ -65,8 +65,24 @@ def tokenizer():
 
 
 def vl_config(geometry=False):
-    name = "geometry-anchor-bank" if geometry else "vanilla"
-    return resolve_train_config(config_path=f"configs/experiments/qwen3-vl-2b-lora-{name}.yaml")
+    return resolve_train_config(
+        config={
+            "method": "atomic" if geometry else "vanilla",
+            "experiment": {"role": "ablation"},
+            "model": {
+                "name_or_path": "Qwen/Qwen3-VL-Embedding-2B",
+                "revision": "test-revision",
+                "dtype": "bfloat16",
+                "query_prefix": "",
+                "content_prefix": "",
+                "lora": {"enabled": True, "rank": 4, "alpha": 8},
+            },
+            "memory_bank": {"enabled": False, "size": 0},
+            "anchor_bank": {"enabled": geometry, "size": 8 if geometry else 0},
+            "gradient_projection": {"enabled": geometry, "memory_weight": 0.0},
+            "runtime": {"gradient_checkpointing": True},
+        }
+    )
 
 
 def pair_batch():
@@ -180,15 +196,6 @@ def test_train_and_runtime_preprocessing_match_including_truncation(tokenizer, t
     restored_ds, _, _ = restored.dataset_from_dicts(rows)
     for actual, expected in zip(restored_ds.tensors, train_ds.tensors, strict=True):
         torch.testing.assert_close(actual, expected)
-
-
-def test_vl_configs_are_matched_except_geometry_and_artifacts():
-    vanilla, geometry = vl_config(), vl_config(True)
-    for field in ("model", "dataset", "experiment", "optimization", "objective", "runtime", "memory_bank"):
-        assert getattr(vanilla, field) == getattr(geometry, field)
-    assert not vanilla.objective.decoupled
-    assert geometry.anchor_bank.enabled and not geometry.memory_bank.enabled
-    assert geometry.gradient_projection.memory_weight == 0
 
 
 def test_geometry_checkpointing_and_merge_roundtrip(backbone, tokenizer, tmp_path):
