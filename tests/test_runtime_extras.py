@@ -94,7 +94,7 @@ def test_torch_extra_has_peft_and_qwen3_compatible_transformers():
     transformers = next(Requirement(item) for item in torch_extra if Requirement(item).name == "transformers")
 
     assert _contains_requirement(torch_extra, "peft")
-    assert "4.51" in str(transformers.specifier)
+    assert "4.57" in str(transformers.specifier)
 
 
 def test_clustering_extra_owns_bertopic_and_umap_dependencies():

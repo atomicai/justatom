@@ -4,6 +4,7 @@ import simplejson as json
 from loguru import logger
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
+from justatom.processing.qwen3_vl import Qwen3VLTextTokenizer
 from justatom.tooling.stl import merge_in_order
 
 
@@ -21,7 +22,7 @@ class ITokenizer(PreTrainedTokenizer):
         super().__init__(max_len=max_len, pad_token=pad_token)
 
     @classmethod
-    def from_pretrained(cls, where) -> PreTrainedTokenizer:
+    def from_pretrained(cls, where, **kwargs):
         # Here we do check if `where` is a directory or `huggingface` tokenizer-name
         where_path = Path(where)
         if where_path.is_dir():
@@ -33,17 +34,23 @@ class ITokenizer(PreTrainedTokenizer):
             if klass in cls.subclasses:
                 return cls.subclasses[klass].load(config=config, where=where)
             else:
-                return AutoTokenizer.from_pretrained(where)
+                tokenizer = AutoTokenizer.from_pretrained(where, **kwargs)
         else:
             # try to ignite huggingface `transformers` tokenizer
             try:
-                tokenizer = ignite_hf_tokenizer(where)
+                tokenizer = ignite_hf_tokenizer(where, **kwargs)
             except:  # noqa: E722
                 msg = f"The provided name [{where}] neither directory nor recognized tokenizer name from `huggingface.co`"
                 logger.error(msg)
                 raise ValueError(msg)  # noqa: B904
-            else:
-                return tokenizer
+        is_vl = str(where) == "Qwen/Qwen3-VL-Embedding-2B"
+        model_config_path = where_path / "config.json"
+        if model_config_path.is_file():
+            with open(model_config_path) as fp:
+                is_vl = json.load(fp).get("model_type") == "qwen3_vl"
+        if is_vl or tokenizer.init_kwargs.get("justatom_text_format") == "qwen3_vl":
+            return Qwen3VLTextTokenizer(tokenizer)
+        return tokenizer
 
 
 class WHITESPACETokenizer(ITokenizer):

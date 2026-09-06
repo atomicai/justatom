@@ -50,6 +50,8 @@ class LoraAdapterConfig:
 @dataclass(frozen=True)
 class ModelConfig:
     name_or_path: str = "intfloat/multilingual-e5-small"
+    revision: str | None = None
+    dtype: str | None = None
     query_prefix: str = "query:"
     content_prefix: str = "passage:"
     max_query_seq_len: int | None = None
@@ -345,6 +347,10 @@ def validate_train_config(config: TrainConfig) -> None:
     _require_int(config.experiment.seed, "experiment.seed", 0)
     if not isinstance(config.model.name_or_path, str) or not config.model.name_or_path:
         raise ValueError("model.name_or_path must be a non-empty string")
+    if config.model.revision is not None and (not isinstance(config.model.revision, str) or not config.model.revision.strip()):
+        raise ValueError("model.revision must be a non-empty string or null")
+    if config.model.dtype not in (None, "float32", "float16", "bfloat16"):
+        raise ValueError("model.dtype must be float32, float16, bfloat16 or null")
     _require_int(config.model.max_seq_len, "model.max_seq_len", 1)
     if config.model.max_query_seq_len is not None:
         _require_int(config.model.max_query_seq_len, "model.max_query_seq_len", 1)

@@ -321,6 +321,36 @@ same Qwen3 LoRA, data, optimization, and runtime values, disables the memory
 bank, and fixes `tau=0.05`, `tau_simcse=0.2`, `tau_target=0.2`,
 `lambda_sc=0.03`, and the `safe` controller ratio at `0.25`.
 
+### Qwen3-VL-Embedding-2B: text retrieval
+
+`Qwen/Qwen3-VL-Embedding-2B` is supported for **text-only** training and local
+retrieval through native Transformers (>=4.57) and standard PEFT. No vision
+processor, `qwen-vl-utils`, Unsloth or quantization package is required for this
+path. Image/video training and multimodal serving are not implemented here.
+
+`ITokenizer` applies the checkpoint's chat template with the default system
+instruction `Represent the user's input.` and an assistant generation prefix,
+following the [official embedder](https://huggingface.co/Qwen/Qwen3-VL-Embedding-2B/blob/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/scripts/qwen3_vl_embedding.py).
+This happens for both training and local retrieval, including exported encoders.
+Keep `query_prefix` and `content_prefix` empty for this format; nonempty prefixes
+are prepended to the user text, not substituted into the system instruction.
+Sequence limits apply to the complete formatted prompt, with the same right
+truncation as the official text path. Last-valid-token pooling yields normalized
+2048-dimensional embeddings; optional MRL dimensions range from 64 to 2048.
+
+For this architecture, `all-linear` resolves only to language-tower linear
+layers. The visual tower remains frozen, and LoRA requires `bias: none`.
+Geometry AnchorBank uses the same adapter-disabled frozen base and the same
+one-sided projection as before: no reranker or negative-bank denominator is added.
+
+`model.revision` pins both model and tokenizer. `model.dtype` optionally controls
+CUDA backbone storage (`float32`, `float16`, `bfloat16`); null preserves existing
+loading behavior. CPU/MPS use float32 when this field is set. This is distinct
+from `runtime.precision`, which controls Lightning's numerical execution mode.
+Gradient checkpointing is non-reentrant when enabled through the training runtime.
+AnchorBank's deterministic eval-mode student view retains its graph, so measure
+its memory separately; gradient checkpointing does not eliminate that overhead.
+
 ## Artifacts
 
 Every successful training run writes:
