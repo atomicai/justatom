@@ -399,6 +399,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="LoRA adapters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#qwen3-vl-embedding-2b-text-retrieval" class="md-nav__link">
+    <span class="md-ellipsis">
+      Qwen3-VL-Embedding-2B: text retrieval
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -725,6 +740,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="LoRA adapters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#qwen3-vl-embedding-2b-text-retrieval" class="md-nav__link">
+    <span class="md-ellipsis">
+      Qwen3-VL-Embedding-2B: text retrieval
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1031,6 +1061,31 @@ command line to reuse the recipe.</p>
 same Qwen3 LoRA, data, optimization, and runtime values, disables the memory
 bank, and fixes <code>tau=0.05</code>, <code>tau_simcse=0.2</code>, <code>tau_target=0.2</code>,
 <code>lambda_sc=0.03</code>, and the <code>safe</code> controller ratio at <code>0.25</code>.</p>
+<h3 id="qwen3-vl-embedding-2b-text-retrieval">Qwen3-VL-Embedding-2B: text retrieval<a class="headerlink" href="#qwen3-vl-embedding-2b-text-retrieval" title="Permanent link">&para;</a></h3>
+<p><code>Qwen/Qwen3-VL-Embedding-2B</code> is supported for <strong>text-only</strong> training and local
+retrieval through native Transformers (&gt;=4.57) and standard PEFT. No vision
+processor, <code>qwen-vl-utils</code>, Unsloth or quantization package is required for this
+path. Image/video training and multimodal serving are not implemented here.</p>
+<p><code>ITokenizer</code> applies the checkpoint's chat template with the default system
+instruction <code>Represent the user's input.</code> and an assistant generation prefix,
+following the <a href="https://huggingface.co/Qwen/Qwen3-VL-Embedding-2B/blob/9f2f7e710d6d81056aa5c0a4f04764fec6bb7bda/scripts/qwen3_vl_embedding.py">official embedder</a>.
+This happens for both training and local retrieval, including exported encoders.
+Keep <code>query_prefix</code> and <code>content_prefix</code> empty for this format; nonempty prefixes
+are prepended to the user text, not substituted into the system instruction.
+Sequence limits apply to the complete formatted prompt, with the same right
+truncation as the official text path. Last-valid-token pooling yields normalized
+2048-dimensional embeddings; optional MRL dimensions range from 64 to 2048.</p>
+<p>For this architecture, <code>all-linear</code> resolves only to language-tower linear
+layers. The visual tower remains frozen, and LoRA requires <code>bias: none</code>.
+Geometry AnchorBank uses the same adapter-disabled frozen base and the same
+one-sided projection as before: no reranker or negative-bank denominator is added.</p>
+<p><code>model.revision</code> pins both model and tokenizer. <code>model.dtype</code> optionally controls
+CUDA backbone storage (<code>float32</code>, <code>float16</code>, <code>bfloat16</code>); null preserves existing
+loading behavior. CPU/MPS use float32 when this field is set. This is distinct
+from <code>runtime.precision</code>, which controls Lightning's numerical execution mode.
+Gradient checkpointing is non-reentrant when enabled through the training runtime.
+AnchorBank's deterministic eval-mode student view retains its graph, so measure
+its memory separately; gradient checkpointing does not eliminate that overhead.</p>
 <h2 id="artifacts">Artifacts<a class="headerlink" href="#artifacts" title="Permanent link">&para;</a></h2>
 <p>Every successful training run writes:</p>
 <ul>
