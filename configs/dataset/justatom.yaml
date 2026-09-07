@@ -1,9 +1,9 @@
-name_or_path: .data/polaroids.ai.data.json
-lazy: false
-config: null
+name_or_path: justatom/universe-retrieval-benchmark
+lazy: true
+config: benchmark
 labels_field: queries
 content_field: content
-split: null
+split: full
 limit: null
 chunk_id_col: chunk_id
 keywords_col: keywords_or_phrases

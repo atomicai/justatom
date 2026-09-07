@@ -109,7 +109,7 @@ def _json_frame(path: Path) -> pl.DataFrame:
         rows = [payload]
     else:
         rows = []
-    return pl.from_dicts(rows) if rows else pl.DataFrame()
+    return pl.from_dicts(rows, infer_schema_length=None) if rows else pl.DataFrame()
 
 
 def _local_to_frame(path: Path, options: DatasetReadOptions) -> pl.DataFrame:

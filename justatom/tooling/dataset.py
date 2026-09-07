@@ -115,6 +115,19 @@ class DatasetRecordAdapter:
 
     @classmethod
     def normalize_queries(cls, raw: Any) -> list[str]:
+        raw = cls._maybe_parse_json_string(raw)
+        if isinstance(raw, dict) and "text" in raw:
+            raw = [raw]
+        if isinstance(raw, Iterable) and not isinstance(raw, str):
+            normalized: list[str] = []
+            for item in raw:
+                value = item.get("text") if isinstance(item, dict) and "text" in item else item
+                if cls._is_missing(value):
+                    continue
+                text = str(value).strip()
+                if text:
+                    normalized.append(text)
+            return normalized
         return cls.normalize_labels(raw)
 
     @classmethod
@@ -208,7 +221,7 @@ class DatasetRecordAdapter:
                             raw_labels = maybe_meta.get(self.queries_col)
                         if self._is_missing(raw_labels):
                             raw_labels = maybe_meta.get("labels")
-                labels = self.normalize_labels(raw_labels) if self.queries_col is not None else []
+                labels = self.normalize_queries(raw_labels) if self.queries_col is not None else []
 
                 field_map: dict[str, str] = {}
                 if self.content_col and self.content_col != "content":

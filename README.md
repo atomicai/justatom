@@ -150,6 +150,21 @@ bash scripts/run_benchmark.sh \
 The benchmark wrapper writes shell-escaped command arrays to `COMMANDS.md` in
 the benchmark directory, alongside result summaries.
 
+## Private Retrieval Dataset
+
+The `justatom` dataset preset streams the complete private
+[Universe Retrieval Benchmark](https://huggingface.co/datasets/justatom/universe-retrieval-benchmark)
+from `benchmark/full`: 10,000 passages and 43,872 structured retrieval
+queries covering the legacy collection, Harry Potter, The Hunger Games,
+Middle-earth, and The Witcher. Set `HF_TOKEN` to a token with read access to
+the private dataset before training or evaluation.
+
+Git contains no Universe Retrieval corpus payload or dataset images. The Hub
+rows also contain no image columns, image paths, `license`, or `license_url`
+fields. The all-in-one view keeps one passage per row with nested `queries`;
+BEIR-like `corpus`, `queries`, and `qrels` views remain available for
+conventional retrieval tooling.
+
 ## Documentation
 
 ```bash
