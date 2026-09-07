@@ -173,6 +173,19 @@ def test_eager_json_preserves_supported_shapes(tmp_path, payload):
     assert frame.to_dicts() == [{"id": 1, "content": "one"}]
 
 
+def test_eager_json_infers_fields_from_all_rows(tmp_path):
+    path = tmp_path / "dataset.json"
+    rows = [{"id": index, "content": f"row-{index}"} for index in range(100)]
+    rows.append({"id": 100, "content": "row-100", "provenance": "late-field"})
+    path.write_text(json.dumps(rows), encoding="utf-8")
+
+    frame = source_to_frame(LocalDatasetSource(path.resolve()), DatasetReadOptions())
+
+    assert frame.height == 101
+    assert frame.columns == ["id", "content", "provenance"]
+    assert frame.row(-1, named=True)["provenance"] == "late-field"
+
+
 def test_packaged_demo_supports_lazy_and_eager_reads():
     source = resolve_dataset_source("demo")
 

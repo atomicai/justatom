@@ -1,0 +1,256 @@
+{
+  "schema_version": "1.1.0",
+  "built_at_utc": "2026-08-30T12:00:00Z",
+  "git_distribution": {
+    "corpus_payload_tracked": false,
+    "repo": "justatom/universe-retrieval-benchmark",
+    "private": true,
+    "commit": "7752739f118344590ca561135b07e0eeccbbae18",
+    "config": "benchmark",
+    "split": "full"
+  },
+  "source": {
+    "repo": "justatom/polaroids-ai-retrieval",
+    "file": "data/train.json",
+    "sha256": "323cdffbab56ba6d0fbee62e3d465ad859a191122bf38eebd52951afc020b27d",
+    "git_commit": "3181e599baab142f8c9cd638f35d10c3f0aefc72"
+  },
+  "counts": {
+    "benchmark": {
+      "rows": 10000,
+      "nested_queries": 43872,
+      "with_queries": 9917,
+      "without_queries": 83,
+      "train_rows": 6825,
+      "test_rows": 3175
+    },
+    "corpus": 10000,
+    "queries": {
+      "train": 30710,
+      "test": 13162,
+      "total": 43872
+    },
+    "qrels": {
+      "train": 30710,
+      "test": 13162,
+      "total": 43872
+    }
+  },
+  "split": {
+    "strategy": "deterministic whole-source-group subset sum",
+    "seed": "justatom-universe-retrieval-v1-split-2026-08-29",
+    "target_test_fraction": 0.3,
+    "target_test_queries": 13162,
+    "actual_test_queries": 13162,
+    "actual_test_fraction": 0.300009117432531,
+    "groups": {
+      "total": 1863,
+      "train": 1360,
+      "test": 503
+    },
+    "source_group_overlap": 0,
+    "breakdown": {
+      "train": {
+        "queries": 30710,
+        "languages": {
+          "en": 17035,
+          "ru": 13675
+        },
+        "universes": {
+          "legacy": 8816,
+          "the_witcher": 1140,
+          "harry_potter": 7050,
+          "middle_earth": 8100,
+          "the_hunger_games": 5604
+        },
+        "source_types": {
+          "legacy": 8816,
+          "wiki": 21894
+        }
+      },
+      "test": {
+        "queries": 13162,
+        "languages": {
+          "en": 7495,
+          "ru": 5667
+        },
+        "universes": {
+          "legacy": 5008,
+          "the_witcher": 660,
+          "harry_potter": 2550,
+          "middle_earth": 2748,
+          "the_hunger_games": 2196
+        },
+        "source_types": {
+          "legacy": 5008,
+          "wiki": 8154
+        }
+      }
+    }
+  },
+  "identifiers": {
+    "query": "UUIDv5(NAMESPACE_URL, query prefix + normalized query text)",
+    "source_group": "UUIDv5(NAMESPACE_URL, group prefix + compact JSON descriptor)"
+  },
+  "hard_negatives": null,
+  "paid_llm_cost_usd": 0,
+  "files": {
+    "README.md": {
+      "sha256": "93d7798fda6adcbfadf7ad76d8d1334ad2ed493c6e9774edda31a1ffbc8d54f3",
+      "bytes": 1987
+    },
+    "data/benchmark/full.jsonl": {
+      "sha256": "b22bd1b332250612898d873aec074c2e3e111a2419ad5551aeb8f0664e905b13",
+      "bytes": 47564699
+    },
+    "data/corpus/corpus.jsonl": {
+      "sha256": "e6db12c4f9be87b4f610f836ebb1898f61a44d003d2cb22829fcd911f24afc9f",
+      "bytes": 37741799
+    },
+    "data/qrels/test.jsonl": {
+      "sha256": "9b773da1dc44dd1a6ea58df58941146d31387763c17e1469b88ca2a2260183d0",
+      "bytes": 1684736
+    },
+    "data/qrels/train.jsonl": {
+      "sha256": "57814c884a306895a30277aea5d0056211d787a6ff710fd0eeb89e810104737a",
+      "bytes": 3961590
+    },
+    "data/queries/test.jsonl": {
+      "sha256": "634b0426ca2297685d98c9d786a3e969045045de7a274ca207f61ee9fc94ef7b",
+      "bytes": 5789791
+    },
+    "data/queries/train.jsonl": {
+      "sha256": "31f471bd77670cef82314f85b2763271a9d4513e8a8bfd845df03103eb8ca2b9",
+      "bytes": 12948848
+    }
+  },
+  "publication": {
+    "canonical": {
+      "repo": "justatom/polaroids-ai-retrieval",
+      "private": true,
+      "commit": "c35835414d6a70b5cf579a3b5b8390423aaa9b73",
+      "raw_sha256": "323cdffbab56ba6d0fbee62e3d465ad859a191122bf38eebd52951afc020b27d",
+      "viewer_parquet": {
+        "config": "default",
+        "split": "train",
+        "rows": 10000,
+        "columns": 28,
+        "sha256": "21f1bcfbd6c3c28b66cccdf5b2fa3e64f553005b7ce0ac12cf70c031d03d04ab"
+      }
+    },
+    "benchmark": {
+      "repo": "justatom/universe-retrieval-benchmark",
+      "private": true,
+      "commit": "65fb0a7c0ba4b7d53017ce580f3bffd7d7ee3c31",
+      "raw_payload_byte_identical": true,
+      "viewer_capabilities": {
+        "preview": true,
+        "viewer": true,
+        "search": true,
+        "filter": true,
+        "statistics": true
+      },
+      "viewer_parquet": {
+        "corpus/corpus": "bb9a0bb2cf0e8f6085b9ee9c8cba963c5eeecd7424a60c9d2c234855c4905ac5",
+        "queries/train": "4bccbd531c4d8b519e87f5d5f4c962dcfb3887f39843b8d13f8428b4ce55f5e5",
+        "queries/test": "184cf2baa4842396145153c8bbfe2422cd48c7bc0faf1354d685e2db05681f17",
+        "qrels/train": "34a4ba52d22baeda07013e62b08e6297224d21d158baf37e45d25e05db2e1698",
+        "qrels/test": "edeffdf51500108417ce038109a06b4d90d4a51689e991e3ebb5a21dca5cc410"
+      }
+    },
+    "benchmark_v1_1": {
+      "repo": "justatom/universe-retrieval-benchmark",
+      "private": true,
+      "commit": "7752739f118344590ca561135b07e0eeccbbae18",
+      "raw_payload_byte_identical": true,
+      "v1_raw_views_byte_identical": true,
+      "v1_viewer_parquet_sha256_unchanged": true,
+      "viewer_terminal": {
+        "pending": [],
+        "failed": [],
+        "partial": false
+      },
+      "boundary_rows_verified": {
+        "partitions": 6,
+        "first_and_last_per_partition": true
+      },
+      "viewer_capabilities": {
+        "preview": true,
+        "viewer": true,
+        "search": true,
+        "filter": true,
+        "statistics": true
+      },
+      "viewer_parquet": {
+        "benchmark/full": {
+          "rows": 10000,
+          "columns": 29,
+          "nested_queries": 43872,
+          "empty_query_lists": 83,
+          "shards": [
+            {
+              "filename": "0000.parquet",
+              "bytes": 42967658,
+              "sha256": "95da61bcb4560e7c3ec4f2c39052116a5b7fb3a9a3ae5a7f3fb5ea2ab2582948"
+            }
+          ]
+        },
+        "corpus/corpus": {
+          "rows": 10000,
+          "columns": 4,
+          "shards": [
+            {
+              "filename": "0000.parquet",
+              "bytes": 19888936,
+              "sha256": "bb9a0bb2cf0e8f6085b9ee9c8cba963c5eeecd7424a60c9d2c234855c4905ac5"
+            }
+          ]
+        },
+        "queries/train": {
+          "rows": 30710,
+          "columns": 11,
+          "shards": [
+            {
+              "filename": "0000.parquet",
+              "bytes": 4700431,
+              "sha256": "4bccbd531c4d8b519e87f5d5f4c962dcfb3887f39843b8d13f8428b4ce55f5e5"
+            }
+          ]
+        },
+        "queries/test": {
+          "rows": 13162,
+          "columns": 11,
+          "shards": [
+            {
+              "filename": "0000.parquet",
+              "bytes": 1925505,
+              "sha256": "184cf2baa4842396145153c8bbfe2422cd48c7bc0faf1354d685e2db05681f17"
+            }
+          ]
+        },
+        "qrels/train": {
+          "rows": 30710,
+          "columns": 4,
+          "shards": [
+            {
+              "filename": "0000.parquet",
+              "bytes": 2210516,
+              "sha256": "34a4ba52d22baeda07013e62b08e6297224d21d158baf37e45d25e05db2e1698"
+            }
+          ]
+        },
+        "qrels/test": {
+          "rows": 13162,
+          "columns": 4,
+          "shards": [
+            {
+              "filename": "0000.parquet",
+              "bytes": 920549,
+              "sha256": "edeffdf51500108417ce038109a06b4d90d4a51689e991e3ebb5a21dca5cc410"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

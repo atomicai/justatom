@@ -36,7 +36,7 @@ This means `dataset.id` is just a short alias for a fuller dataset description.
 
 `dataset.name_or_path` can point to several source types.
 
-### 1. Repo-local dataset preset
+### 1. Private Hugging Face dataset preset
 
 ```yaml
 id: justatom
@@ -44,9 +44,12 @@ id: justatom
 
 This preset resolves to:
 
-- `.data/polaroids.ai.data.json`
+- `name_or_path: justatom/universe-retrieval-benchmark`
+- `config: benchmark`
+- `split: full`
 
-It sets `lazy: false` because the source is a regular JSON document.
+It sets `lazy: true` and requires `HF_TOKEN` with read access to the private
+dataset.
 
 ### 2. Packaged built-in dataset
 
@@ -103,7 +106,7 @@ Source:
 
 Meaning:
 
-- uses `.data/polaroids.ai.data.json`
+- streams `justatom/universe-retrieval-benchmark`, `benchmark/full`
 - `content_field: content`
 - `labels_field: queries`
 - `chunk_id_col: chunk_id`
@@ -111,9 +114,8 @@ Meaning:
 
 Best for:
 
-- repo-local experiments
-- quick training runs
-- evaluation on the built-in dataset
+- training and evaluation on the complete 10,000-passage benchmark
+- leakage-safe experiments using the row-level `split` metadata
 
 ### `demo-eval`
 
@@ -328,7 +330,7 @@ The output filename is assembled from the search pipeline, metric snapshot, mode
 
 ## Quick Start: Training
 
-### Option A. Train with the repo-local `justatom` dataset
+### Option A. Train with the private `justatom` benchmark
 
 ```bash
 python -m justatom.api.train --config configs/train.yaml --dataset.id justatom
@@ -346,14 +348,16 @@ python -m justatom.api.train --config configs/train.yaml --dataset.id demo-train
 python -m justatom.api.train --config configs/train.yaml --dataset.id boolq-ru
 ```
 
-### Option D. Train with direct dataset path
+### Option D. Train with the direct Hugging Face source
 
 ```bash
 python -m justatom.api.train \
   --config configs/train.yaml \
   --method vanilla \
-  --dataset.name-or-path .data/polaroids.ai.data.json \
-  --dataset.lazy false \
+  --dataset.name-or-path justatom/universe-retrieval-benchmark \
+  --dataset.config benchmark \
+  --dataset.split full \
+  --dataset.lazy true \
   --dataset.content-field content \
   --dataset.labels-field queries
 ```
@@ -380,20 +384,22 @@ Notes:
 
 ## Direct Python Usage
 
-### Repo-local JSON dataset
+### Universe Retrieval Benchmark
 
 ```python
 from justatom.tooling.dataset import DatasetRecordAdapter
 
 adapter = DatasetRecordAdapter.from_source(
-    ".data/polaroids.ai.data.json",
+    "justatom/universe-retrieval-benchmark",
+    config="benchmark",
+    split="full",
     content_col="content",
     queries_col="queries",
     chunk_id_col="chunk_id",
     keywords_col="keywords_or_phrases",
     keywords_nested_col="keyword_or_phrase",
     explanation_nested_col="explanation",
-    lazy=False,
+    lazy=True,
 )
 
 first = next(adapter.iterator())
@@ -453,11 +459,11 @@ Check that one of these files exists:
 - `configs/dataset/<id>.yaml`
 - `justatom/builtins/configs/dataset/<id>.yaml`
 
-### `justatom` source cannot be found
+### `justatom` source cannot be loaded
 
-Make sure you run from the repository root so this file exists:
-
-- `.data/polaroids.ai.data.json`
+Confirm that `HF_TOKEN` is set, has read access to the private
+`justatom/universe-retrieval-benchmark` dataset, and that the Hugging Face
+account has available private-storage capacity.
 
 ### HF dataset fails to load
 

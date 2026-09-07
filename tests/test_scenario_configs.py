@@ -319,13 +319,14 @@ class ScenarioConfigTest(unittest.TestCase):
     def test_repo_justatom_dataset_preset_resolves_for_eval(self):
         kwargs = resolve_eval_kwargs(config={"dataset": {"id": "justatom"}})
 
-        self.assertEqual(kwargs["dataset_name_or_path"], ".data/polaroids.ai.data.json")
-        self.assertFalse(kwargs["dataset_lazy"])
+        self.assertEqual(kwargs["dataset_name_or_path"], "justatom/universe-retrieval-benchmark")
+        self.assertTrue(kwargs["dataset_lazy"])
+        self.assertEqual(kwargs["dataset_config"], "benchmark")
         self.assertEqual(kwargs["labels_field"], "queries")
         self.assertEqual(kwargs["content_field"], "content")
         self.assertEqual(kwargs["chunk_id_col"], "chunk_id")
         self.assertEqual(kwargs["keywords_or_phrases_field"], "keywords_or_phrases")
-        self.assertIsNone(kwargs["split"])
+        self.assertEqual(kwargs["split"], "full")
         self.assertIsNone(kwargs["limit"])
 
     def test_repo_miracl_ru_dataset_preset_resolves_for_eval(self):
@@ -487,11 +488,12 @@ class ScenarioConfigTest(unittest.TestCase):
     def test_repo_justatom_dataset_preset_resolves_for_train(self):
         config = resolve_train_config(config={"dataset": {"id": "justatom"}})
 
-        self.assertEqual(config.dataset.name_or_path, ".data/polaroids.ai.data.json")
-        self.assertFalse(config.dataset.lazy)
+        self.assertEqual(config.dataset.name_or_path, "justatom/universe-retrieval-benchmark")
+        self.assertTrue(config.dataset.lazy)
+        self.assertEqual(config.dataset.config, "benchmark")
         self.assertEqual(config.dataset.labels_field, "queries")
         self.assertEqual(config.dataset.content_field, "content")
-        self.assertIsNone(config.dataset.split)
+        self.assertEqual(config.dataset.split, "full")
         self.assertIsNone(config.dataset.limit)
         self.assertEqual(config.dataset.chunk_id_col, "chunk_id")
         self.assertEqual(config.dataset.keywords_col, "keywords_or_phrases")

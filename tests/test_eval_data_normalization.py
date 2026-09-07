@@ -424,6 +424,52 @@ class EvalDataNormalizationTest(unittest.TestCase):
     def test_normalize_queries_handles_json_string(self):
         self.assertEqual(DatasetRecordAdapter.normalize_queries('["q1", "q2"]'), ["q1", "q2"])
 
+    def test_normalize_queries_extracts_text_from_hf_query_structs(self):
+        queries = [
+            {
+                "query_id": "00000000-0000-5000-8000-000000000001",
+                "text": "What happened in District 13?",
+                "language": "en",
+                "query_index": 0,
+            },
+            {
+                "query_id": "00000000-0000-5000-8000-000000000002",
+                "text": "Что произошло в Дистрикте 13?",
+                "language": "ru",
+                "query_index": 1,
+            },
+        ]
+
+        self.assertEqual(
+            DatasetRecordAdapter.normalize_queries(queries),
+            ["What happened in District 13?", "Что произошло в Дистрикте 13?"],
+        )
+
+    def test_iterator_uses_hf_query_text_as_document_labels(self):
+        adapter = DatasetRecordAdapter(
+            records=[
+                {
+                    "chunk_id": "passage-1",
+                    "content": "District 13 passage.",
+                    "queries": [
+                        {
+                            "query_id": "00000000-0000-5000-8000-000000000001",
+                            "text": "What happened in District 13?",
+                            "language": "en",
+                            "query_index": 0,
+                        }
+                    ],
+                }
+            ],
+            content_col="content",
+            queries_col="queries",
+            chunk_id_col="chunk_id",
+        )
+
+        document = next(adapter.iterator())
+
+        self.assertEqual(document["meta"]["labels"], ["What happened in District 13?"])
+
     def test_normalize_queries_keeps_json_like_human_text(self):
         self.assertEqual(
             DatasetRecordAdapter.normalize_queries("что такое PowerShell, где {$ _."),
