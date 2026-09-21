@@ -292,7 +292,7 @@ def test_training_storage_dtype_is_device_aware(backbone, tokenizer, device, exp
         patch("justatom.training.job.EncoderRunner") as runner,
     ):
         load_encoder(config, TrainWithContrastiveProcessor(tokenizer=tokenizer))
-    load.assert_called_once_with(model_name_or_path=config.model.name_or_path, revision=config.model.revision)
+    load.assert_called_once_with(model_name_or_path=config.model.name_or_path, revision=config.model.revision, dtype=expected)
     assert model.model.get_input_embeddings().weight.dtype == expected
     assert runner.call_args.kwargs["device"] == ("cuda:0" if device == "cuda" else device)
 

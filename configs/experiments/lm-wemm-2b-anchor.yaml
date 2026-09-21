@@ -1,0 +1,47 @@
+# Encoder recipe. Supply the prepared training dataset explicitly.
+method: atomic
+experiment:
+  role: ablation
+  seed: 42
+model:
+  name_or_path: tencent/WeMM-Embedding-2B
+  revision: bbd6cd4bf52cfc6716f752a2df80b2706720bd95
+  dtype: bfloat16
+  query_prefix: ""
+  content_prefix: ""
+  max_query_seq_len: 192
+  max_seq_len: 512
+  lora:
+    enabled: true
+    rank: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: all-linear
+    use_rslora: true
+    bias: none
+optimization:
+  lr_encoder: 0.00002
+  batch_size: 2
+  grad_acc_steps: 16
+  epochs: 1
+  num_samples: -1
+objective:
+  decoupled: false
+  temperature: 0.05
+  learnable_temperature: true
+memory_bank:
+  enabled: false
+  size: 0
+anchor_bank:
+  enabled: true
+  size: 512
+  warmup_steps: 5
+  temperature: 0.05
+gradient_projection:
+  enabled: true
+  memory_weight: 0.0
+runtime:
+  accelerator: auto
+  devices: 1
+  precision: bf16-mixed
+  gradient_checkpointing: true

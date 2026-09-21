@@ -36,6 +36,7 @@ nav:
   - Getting Started: getting-started.md
   - Launch Guide: launch-guide.md
   - Training: training.md
+  - LM Embeddings: lm-embeddings.md
   - Architecture: architecture.md
   - Modules:
     - Overview: modules/index.md
