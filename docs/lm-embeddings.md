@@ -3,12 +3,12 @@
 Четыре дополнительных энкодера подключены к общим путям обучения и локального
 поиска. Они поддерживают LoRA, InfoNCE и геометрическое ограничение AnchorBank.
 
-| Модель | Семейство | Размер вектора | Получение вектора | Конфигурация |
-|---|---|---:|---|---|
-| `Qwen/Qwen3-Embedding-4B` | Qwen3 | 2560 | Последний непустой токен | [Qwen](https://github.com/atomicai/justatom/blob/master/configs/experiments/lm-qwen3-4b-anchor.yaml) |
-| `nvidia/Nemotron-3-Embed-1B-BF16` | Ministral | 2048 | Двунаправленное внимание, среднее по непустым токенам | [Nemotron](https://github.com/atomicai/justatom/blob/master/configs/experiments/lm-nemotron3-1b-anchor.yaml) |
-| `google/embeddinggemma-300m` | Gemma3 | 768 | Двунаправленное внимание, среднее и два обученных слоя проекции | [Gemma](https://github.com/atomicai/justatom/blob/master/configs/experiments/lm-embeddinggemma-300m-anchor.yaml) |
-| `tencent/WeMM-Embedding-2B` | Qwen3.5 | 2048 | Текстовый вход, вектор токена `<embedding>` | [WeMM](https://github.com/atomicai/justatom/blob/master/configs/experiments/lm-wemm-2b-anchor.yaml) |
+| Модель | Семейство | Размер вектора | Получение вектора |
+|---|---|---:|---|
+| `Qwen/Qwen3-Embedding-4B` | Qwen3 | 2560 | Последний непустой токен |
+| `nvidia/Nemotron-3-Embed-1B-BF16` | Ministral | 2048 | Двунаправленное внимание, среднее по непустым токенам |
+| `google/embeddinggemma-300m` | Gemma3 | 768 | Двунаправленное внимание, среднее и два обученных слоя проекции |
+| `tencent/WeMM-Embedding-2B` | Qwen3.5 | 2048 | Текстовый вход, вектор токена `<embedding>` |
 
 Для новых архитектур предусмотрены дополнительные зависимости `lm-embeddings`:
 Transformers ≥ 5.15 и PEFT ≥ 0.20. Они дополняют обычное окружение JustAtom с PyTorch.
@@ -18,7 +18,8 @@ Transformers ≥ 5.15 и PEFT ≥ 0.20. Они дополняют обычное
 python -m pip install -e ".[torch,serve,lm-embeddings]"
 ```
 
-У каждой конфигурации закреплена ревизия весов. Формат запросов и документов
+Для воспроизводимости задайте ревизию весов в `model.revision`.
+Формат запросов и документов
 выбирается автоматически при `query_prefix: null` и `content_prefix: null`;
 явное значение, в том числе пустая строка, сохраняется. При локальном поиске
 аналогично обрабатываются `query_prefix` и `document_prefix`. Сохранённый энкодер
@@ -60,26 +61,18 @@ python -m pytest tests/test_lm_embeddings.py -q
 
 ## Обучение и оценка
 
-Конфигурации задают LoRA r16/α32, bfloat16, пересчёт активаций при обратном проходе,
-батч 2 и накопление 16 батчей. Набор подготовленных обучающих пар передаётся явно:
+Модели используют общий интерфейс обучения, описанный в разделе
+[Training](training.md). В своей конфигурации укажите `model.name_or_path`
+из таблицы выше, `model.revision` и путь к подготовленным обучающим парам
+в `dataset.name_or_path`. Поля запросов и документов задаются через
+`dataset.labels_field` и `dataset.content_field`.
 
-```bash
-python -m justatom.api.train \
-  --config configs/experiments/lm-nemotron3-1b-anchor.yaml \
-  --dataset.name_or_path /path/to/prepared-train.parquet \
-  --dataset.labels_field query \
-  --dataset.content_field content
-```
-
-Для парного InfoNCE используются те же веса, данные и параметры, с переопределениями:
-
-```text
---method vanilla --anchor_bank.enabled false --anchor_bank.size 0 --gradient_projection.enabled false
-```
-
-Это примеры конфигураций энкодера. Длины текстов, размер батча и банка опорных
-векторов выбираются с учётом доступной памяти. Разделение данных и оценка качества
-задаются отдельно; для сравнения методов используются одинаковые данные и условия.
+LoRA включается через `model.lora.enabled`. Метод обучения и его ограничения
+настраиваются отдельно от выбора энкодера; поддержка модели не требует
+экспериментального YAML-рецепта. Длины текстов, размер батча, накопление градиентов
+и размер банка опорных векторов выбираются с учётом доступной памяти.
+Разделение данных и оценка качества задаются отдельно; для сравнения методов
+используются одинаковые данные и условия.
 
 Описание исходных моделей: [Qwen](https://huggingface.co/Qwen/Qwen3-Embedding-4B),
 [NVIDIA](https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16),
