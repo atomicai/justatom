@@ -65,10 +65,10 @@ def test_windows_tests_run_from_git_bash():
     "job_name",
     ["pytest-ubuntu", "pytest-windows", "pytest-macos", "pytest-integration-weaviate"],
 )
-def test_python_test_jobs_install_serve_runtime_extra(job_name):
+def test_python_test_jobs_install_serve_and_lm_embedding_extras(job_name):
     install = _step(_workflow_jobs()[job_name], "Install requirements")["run"]
 
-    assert 'python -m pip install ".[torch,serve,test]"' in install
+    assert 'python -m pip install ".[torch,serve,lm-embeddings,test]"' in install
 
 
 def test_serve_extra_has_http_storage_and_data_dependencies_without_torch():

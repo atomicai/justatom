@@ -2,6 +2,10 @@
 
 The `justatom.modeling` package contains lower-level model and metric building blocks.
 
+Support, native preprocessing and training configurations for Qwen3-4B,
+Nemotron 3, EmbeddingGemma and WeMM are described in
+[LM embeddings](../lm-embeddings.md).
+
 ## Files
 
 - `core.py`: foundational model abstractions

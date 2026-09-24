@@ -47,9 +47,17 @@ class Qwen3EmbeddingModel(EmbeddingPoolingWrapper):
     ):
         super().__init__()
         self.model = (
-            AutoModel.from_pretrained(model_name_or_instance) if isinstance(model_name_or_instance, str) else model_name_or_instance
+            AutoModel.from_pretrained(model_name_or_instance, **kwargs)
+            if isinstance(model_name_or_instance, str)
+            else model_name_or_instance
         )
-        self.name = "Qwen/Qwen3-Embedding-0.6B"
+        self.name = (
+            model_name_or_instance
+            if isinstance(model_name_or_instance, str)
+            else getattr(self.model.config, "_name_or_path", "") or "Qwen/Qwen3-Embedding-0.6B"
+        )
+        self.name = getattr(self.model.config, "justatom_model_name", self.name)
+        self.model.config.use_cache = False
         self.to(device)
 
     def to(self, *args, **kwargs):
@@ -63,20 +71,14 @@ class Qwen3EmbeddingModel(EmbeddingPoolingWrapper):
 
     @classmethod
     def load(cls, model_name_or_path: str, **kwargs):
-        model_kwargs = {} if kwargs.get("revision") is None else {"revision": kwargs["revision"]}
-        model = AutoModel.from_pretrained(model_name_or_path, **model_kwargs)
-        return cls(model, **kwargs)
+        return cls(str(model_name_or_path), **kwargs)
 
     def last_token_pool(self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        left_padding = attention_mask[:, -1].sum() == attention_mask.shape[0]
-        if left_padding:
-            return last_hidden_states[:, -1]
-        sequence_lengths = attention_mask.sum(dim=1) - 1
-        batch_size = last_hidden_states.shape[0]
-        return last_hidden_states[
-            torch.arange(batch_size, device=last_hidden_states.device),
-            sequence_lengths,
-        ]
+        positions = attention_mask.shape[1] - 1 - attention_mask.flip([1]).long().argmax(dim=1)
+        return last_hidden_states[torch.arange(last_hidden_states.shape[0], device=last_hidden_states.device), positions]
+
+    def pool_embeddings(self, hidden: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        return self.last_token_pool(hidden, attention_mask)
 
     def encode(
         self,
@@ -86,6 +88,8 @@ class Qwen3EmbeddingModel(EmbeddingPoolingWrapper):
         layer_idx: int = -1,
         target_dim: int | None = None,
     ) -> torch.Tensor:
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
         use_hidden_states = layer_idx != -1
         outputs = self.model(
             input_ids=input_ids,
@@ -98,7 +102,7 @@ class Qwen3EmbeddingModel(EmbeddingPoolingWrapper):
         else:
             hidden = outputs.hidden_states[layer_idx]
 
-        embeddings = self.last_token_pool(hidden, attention_mask=attention_mask)
+        embeddings = self.pool_embeddings(hidden, attention_mask=attention_mask)
         embeddings = self.maybe_norm_or_average(
             embeddings,
             attention_mask=attention_mask,
@@ -201,6 +205,90 @@ class Qwen3VLEmbeddingModel(Qwen3EmbeddingModel):
         if not targets:
             raise ValueError("Qwen3-VL text LoRA requires target_modules matching language_model linear layers")
         return targets
+
+
+class Nemotron3EmbeddingModel(Qwen3EmbeddingModel):
+    """Bidirectional Ministral backbone with masked mean pooling."""
+
+    def __init__(self, model_name_or_instance="nvidia/Nemotron-3-Embed-1B-BF16", device="cpu", **kwargs):
+        super().__init__(model_name_or_instance, device=device, **kwargs)
+        if getattr(self.model.config, "is_causal", True):
+            raise ValueError("Nemotron embedding weights must declare is_causal=false")
+        # Ministral attention modules in Transformers 5.x default to causal even
+        # when the mask factory reads config.is_causal=false. SDPA/Flash may omit
+        # a full bidirectional mask; keep their module-level fallback consistent.
+        for module in self.model.modules():
+            if hasattr(module, "is_causal"):
+                module.is_causal = False
+
+    def pool_embeddings(self, hidden, attention_mask):
+        return self.average_pool(hidden, attention_mask)
+
+
+class EmbeddingGemmaModel(Qwen3EmbeddingModel):
+    """Gemma's bidirectional mean embedding plus both published dense layers."""
+
+    def __init__(
+        self,
+        model_name_or_instance="google/embeddinggemma-300m",
+        device="cpu",
+        projection=None,
+        projection_specs=None,
+        **kwargs,
+    ):
+        from justatom.modeling.projection import load_gemma_projection
+
+        if isinstance(model_name_or_instance, str):
+            projection, projection_specs = load_gemma_projection(model_name_or_instance, **kwargs)
+        elif projection is None or projection_specs is None:
+            raise ValueError("EmbeddingGemma requires its pretrained projection and projection_specs")
+        super().__init__(model_name_or_instance, device=device, **kwargs)
+        if not getattr(self.model.config, "use_bidirectional_attention", False):
+            raise ValueError("EmbeddingGemma requires use_bidirectional_attention=true")
+        self.projection = projection
+        self.model.config.justatom_projection = projection_specs
+        self.to(device=device, dtype=next(self.model.parameters()).dtype)
+
+    def to(self, *args, **kwargs):
+        if kwargs.get("dtype") == torch.float16 or any(arg is torch.float16 for arg in args):
+            raise ValueError("EmbeddingGemma supports float32/bfloat16, not float16")
+        return super().to(*args, **kwargs)
+
+    @property
+    def output_dims(self):
+        return self.model.config.justatom_projection[-1]["out_features"]
+
+    def pool_embeddings(self, hidden, attention_mask):
+        if hidden.dtype == torch.float16:
+            raise ValueError("EmbeddingGemma activations require float32 or bfloat16")
+        pooled = self.average_pool(hidden, attention_mask)
+        return self.projection(pooled.to(next(self.projection.parameters()).dtype))
+
+    def save(self, save_dir, state_dict=None):
+        from justatom.modeling.projection import save_gemma_projection
+
+        super().save(save_dir, state_dict=state_dict)
+        save_gemma_projection(self.projection, save_dir)
+
+
+class WeMMEmbeddingModel(Qwen3VLEmbeddingModel):
+    """WeMM's text path; native Qwen3.5 backbone, no LM head or vision LoRA."""
+
+    def __init__(self, model_name_or_instance="tencent/WeMM-Embedding-2B", device="cpu", **kwargs):
+        name = model_name_or_instance if isinstance(model_name_or_instance, str) else "tencent/WeMM-Embedding-2B"
+        if isinstance(model_name_or_instance, str):
+            from transformers import Qwen3_5Model
+
+            model_name_or_instance = Qwen3_5Model.from_pretrained(model_name_or_instance, **kwargs)
+        super().__init__(model_name_or_instance, device=device)
+        self.name = getattr(self.model.config, "justatom_model_name", name)
+
+    def encode(self, *args, **kwargs):
+        # Match the official embedding() path without an inference-only wrapper.
+        # Reset positional state as in upstream; gradients remain enabled.
+        backbone = self.model.get_base_model() if hasattr(self.model, "get_base_model") else self.model
+        backbone.rope_deltas = None
+        return super().encode(*args, **kwargs)
 
 
 class E5Model(EmbeddingPoolingWrapper):
@@ -614,6 +702,10 @@ HF_CLASS_MAPPING = {
     "intfloat/multilingual-e5-small": E5SModel,
     "intfloat/multilingual-e5-large": E5LModel,
     "Qwen/Qwen3-Embedding-0.6B": Qwen3EmbeddingModel,
+    "Qwen/Qwen3-Embedding-4B": Qwen3EmbeddingModel,
+    "nvidia/Nemotron-3-Embed-1B-BF16": Nemotron3EmbeddingModel,
+    "google/embeddinggemma-300m": EmbeddingGemmaModel,
+    "tencent/WeMM-Embedding-2B": WeMMEmbeddingModel,
     "Qwen/Qwen3-VL-Embedding-2B": Qwen3VLEmbeddingModel,
     "google-bert/bert-base-multilingual-cased": MBERTModel,
     "deepvk/USER-bge-m3": BGEModel,
@@ -633,6 +725,9 @@ __all__ = [
     "E5Model",
     "Qwen3EmbeddingModel",
     "Qwen3VLEmbeddingModel",
+    "Nemotron3EmbeddingModel",
+    "EmbeddingGemmaModel",
+    "WeMMEmbeddingModel",
     "BGEModel",
     "E5LModel",
 ]

@@ -21,6 +21,9 @@ GRANTED_MODEL_NAMES = [
     "E5LModel",
     "Qwen3EmbeddingModel",
     "Qwen3VLEmbeddingModel",
+    "Nemotron3EmbeddingModel",
+    "EmbeddingGemmaModel",
+    "WeMMEmbeddingModel",
     "MBERTModel",
     "BGEModel",
     "PosFreeEncoderModel",
@@ -130,7 +133,14 @@ class ILanguageModel(nn.Module, abc.ABC):
         **kwargs,
     ):
         config_file = Path(model_name_or_path) / "config.json"
-        from justatom.modeling.prime import HF_CLASS_MAPPING, Qwen3VLEmbeddingModel
+        from justatom.modeling.prime import (
+            HF_CLASS_MAPPING,
+            EmbeddingGemmaModel,
+            Nemotron3EmbeddingModel,
+            Qwen3EmbeddingModel,
+            Qwen3VLEmbeddingModel,
+            WeMMEmbeddingModel,
+        )
 
         if revision is not None:
             kwargs["revision"] = revision
@@ -143,6 +153,14 @@ class ILanguageModel(nn.Module, abc.ABC):
                 klass = cls.subclasses[config["klass"]]
             elif config.get("model_type") == "qwen3_vl":
                 klass = Qwen3VLEmbeddingModel
+            elif config.get("model_type") == "qwen3":
+                klass = Qwen3EmbeddingModel
+            elif config.get("model_type") == "ministral3" and config.get("is_causal") is False:
+                klass = Nemotron3EmbeddingModel
+            elif config.get("model_type") == "gemma3_text" and config.get("use_bidirectional_attention"):
+                klass = EmbeddingGemmaModel
+            elif config.get("model_type") == "qwen3_5" and config.get("matryoshka_dimensions"):
+                klass = WeMMEmbeddingModel
             else:
                 raise ValueError("Local encoder config requires a JustAtom 'klass' or supported model_type")
             language_model = klass.load(model_name_or_path, **kwargs)
@@ -208,6 +226,8 @@ class ILanguageModel(nn.Module, abc.ABC):
         save_filename = Path(save_dir) / "config.json"
         config = self.model.config.to_dict()
         config["klass"] = self.__class__.__name__
+        if hasattr(self, "name"):
+            config["justatom_model_name"] = self.name
         # string = json.sto_json_string()  # type: ignore [union-attr,operator]
         with open(str(save_filename), "w") as f:
             f.write(json.dumps(config))
