@@ -40,6 +40,7 @@ nav:
   - Modules:
     - Overview: modules/index.md
     - Agentic RAG: modules/agentic-rag.md
+    - Inspect search harness: modules/inspect-search.md
     - API CLI: modules/api-cli.md
     - Runtime: modules/runtime.md
     - Data Processing: modules/data-processing.md
