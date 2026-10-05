@@ -72,6 +72,20 @@ retrieval flag names are rejected.
 
 ## Retrieval Service Deployment
 
+The retrieval application and its launcher live in `justatom.api.serve`.
+Run `python -m justatom.api.serve` on port `5555`. Set
+`JUSTATOM_CONFIG` to a YAML path. Without it, the launcher uses packaged defaults
+and an optional `configs/serve.yaml` overlay from the current directory.
+RabbitMQ is disabled unless `JUSTATOM_START_MQ=true` is explicitly set.
+
+The embedding application and its launcher live in `justatom.api.serve_embeddings`.
+Run `python -m justatom.api.serve_embeddings` on port `8000`. Both services use
+Hypercorn, with startup defined in the same file as the application.
+
+The [API module guide](modules/api-cli.md) explains the application factories,
+configuration ownership, and the option to load embeddings in the retrieval
+process directly.
+
 Use `scripts/services.sh` for every container deployment. It chooses exactly
 one embedding mode and forwards the supported lifecycle command. The API image
 is built from `Dockerfile.api` and contains no Torch or model weights. The

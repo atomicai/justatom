@@ -637,7 +637,7 @@ def _assert_native_mps_smoke_contract(script):
     assert 'EMBEDDING_PORT="${EMBEDDING_PORT:-18002}"' in script
     assert "EMBEDDING_DEVICE=mps" in script
     assert "torch.backends.mps.is_available()" in script
-    assert 'serve_app(build_embedding_app(), host="127.0.0.1"' in script
+    assert 'main(host="127.0.0.1", port=int(sys.argv[1]))' in script
     assert "docker compose" not in script
     assert "scripts/services.sh" not in script
     port_check = re.search(

@@ -140,14 +140,11 @@ if ! check_embedding_port_is_free; then
 fi
 
 "$EMBEDDING_PYTHON" - "$EMBEDDING_PORT" >"$LOG_FILE" 2>&1 <<'PY' &
-import asyncio
-import os
 import sys
 
-from justatom.api.hypercorn_server import serve_app
-from justatom.api.serve_embeddings import build_embedding_app
+from justatom.api.serve_embeddings import main
 
-asyncio.run(serve_app(build_embedding_app(), host="127.0.0.1", port=int(sys.argv[1])))
+main(host="127.0.0.1", port=int(sys.argv[1]))
 PY
 SERVER_PID=$!
 
