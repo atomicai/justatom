@@ -4,9 +4,9 @@ import asyncio
 import os
 from typing import Any
 
+from hypercorn.asyncio import serve
+from hypercorn.config import Config
 from quart import Quart, request
-
-from justatom.api.hypercorn_server import serve_app
 
 MODEL = os.getenv("FAKE_EMBEDDING_MODEL", "fixture-embedding-model")
 PORT = int(os.getenv("FAKE_EMBEDDING_PORT", "18001"))
@@ -53,4 +53,9 @@ async def embeddings():
 
 
 if __name__ == "__main__":
-    asyncio.run(serve_app(app, host="0.0.0.0", port=PORT))
+    config = Config()
+    config.bind = [f"0.0.0.0:{PORT}"]
+    config.workers = 1
+    config.accesslog = "-"
+    config.errorlog = "-"
+    asyncio.run(serve(app, config))

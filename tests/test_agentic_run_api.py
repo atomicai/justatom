@@ -18,7 +18,7 @@ from justatom.agentic.schemas import (
     TerminationReason,
     TextCapturePolicy,
 )
-from justatom.api.run import create_app
+from justatom.api.serve import create_app
 
 
 class FakeRetrievalRuntime:
@@ -151,7 +151,7 @@ def test_app_builds_agentic_runtime_during_lifecycle_and_closes_it_before_retrie
             build_calls.append((config, retriever))
             return agent
 
-        monkeypatch.setattr("justatom.api.run.build_agentic_runtime", build)
+        monkeypatch.setattr("justatom.api.serve.build_agentic_runtime", build)
         app = create_app(
             config={"agentic": {"enabled": True, "variant": "lifecycle-test"}},
             runtime=retrieval,
@@ -182,7 +182,7 @@ def test_agentic_builder_failure_rolls_back_shared_retrieval_runtime(monkeypatch
             assert retriever is retrieval
             raise RuntimeError("agent startup failed")
 
-        monkeypatch.setattr("justatom.api.run.build_agentic_runtime", fail_to_build)
+        monkeypatch.setattr("justatom.api.serve.build_agentic_runtime", fail_to_build)
         app = create_app(
             config={"agentic": {"enabled": True}},
             runtime=retrieval,

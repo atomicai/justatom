@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from justatom.api import embedding_server as module
+from justatom.api import serve_embeddings as module
 from justatom.retrieval.errors import ConfigurationError
 
 
