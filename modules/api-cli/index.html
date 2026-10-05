@@ -471,27 +471,36 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#files" class="md-nav__link">
+  <a href="#retrieval-service" class="md-nav__link">
     <span class="md-ellipsis">
-      Files
+      Retrieval service
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#why-it-matters" class="md-nav__link">
+  <a href="#embedding-service" class="md-nav__link">
     <span class="md-ellipsis">
-      Why It Matters
+      Embedding service
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#read-with" class="md-nav__link">
+  <a href="#choosing-where-embeddings-run" class="md-nav__link">
     <span class="md-ellipsis">
-      Read With
+      Choosing where embeddings run
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Other commands
     </span>
   </a>
   
@@ -628,27 +637,36 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#files" class="md-nav__link">
+  <a href="#retrieval-service" class="md-nav__link">
     <span class="md-ellipsis">
-      Files
+      Retrieval service
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#why-it-matters" class="md-nav__link">
+  <a href="#embedding-service" class="md-nav__link">
     <span class="md-ellipsis">
-      Why It Matters
+      Embedding service
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#read-with" class="md-nav__link">
+  <a href="#choosing-where-embeddings-run" class="md-nav__link">
     <span class="md-ellipsis">
-      Read With
+      Choosing where embeddings run
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Other commands
     </span>
   </a>
   
@@ -671,26 +689,84 @@
 
 
 <h1 id="justatomapi">justatom.api<a class="headerlink" href="#justatomapi" title="Permanent link">&para;</a></h1>
-<p>The <code>justatom.api</code> package is the thin command-line layer of the project. It gives developers and CI jobs a clean way to launch training, evaluation, and runtime flows.</p>
-<h2 id="files">Files<a class="headerlink" href="#files" title="Permanent link">&para;</a></h2>
+<p>Each HTTP service lives in one module with its settings, application factory,
+routes, lifecycle, and Hypercorn startup. There are two independently deployable
+services: retrieval and embeddings.</p>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Application factory</th>
+<th>Launcher</th>
+<th style="text-align: right;">Default port</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Retrieval</td>
+<td><code>serve.create_app()</code></td>
+<td><code>python -m justatom.api.serve</code></td>
+<td style="text-align: right;">5555</td>
+</tr>
+<tr>
+<td>Embeddings</td>
+<td><code>serve_embeddings.create_embedding_app()</code></td>
+<td><code>python -m justatom.api.serve_embeddings</code></td>
+<td style="text-align: right;">8000</td>
+</tr>
+</tbody>
+</table>
+<p>Each module's <code>main()</code> runs Hypercorn. The application factories can also be used
+directly in tests or with another ASGI server; constructing an app does not start
+an HTTP listener.</p>
+<h2 id="retrieval-service">Retrieval service<a class="headerlink" href="#retrieval-service" title="Permanent link">&para;</a></h2>
+<p><code>serve.py</code> exposes <code>/searching</code>, <code>/searching/agentic</code>, <code>/indexing</code>,
+<code>/delete</code>, and the health route <code>/</code>. It owns the retrieval runtime and, when
+enabled, the agent runtime. Retrieval connects to the configured document store.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">JUSTATOM_CONFIG</span><span class="o">=</span>/path/to/serve.yaml<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>justatom.api.serve
+</code></pre></div>
+<p>Without <code>JUSTATOM_CONFIG</code>, the standard scenario loader uses packaged defaults
+and overlays <code>configs/serve.yaml</code> from the current directory when present. The
+Docker image explicitly sets <code>JUSTATOM_CONFIG=/etc/justatom/serve.yaml</code>.</p>
+<p>RabbitMQ is opt-in: use <code>JUSTATOM_START_MQ=true</code> for the launcher, or
+<code>create_app(start_mq=True)</code> when constructing an application. Both default to
+disabled. Enabling the legacy consumer requires the RabbitMQ dependencies and
+configuration separately.</p>
+<h2 id="embedding-service">Embedding service<a class="headerlink" href="#embedding-service" title="Permanent link">&para;</a></h2>
+<p><code>serve_embeddings.py</code> exposes <code>/v1/embeddings</code>, <code>/v1/models</code>, and <code>/health</code>.
+It loads one model during application startup and closes it during shutdown.
+Requests select that configured model; they do not load or switch models.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">EMBEDDING_MODEL</span><span class="o">=</span>Qwen/Qwen3-Embedding-0.6B<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">EMBEDDING_DEVICE</span><span class="o">=</span>cpu<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>python<span class="w"> </span>-m<span class="w"> </span>justatom.api.serve_embeddings
+</code></pre></div>
+<p>The model process reads <code>EMBEDDING_MODEL</code>, <code>EMBEDDING_DEVICE</code>,
+<code>EMBEDDING_BATCH_SIZE</code>, and <code>EMBEDDING_MAX_LENGTH</code>. It computes vectors only;
+document search, indexing, and agent planning belong to the retrieval service.</p>
+<h2 id="choosing-where-embeddings-run">Choosing where embeddings run<a class="headerlink" href="#choosing-where-embeddings-run" title="Permanent link">&para;</a></h2>
+<p>With <code>retrieval.embedding.backend: local</code>, the retrieval process loads the
+embedding model itself; no embedding HTTP service is needed. With
+<code>backend: openai-compatible</code>, it sends requests to the configured <code>base_url</code>.
+That endpoint can be the built-in embedding service or an external compatible
+implementation.</p>
+<p>For HTTP embeddings, query/document prefixes are applied by the client. The
+server owns tokenization and truncation: the client's <code>max_length</code> setting is
+not sent over the embeddings API. Keep the client batch size at or below the
+built-in server's <code>EMBEDDING_BATCH_SIZE</code> request limit.</p>
+<p>The Docker modes <code>cpu</code>, <code>cuda</code>, and <code>external</code> choose which embedding process
+is deployed; they do not change the retrieval backend configuration. See the
+<a href="../../launch-guide/">Launch Guide</a> for container commands.</p>
+<h2 id="other-commands">Other commands<a class="headerlink" href="#other-commands" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>eval.py</code>: evaluation entrypoint</li>
-<li><code>train.py</code>: training entrypoint</li>
-<li><code>run.py</code>: runtime launcher and service-oriented startup logic</li>
+<li><code>train.py</code>, <code>eval.py</code>, and <code>datasets.py</code> are command-line tools, not additional
+  HTTP services. <code>dataset_input.py</code> handles dataset input for the retrieval API.</li>
+<li><code>welcome.py</code> is a legacy terminal greeting utility, not part of server startup.</li>
 </ul>
-<h2 id="why-it-matters">Why It Matters<a class="headerlink" href="#why-it-matters" title="Permanent link">&para;</a></h2>
-<p>This package keeps operational commands separate from the deeper implementation layers. That separation is useful because:</p>
-<ul>
-<li>CI and shell users need stable entrypoints.</li>
-<li>notebooks can call into the same lower-level logic without duplicating CLI code.</li>
-<li>runtime startup remains easy to trace from one small surface area.</li>
-</ul>
-<h2 id="read-with">Read With<a class="headerlink" href="#read-with" title="Permanent link">&para;</a></h2>
-<p>Pair this page with:</p>
-<ul>
-<li><a href="../../launch-guide/"><code>Launch Guide</code></a></li>
-<li><a href="../runtime/"><code>justatom.running</code></a></li>
-</ul>
+<p>Import LLM utilities such as <code>OpenAiTask</code> and <code>OpenAIAsyncWrapper</code> directly from
+<code>justatom.running.llm</code>. The <code>justatom.api</code> package does not re-export them or load
+their dependencies on import.</p>
+<p>Source and configuration files use UTF-8 and LF line endings, enforced by
+<code>.editorconfig</code>, <code>.gitattributes</code>, and the pre-commit line-ending hook.</p>
 
 
 

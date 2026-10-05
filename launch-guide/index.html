@@ -866,6 +866,17 @@ ignoring a misspelling.</p>
 <code>--collection-name</code> flags. Values are passed to the strict runtime schema; old
 retrieval flag names are rejected.</p>
 <h2 id="retrieval-service-deployment">Retrieval Service Deployment<a class="headerlink" href="#retrieval-service-deployment" title="Permanent link">&para;</a></h2>
+<p>The retrieval application and its launcher live in <code>justatom.api.serve</code>.
+Run <code>python -m justatom.api.serve</code> on port <code>5555</code>. Set
+<code>JUSTATOM_CONFIG</code> to a YAML path. Without it, the launcher uses packaged defaults
+and an optional <code>configs/serve.yaml</code> overlay from the current directory.
+RabbitMQ is disabled unless <code>JUSTATOM_START_MQ=true</code> is explicitly set.</p>
+<p>The embedding application and its launcher live in <code>justatom.api.serve_embeddings</code>.
+Run <code>python -m justatom.api.serve_embeddings</code> on port <code>8000</code>. Both services use
+Hypercorn, with startup defined in the same file as the application.</p>
+<p>The <a href="../modules/api-cli/">API module guide</a> explains the application factories,
+configuration ownership, and the option to load embeddings in the retrieval
+process directly.</p>
 <p>Use <code>scripts/services.sh</code> for every container deployment. It chooses exactly
 one embedding mode and forwards the supported lifecycle command. The API image
 is built from <code>Dockerfile.api</code> and contains no Torch or model weights. The
