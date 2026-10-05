@@ -1262,6 +1262,8 @@ def test_trace_deadline_detaches_cancellation_resistant_sink_and_bounds_admissio
         def __init__(self) -> None:
             super().__init__()
             self.write_calls = 0
+            self.cancellation_observed = asyncio.Event()
+            self.release_drain = asyncio.Event()
             self.drained = asyncio.Event()
 
         async def write(self, trace) -> None:
@@ -1270,7 +1272,8 @@ def test_trace_deadline_detaches_cancellation_resistant_sink_and_bounds_admissio
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
-                await asyncio.sleep(0.2)
+                self.cancellation_observed.set()
+                await self.release_drain.wait()
                 self.drained.set()
                 raise
 
@@ -1293,6 +1296,7 @@ def test_trace_deadline_detaches_cancellation_resistant_sink_and_bounds_admissio
         )
 
         await runtime.run("first")
+        await asyncio.wait_for(sink.cancellation_observed.wait(), timeout=1)
         await runtime.run("second")
 
         assert sink.write_calls == 1
@@ -1300,8 +1304,16 @@ def test_trace_deadline_detaches_cancellation_resistant_sink_and_bounds_admissio
         assert "delivery outcome pending" in caplog.text
         assert "sink capacity remained saturated" in caplog.text
 
-        await runtime.close()
+        close_task = asyncio.create_task(runtime.close())
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(close_task), timeout=0.01)
+        assert not close_task.done()
+        assert sink.close_calls == 0
+
+        sink.release_drain.set()
+        await asyncio.wait_for(close_task, timeout=1)
         assert sink.drained.is_set()
+        assert sink.close_calls == 1
 
     asyncio.run(scenario())
 
