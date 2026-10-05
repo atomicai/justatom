@@ -251,8 +251,7 @@ def _react_usage(sample: Any) -> dict[str, Any]:
     events = getattr(sample, "events", None)
     model_events = [event for event in events or () if getattr(event, "event", None) == "model"]
     if model_events:
-        event_usage = [getattr(getattr(event, "output", None), "usage", None) for event in model_events]
-        return _react_event_usage(event_usage)
+        return _react_event_usage(model_events)
 
     raw_usage = getattr(sample, "model_usage", None)
     if not isinstance(raw_usage, Mapping) or not raw_usage:
@@ -267,7 +266,7 @@ def _react_usage(sample: Any) -> dict[str, Any]:
         "cached_input_tokens": _sum_usage_field(values, "input_tokens_cache_read", integer=True),
         "reasoning_tokens": _sum_usage_field(values, "reasoning_tokens", integer=True),
     }
-    observed_cost = _sum_usage_field(values, "total_cost", integer=False)
+    observed_cost = None
     return {
         "source": "inspect_model_usage",
         **observed_totals,
@@ -281,7 +280,8 @@ def _react_usage(sample: Any) -> dict[str, Any]:
     }
 
 
-def _react_event_usage(values: Sequence[Any]) -> dict[str, Any]:
+def _react_event_usage(events: Sequence[Any]) -> dict[str, Any]:
+    values = [getattr(getattr(event, "output", None), "usage", None) for event in events]
     field_names = {
         "input_tokens": "input_tokens",
         "output_tokens": "output_tokens",
@@ -297,7 +297,8 @@ def _react_event_usage(values: Sequence[Any]) -> dict[str, Any]:
         observed_totals[common_name] = observed if isinstance(observed, int) else None
         token_coverage[common_name] = coverage
         complete_totals[common_name] = observed_totals[common_name] if _coverage_complete(coverage) else None
-    observed_cost, cost_coverage = _event_field(values, "total_cost", integer=False)
+    costs = [_react_event_cost(event) for event in events]
+    observed_cost, cost_coverage = _values_total(costs, integer=False)
     complete_cost = observed_cost if _coverage_complete(cost_coverage) else None
     usage_coverage = _coverage(sum(value is not None for value in values), len(values))
     observed_only = any(observed_totals[field] is not None and complete_totals[field] is None for field in observed_totals) or (
@@ -316,8 +317,21 @@ def _react_event_usage(values: Sequence[Any]) -> dict[str, Any]:
     }
 
 
+def _react_event_cost(event: Any) -> float | int | None:
+    call = getattr(event, "call", None)
+    response = call.get("response") if isinstance(call, Mapping) else getattr(call, "response", None)
+    if not isinstance(response, Mapping):
+        return None
+    provider_usage = response.get("usage")
+    return provider_usage.get("cost") if isinstance(provider_usage, Mapping) else None
+
+
 def _event_field(values: Sequence[Any], field: str, *, integer: bool) -> tuple[int | float | None, dict[str, int | float]]:
     extracted = [getattr(value, field, None) if value is not None else None for value in values]
+    return _values_total(extracted, integer=integer)
+
+
+def _values_total(extracted: Sequence[Any], *, integer: bool) -> tuple[int | float | None, dict[str, int | float]]:
     if integer:
         known = [value for value in extracted if isinstance(value, int) and not isinstance(value, bool) and value >= 0]
         observed: int | float | None = sum(known) if known else None
@@ -329,7 +343,7 @@ def _event_field(values: Sequence[Any], field: str, *, integer: bool) -> tuple[i
         ]
         total = math.fsum(float(value) for value in known)
         observed = total if known and math.isfinite(total) else None
-    return observed, _coverage(len(known), len(values))
+    return observed, _coverage(len(known), len(extracted))
 
 
 def _coverage(numerator: int, denominator: int) -> dict[str, int | float]:
@@ -530,6 +544,12 @@ def _terminal_error(method: str, record: Mapping[str, Any], limit: Mapping[str, 
         if native_status in {"failed", "timed_out", "cancelled"}:
             return {"type": "NativeRunStatus", "message": str(native_status)}
     termination = record.get("termination_reason")
+    if termination in {"provider_max_tokens", "provider_model_length"}:
+        return {"type": "ProviderTruncation", "message": str(termination).removeprefix("provider_")}
+    if termination in {"provider_content_filter", "provider_refusal"}:
+        return {"type": "ProviderRefusal", "message": str(termination).removeprefix("provider_")}
+    if isinstance(termination, str) and termination.startswith("provider_"):
+        return {"type": "ProviderInvalidTermination", "message": termination.removeprefix("provider_")}
     if isinstance(termination, str) and (
         termination in {"error", "timeout", "timed_out", "cancelled"} or termination.endswith("_error")
     ):

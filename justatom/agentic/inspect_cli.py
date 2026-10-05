@@ -101,6 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", required=True, type=_nonempty)
     parser.add_argument("--base-url", required=True, type=_nonempty)
     parser.add_argument("--api-key-env", default="OPENAI_API_KEY", type=_nonempty)
+    parser.add_argument("--model-provider", choices=("auto", "openai-compatible", "openrouter"), default="auto")
     parser.add_argument("--method", choices=("react", "native", "both"), default="both")
     parser.add_argument("--top-k", type=_positive_integer, default=5)
     parser.add_argument("--max-searches", type=_positive_integer, default=4)
@@ -109,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-context-chars", type=_positive_integer, default=24_000)
     parser.add_argument("--max-query-chars", type=_positive_integer, default=4_000)
     parser.add_argument("--max-model-calls", type=_positive_integer, default=6)
+    parser.add_argument("--max-output-tokens", type=_positive_integer, default=2_048)
     parser.add_argument("--token-limit", type=_positive_integer, default=8_192)
     parser.add_argument("--time-limit", type=_positive_integer, default=60)
     parser.add_argument("--limit", type=_positive_integer)
@@ -198,13 +200,18 @@ async def run(args: argparse.Namespace, *, client: httpx.AsyncClient | None = No
         max_context_chars=args.max_context_chars,
         max_query_chars=args.max_query_chars,
     )
-    for name in ("max_model_calls", "token_limit", "time_limit", "concurrency"):
+    for name in ("max_model_calls", "max_output_tokens", "token_limit", "time_limit", "concurrency"):
         value = getattr(args, name)
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise ValueError(f"{name} must be a positive integer")
     methods = _selected_methods(args.method)
     _validate_http_url(args.search_url, "search_url")
-    _validate_http_url(args.base_url, "base_url")
+    model_url = _validate_http_url(args.base_url, "base_url")
+    if args.model_provider not in {"auto", "openai-compatible", "openrouter"}:
+        raise ValueError("model_provider must be auto, openai-compatible, or openrouter")
+    model_provider = args.model_provider
+    if model_provider == "auto":
+        model_provider = "openrouter" if (model_url.hostname or "").lower().rstrip(".") == "openrouter.ai" else "openai-compatible"
     if not isinstance(args.corpus_revision, str) or not args.corpus_revision.strip():
         raise ValueError("corpus_revision must be a non-empty string")
     if not isinstance(args.retrieval_mode, str) or not args.retrieval_mode.strip():
@@ -224,6 +231,7 @@ async def run(args: argparse.Namespace, *, client: httpx.AsyncClient | None = No
         "dataset_sha256": dataset_sha256,
         "model": args.model,
         "model_endpoint": _sanitized_url(args.base_url),
+        "model_provider": model_provider,
         "retrieval_backend": "justatom-http-search",
         "retrieval_endpoint": _sanitized_url(args.search_url),
         "retrieval_mode": args.retrieval_mode,
@@ -248,8 +256,9 @@ async def _execute(args, cases, methods, budget, provenance, api_key, output, cl
     retriever = HttpSearchRetriever(args.search_url, client=client)
     react_model = None
     if "react" in methods:
+        model_prefix = "openrouter" if provenance["model_provider"] == "openrouter" else "openai-api/justatom"
         react_model = get_model(
-            f"openai-api/justatom/{args.model}",
+            f"{model_prefix}/{args.model}",
             base_url=args.base_url,
             api_key=api_key,
             max_retries=0,
@@ -267,7 +276,7 @@ async def _execute(args, cases, methods, budget, provenance, api_key, output, cl
                 api_key=api_key,
                 timeout_seconds=args.time_limit,
                 temperature=0,
-                max_tokens=512,
+                max_tokens=args.max_output_tokens,
                 objective=AgentObjective.CONTEXT,
             )
         task = build_task(
@@ -277,6 +286,7 @@ async def _execute(args, cases, methods, budget, provenance, api_key, output, cl
             method=method,
             planner_factory=planner_factory,
             max_model_calls=args.max_model_calls,
+            max_output_tokens=args.max_output_tokens,
             token_limit=args.token_limit,
             time_limit=args.time_limit,
             provenance=provenance,
@@ -295,7 +305,9 @@ async def _execute(args, cases, methods, budget, provenance, api_key, output, cl
                     model=model,
                     max_samples=args.concurrency,
                     log_dir=str(output / "logs"),
-                    log_model_api=False,
+                    # Provider usage.cost is not mapped by every Inspect adapter.
+                    # Retain model response payloads for complete cost accounting.
+                    log_model_api=True,
                 )
             )
     except BaseException as error:

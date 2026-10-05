@@ -262,3 +262,113 @@ def test_transport_timeout_is_not_silently_treated_as_success(tmp_path):
     log = execute(tmp_path, task, [])
     assert log.samples[0].error is not None
     assert log.samples[0].metadata["justatom"]["calls"][0]["error_type"] == "TimeoutError"
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "termination_reason", "error_type"),
+    [
+        ("max_tokens", "provider_max_tokens", "ProviderTruncation"),
+        ("model_length", "provider_model_length", "ProviderTruncation"),
+        ("content_filter", "provider_content_filter", "ProviderRefusal"),
+        ("unknown", "provider_unknown", "ProviderInvalidTermination"),
+    ],
+)
+def test_react_preserves_abnormal_provider_stop_as_failed_termination(tmp_path, stop_reason, termination_reason, error_type):
+    from justatom.agentic.benchmark_data import BenchmarkCase
+    from justatom.agentic.inspect_harness import build_task
+    from justatom.agentic.inspect_results import export_results
+
+    case = BenchmarkCase("q", "original", ("a",), {})
+    task = build_task([case], Retriever())
+    log = execute(tmp_path, task, [ModelOutput.from_content("fixture", "partial", stop_reason=stop_reason)])
+
+    record = log.samples[0].metadata["justatom"]
+    assert record["termination_reason"] == termination_reason
+    assert record["evaluation"]["final_context"]["all_gold"] is True
+
+    export_results([log], tmp_path, cases=[case], methods=["react"])
+    row = json.loads((tmp_path / "results.jsonl").read_text())
+    assert row["status"] == "error"
+    assert row["error"]["type"] == error_type
+    assert row["evaluation"]["final_context"]["all_gold"] is True
+
+
+def test_react_uses_configured_per_call_output_cap_and_hashes_it(tmp_path):
+    from justatom.agentic.benchmark_data import BenchmarkCase
+    from justatom.agentic.inspect_harness import build_task
+
+    seen_caps = []
+
+    def output(messages, tools, tool_choice, config):
+        seen_caps.append(config.max_tokens)
+        return ModelOutput.from_content("fixture", "DONE")
+
+    case = BenchmarkCase("q", "original", ("a",), {})
+    default_task = build_task([case], Retriever())
+    configured_task = build_task([case], Retriever(), max_output_tokens=3072)
+    execute(tmp_path, configured_task, output)
+
+    assert seen_caps == [3072]
+    assert default_task.metadata["max_output_tokens"] == 2048
+    assert configured_task.metadata["max_output_tokens"] == 3072
+    assert default_task.metadata["config_sha256"] != configured_task.metadata["config_sha256"]
+
+
+def test_provider_truncation_takes_precedence_over_observed_total_token_limit(tmp_path):
+    from inspect_ai.model import ModelUsage
+
+    from justatom.agentic.benchmark_data import BenchmarkCase
+    from justatom.agentic.inspect_harness import build_task
+
+    output = ModelOutput.from_content("fixture", "partial", stop_reason="max_tokens")
+    output.usage = ModelUsage(input_tokens=80, output_tokens=20, total_tokens=100)
+    task = build_task([BenchmarkCase("q", "original", ("a",), {})], Retriever(), token_limit=100)
+
+    log = execute(tmp_path, task, [output])
+
+    assert log.samples[0].metadata["justatom"]["termination_reason"] == "provider_max_tokens"
+
+
+def test_provider_truncation_does_not_execute_partial_tool_call_or_hide_behind_search_cap(tmp_path):
+    from justatom.agentic.benchmark import SearchBudget
+    from justatom.agentic.benchmark_data import BenchmarkCase
+    from justatom.agentic.inspect_harness import build_task
+
+    output = search_output("followup")
+    output.choices[0].stop_reason = "max_tokens"
+    retriever = Retriever()
+    task = build_task(
+        [BenchmarkCase("q", "original", ("a",), {})],
+        retriever,
+        budget=SearchBudget(top_k=1, max_searches=2),
+    )
+
+    log = execute(tmp_path, task, [output])
+
+    record = log.samples[0].metadata["justatom"]
+    assert record["termination_reason"] == "provider_max_tokens"
+    assert [query for query, _, _ in retriever.queries] == ["original"]
+
+
+def test_react_preserves_refusal_stop_details_when_stop_reason_is_stop(tmp_path):
+    from inspect_ai.model import StopDetails
+
+    from justatom.agentic.benchmark_data import BenchmarkCase
+    from justatom.agentic.inspect_harness import build_task
+    from justatom.agentic.inspect_results import export_results
+
+    case = BenchmarkCase("q", "original", ("a",), {})
+    output = ModelOutput.from_content(
+        "fixture",
+        "refused",
+        stop_reason="stop",
+        stop_details=StopDetails(type="refusal", explanation="fixture refusal"),
+    )
+    log = execute(tmp_path, build_task([case], Retriever()), [output])
+
+    assert log.samples[0].metadata["justatom"]["termination_reason"] == "provider_refusal"
+    export_results([log], tmp_path, cases=[case], methods=["react"])
+    row = json.loads((tmp_path / "results.jsonl").read_text())
+    assert row["status"] == "error"
+    assert row["error"] == {"type": "ProviderRefusal", "message": "refusal"}
+    assert row["evaluation"]["final_context"]["all_gold"] is True

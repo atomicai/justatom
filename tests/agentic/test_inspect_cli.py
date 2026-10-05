@@ -153,6 +153,7 @@ def test_parser_exposes_documented_defaults(tmp_path):
         "model": "model-id",
         "base_url": "http://127.0.0.1:9000/v1",
         "api_key_env": "OPENAI_API_KEY",
+        "model_provider": "auto",
         "method": "both",
         "top_k": 5,
         "max_searches": 4,
@@ -161,6 +162,7 @@ def test_parser_exposes_documented_defaults(tmp_path):
         "max_context_chars": 24000,
         "max_query_chars": 4000,
         "max_model_calls": 6,
+        "max_output_tokens": 2048,
         "token_limit": 8192,
         "time_limit": 60,
         "limit": None,
@@ -384,12 +386,22 @@ def test_api_key_policy_allows_local_placeholder_but_rejects_remote_missing_key(
         inspect_cli._api_key("MISSING_TEST_API_KEY", "https://models.test/v1")
 
 
-def test_run_orchestrates_both_methods_without_leaking_credentials(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("base_url", "provider", "expected_model"),
+    [
+        ("https://models.test/v1", "auto", "openai-api/justatom/model-id"),
+        ("https://openrouter.ai/api/v1", "auto", "openrouter/model-id"),
+        ("http://127.0.0.1:19091/v1", "openrouter", "openrouter/model-id"),
+        ("https://openrouter.ai.attacker.test/v1", "auto", "openai-api/justatom/model-id"),
+        ("https://openrouter.ai/api/v1", "openai-compatible", "openai-api/justatom/model-id"),
+    ],
+)
+def test_run_orchestrates_both_methods_without_leaking_credentials(tmp_path, monkeypatch, base_url, provider, expected_model):
     pytest.importorskip("inspect_ai")
     arguments = _required_cli_arguments(tmp_path)
     arguments[arguments.index("http://127.0.0.1:8000/searching")] = "https://search.test/searching"
-    arguments[arguments.index("http://127.0.0.1:9000/v1")] = "https://models.test/v1"
-    arguments.extend(["--concurrency", "2"])
+    arguments[arguments.index("http://127.0.0.1:9000/v1")] = base_url
+    arguments.extend(["--concurrency", "2", "--model-provider", provider, "--max-output-tokens", "3072"])
     args = build_parser().parse_args(arguments)
     monkeypatch.setenv("OPENAI_API_KEY", "environment-secret")
 
@@ -441,9 +453,9 @@ def test_run_orchestrates_both_methods_without_leaking_credentials(tmp_path, mon
     assert [method for method, _ in built] == ["react", "native"]
     assert model_calls == [
         (
-            ("openai-api/justatom/model-id",),
+            (expected_model,),
             {
-                "base_url": "https://models.test/v1",
+                "base_url": base_url,
                 "api_key": "environment-secret",
                 "max_retries": 0,
                 "responses_api": False,
@@ -453,12 +465,12 @@ def test_run_orchestrates_both_methods_without_leaking_credentials(tmp_path, mon
     ]
     assert backend_calls == [
         (
-            ("https://models.test/v1", "model-id"),
+            (base_url, "model-id"),
             {
                 "api_key": "environment-secret",
                 "timeout_seconds": 60,
                 "temperature": 0,
-                "max_tokens": 512,
+                "max_tokens": 3072,
                 "objective": "context",
             },
         )
@@ -470,7 +482,7 @@ def test_run_orchestrates_both_methods_without_leaking_credentials(tmp_path, mon
                 "model": react_model,
                 "max_samples": 2,
                 "log_dir": str(tmp_path / "output" / "logs"),
-                "log_model_api": False,
+                "log_model_api": True,
             },
         ),
         (
@@ -479,7 +491,7 @@ def test_run_orchestrates_both_methods_without_leaking_credentials(tmp_path, mon
                 "model": "mockllm/unused",
                 "max_samples": 2,
                 "log_dir": str(tmp_path / "output" / "logs"),
-                "log_model_api": False,
+                "log_model_api": True,
             },
         ),
     ]
@@ -487,19 +499,34 @@ def test_run_orchestrates_both_methods_without_leaking_credentials(tmp_path, mon
     assert export_calls[0][1] == tmp_path / "output"
     assert export_calls[0][2]["methods"] == ["react", "native"]
     assert [case.query_id for case in export_calls[0][2]["cases"]] == ["q1"]
+    assert [kwargs["max_output_tokens"] for _, kwargs in built] == [3072, 3072]
 
     provenance = built[0][1]["provenance"]
     assert provenance == {
         "corpus_revision": "corpus-v1",
         "dataset_sha256": hashlib.sha256((Path(args.dataset)).read_bytes()).hexdigest(),
         "model": "model-id",
-        "model_endpoint": "https://models.test/v1",
+        "model_endpoint": base_url,
+        "model_provider": "openrouter" if expected_model.startswith("openrouter/") else "openai-compatible",
         "retrieval_backend": "justatom-http-search",
         "retrieval_endpoint": "https://search.test/searching",
         "retrieval_mode": "keyword",
     }
     serialized = json.dumps(provenance)
     assert "environment-secret" not in serialized
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_invalid_output_cap_rejected_before_evaluation(tmp_path, monkeypatch, value):
+    args = build_parser().parse_args(_required_cli_arguments(tmp_path))
+    args.max_output_tokens = value
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("evaluation reached before budget validation")
+
+    monkeypatch.setattr(inspect_cli, "_execute", forbidden)
+    with pytest.raises(ValueError, match="max_output_tokens"):
+        asyncio.run(run(args))
 
 
 @pytest.mark.parametrize(("failing_call", "expected_logs"), [(1, []), (2, ["log-react"])])

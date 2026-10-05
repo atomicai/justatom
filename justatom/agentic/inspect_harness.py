@@ -34,6 +34,28 @@ def _positive(value: int, name: str) -> int:
     return value
 
 
+def _provider_termination(output: Any) -> str | None:
+    choices = getattr(output, "choices", None)
+    if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)) or len(choices) != 1:
+        return "provider_invalid_output"
+    choice = choices[0]
+    stop_reason = getattr(choice, "stop_reason", None)
+    stop_details = getattr(choice, "stop_details", None)
+    stop_type = stop_details.get("type") if isinstance(stop_details, dict) else getattr(stop_details, "type", None)
+    if stop_type == "refusal":
+        return "provider_refusal"
+    message = getattr(choice, "message", None)
+    tool_calls = getattr(message, "tool_calls", None)
+    has_tool_calls = bool(tool_calls)
+    if stop_reason in {"max_tokens", "model_length", "content_filter", "unknown"}:
+        return f"provider_{stop_reason}"
+    if stop_reason == "stop" and not has_tool_calls:
+        return None
+    if stop_reason == "tool_calls" and has_tool_calls:
+        return None
+    return "provider_invalid_termination"
+
+
 def build_task(
     cases: Sequence[BenchmarkCase],
     retriever: AgentRetriever,
@@ -42,6 +64,7 @@ def build_task(
     method: str = "react",
     planner_factory: Callable[[], ChatBackend] | None = None,
     max_model_calls: int = 6,
+    max_output_tokens: int = 2048,
     token_limit: int = 8192,
     time_limit: int = 60,
     provenance: dict[str, Any] | None = None,
@@ -73,7 +96,12 @@ def build_task(
         raise ValueError("method must be react or native")
     if method == "native" and planner_factory is None:
         raise ValueError("native requires planner_factory")
-    for name, value in (("max_model_calls", max_model_calls), ("token_limit", token_limit), ("time_limit", time_limit)):
+    for name, value in (
+        ("max_model_calls", max_model_calls),
+        ("max_output_tokens", max_output_tokens),
+        ("token_limit", token_limit),
+        ("time_limit", time_limit),
+    ):
         _positive(value, name)
     budget = budget or SearchBudget()
     cases = tuple(cases)
@@ -91,6 +119,7 @@ def build_task(
         "objective": "context",
         "budget": asdict(budget),
         "max_model_calls": max_model_calls,
+        "max_output_tokens": max_output_tokens,
         "token_limit": token_limit,
         "time_limit_seconds": time_limit,
         "initial_search": "original_question",
@@ -134,6 +163,16 @@ def build_task(
                             Args:
                                 query: A focused search query derived from the question or observed passages.
                             """
+                            current_provider_termination = next(
+                                (
+                                    _provider_termination(getattr(event, "output", None))
+                                    for event in reversed(transcript().events)
+                                    if getattr(event, "event", None) == "model"
+                                ),
+                                None,
+                            )
+                            if current_provider_termination is not None:
+                                raise ToolError(f"model response ended with {current_provider_termination}")
                             if token_meter.usage >= token_limit:
                                 raise ToolError("observed token budget exhausted")
                             try:
@@ -146,10 +185,14 @@ def build_task(
 
                     model_calls = 0
                     stopped_for_model_budget = False
+                    provider_termination: str | None = None
 
                     async def continue_search(current_state):
-                        nonlocal model_calls, stopped_for_model_budget
+                        nonlocal model_calls, stopped_for_model_budget, provider_termination
                         model_calls += 1
+                        provider_termination = _provider_termination(current_state.output)
+                        if provider_termination is not None:
+                            return False
                         if token_meter.usage >= token_limit:
                             return False
                         wants_search = bool(current_state.output.message.tool_calls)
@@ -192,14 +235,25 @@ def build_task(
                         )
                         state.messages = agent_state.messages
                         state.output = agent_state.output
-                        record["termination_reason"] = f"max_{limit.type}" if limit else "agent_stop"
-                        if stopped_for_model_budget and limit is None:
-                            record["termination_reason"] = "max_model_calls"
-                        if token_meter.usage >= token_limit:
+                        model_outputs = [
+                            getattr(event, "output", None)
+                            for event in transcript().events
+                            if getattr(event, "event", None) == "model"
+                        ]
+                        provider_termination = (
+                            _provider_termination(model_outputs[-1]) if model_outputs else _provider_termination(agent_state.output)
+                        )
+                        if provider_termination is not None:
+                            record["termination_reason"] = provider_termination
+                        elif token_meter.usage >= token_limit:
                             record["termination_reason"] = "max_token"
+                        elif stopped_for_model_budget and limit is None:
+                            record["termination_reason"] = "max_model_calls"
+                        else:
+                            record["termination_reason"] = f"max_{limit.type}" if limit else "agent_stop"
                     else:
                         record["termination_reason"] = "max_searches"
-                    if len(session.calls) >= budget.max_searches:
+                    if len(session.calls) >= budget.max_searches and provider_termination is None:
                         record["termination_reason"] = "max_searches"
                 state.completed = True
                 return state
@@ -255,7 +309,7 @@ def build_task(
         solver=search_solver(),
         scorer=evidence_scorer(),
         metadata=config,
-        config=GenerateConfig(temperature=0, max_tokens=512, parallel_tool_calls=False, max_retries=0),
+        config=GenerateConfig(temperature=0, max_tokens=max_output_tokens, parallel_tool_calls=False, max_retries=0),
         time_limit=time_limit,
         fail_on_error=False,
         score_on_error=True,

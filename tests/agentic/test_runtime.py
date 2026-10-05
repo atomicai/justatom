@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from justatom.agentic.contracts import TracePersistenceError
+from justatom.agentic.openai_compatible import OpenAICompatibleChatBackend
 from justatom.agentic.runtime import (
     AgenticCapacityError,
     AgenticConfigurationError,
@@ -921,6 +922,80 @@ def test_planner_failure_uses_terminal_attempt_instead_of_any_earlier_timeout() 
     asyncio.run(scenario())
 
 
+def test_invalid_native_response_keeps_provider_accounting_in_failed_call_trace() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "request-invalid-telemetry"},
+            json={
+                "model": "served-model",
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"action":"stop","query":null,'
+                                '"answer":"must remain invalid","reason":null,"cited_document_ids":[]}'
+                            )
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 40,
+                    "completion_tokens": 10,
+                    "total_tokens": 50,
+                    "cost": 0.0025,
+                    "prompt_tokens_details": {"cached_tokens": 5},
+                    "completion_tokens_details": {"reasoning_tokens": 3},
+                },
+            },
+        )
+
+    async def scenario() -> None:
+        retriever = ScriptedRetriever([[FakeDocument("doc-a", "support")]])
+        backend = OpenAICompatibleChatBackend(
+            "http://chat.test",
+            "planner-model",
+            transport=httpx.MockTransport(handler),
+            objective=AgentObjective.CONTEXT,
+        )
+        runtime = AgenticRAGRuntime(
+            retriever,
+            backend,
+            config=AgenticRuntimeConfig(objective=AgentObjective.CONTEXT, max_tokens=50),
+            trace_sink=RecordingSink(),
+        )
+
+        result = await runtime.run("question")
+
+        assert result.trace.status is RunStatus.FAILED
+        assert result.trace.termination_reason is TerminationReason.PLANNER_ERROR
+        planner_call = result.trace.steps[-1].calls[0]
+        assert planner_call.kind is CallKind.PLANNER
+        assert planner_call.status is CallStatus.ERROR
+        assert planner_call.model == "served-model"
+        assert planner_call.finish_reason == "stop"
+        assert planner_call.cache_hit is True
+        assert planner_call.tokens is not None
+        assert planner_call.tokens.total_tokens == 50
+        assert planner_call.tokens.cached_input_tokens == 5
+        assert planner_call.tokens.reasoning_tokens == 3
+        assert planner_call.cost is not None
+        assert planner_call.cost.usd == 0.0025
+        assert result.metrics["token_totals"]["total_tokens"] == 50
+        assert result.metrics["cost_total_usd"] == 0.0025
+        assert result.metrics["token_budget"] == {
+            "limit": 50,
+            "observed_total": 50,
+            "coverage": {"numerator": 1, "denominator": 1, "rate": 1.0},
+            "reached": True,
+            "overrun": 0,
+        }
+        await runtime.close()
+
+    asyncio.run(scenario())
+
+
 def test_oversized_planner_reason_is_an_invalid_action() -> None:
     async def scenario() -> None:
         retriever = ScriptedRetriever([[FakeDocument("doc-a", "support")]])
@@ -1335,10 +1410,8 @@ def test_builder_propagates_context_objective_to_runtime_and_planner() -> None:
         def provider(request: httpx.Request) -> httpx.Response:
             body = json.loads(request.content)
             schema = body["response_format"]["json_schema"]["schema"]
-            assert [branch["properties"]["action"]["const"] for branch in schema["oneOf"]] == [
-                "search",
-                "stop",
-            ]
+            assert schema["properties"]["action"] == {"type": "string", "enum": ["search", "stop"]}
+            assert schema["properties"]["answer"] == {"type": "null"}
             return httpx.Response(
                 200,
                 json={

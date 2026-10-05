@@ -53,6 +53,14 @@ in the environment variable named by `--api-key-env` (default `OPENAI_API_KEY`);
 never put a key into an endpoint URL. Running against a hosted model incurs its
 normal provider charges. This harness does not set a dollar spending limit.
 
+For OpenRouter use `--base-url https://openrouter.ai/api/v1` and
+`--api-key-env OPENROUTER_API_KEY`. The default `--model-provider auto` selects
+Inspect's dedicated OpenRouter adapter for that hostname, including its Gemini
+reasoning-history handling. Use `--model-provider openrouter` explicitly when
+forwarding through a local proxy. Other endpoints keep the generic
+OpenAI-compatible adapter; `--model-provider openai-compatible` can force it.
+The resolved provider is recorded in run provenance.
+
 ## Comparison protocol
 
 Both methods search the original question first. This initial retrieval counts
@@ -71,14 +79,23 @@ The independently controlled budgets are:
 | `--max-document-chars` | Per-passage text cap |
 | `--max-context-chars` | Total retained passage-text cap, excluding prompts/IDs |
 | `--max-model-calls` | Maximum planner/model generations per question |
+| `--max-output-tokens` | Per-generation output cap, including provider reasoning tokens where applicable (default 2048) |
 | `--token-limit` | Observed token budget, not a prepaid or exact pre-call cap |
 | `--time-limit` | Per-sample time limit, in seconds |
 
 Search requests and context admission are bounded outside the model. The ReAct
 continuation hook prevents a next model call when the generation budget is
 exhausted; Inspect's post-generation turn limit is only an additional safeguard.
-Both models use temperature 0 and a 512-token per-call output cap. Missing
-provider token usage remains unknown; it must not be reported as free inference.
+Both models use temperature 0 and the same configurable per-call output cap.
+The default is 2048 tokens: a 512-token cap truncated Gemini reasoning and
+native JSON decisions in live testing. This is not a guarantee that every model
+can finish within 2048 tokens; select and record the cap for the tested model.
+Missing provider token usage remains unknown; it must not be reported as free
+inference. Provider truncation or refusal is an error even if the run already
+collected every gold ID, and is not relabeled as a normal agent stop when it
+coincides with a harness budget limit. Native context decisions use a flat
+provider-facing schema, but exact action-dependent validation stays local:
+`stop` with a non-null answer is still rejected, without coercion or a retry.
 Automatic retries are disabled both in Inspect's generation configuration and
 in its underlying OpenAI SDK client; a transport error does not buy extra attempts.
 An in-flight call can cross a token threshold. Time limits are cooperative and
@@ -111,6 +128,9 @@ and the final retained context:
 - `all_gold`: whether **every** labeled passage ID was recovered.
 - `first_complete_hop`: first hop where the cumulative union contains all IDs.
 
+`retrieved_count` counts returned slots, including repeated IDs across hops;
+`hits` and recall deduplicate IDs. The final context itself is deduplicated.
+
 Union coverage can exceed final-context coverage when context limits discard
 passages. Matching a chunk ID is a retrieval proxy: truncating its text can remove
 the required fact, and alternative valid passages may be unlabeled. These metrics
@@ -118,9 +138,15 @@ do **not** establish factual answer correctness or semantic fact completeness.
 Dataset development/tuning results are not an untouched test-set claim.
 
 Native model usage comes from native telemetry, not Inspect's unused model.
-The export does not estimate dollar cost without verified provider pricing.
-Full traces include question and passage text: treat them as sensitive artifacts
-and review them before publishing or constructing training examples. Successful
+Valid provider telemetry survives rejected native decisions, including truncated
+JSON. ReAct cost comes from the raw provider response's `usage.cost`, not an
+Inspect/catalog estimate. Missing cost stays unknown and coverage is reported.
+The CLI enables Inspect model API logging to preserve that response metadata.
+Consequently logs contain raw model request/response bodies, which may include
+provider reasoning and signatures as well as question and passage text. Treat
+them as sensitive local artifacts; do not publish them or custom request headers
+without a separate redaction review. The API key supplied through the CLI is
+used for transport authentication, not run provenance. Successful
 retrieval alone does not automatically make a trajectory a validated SFT target.
 
 To inspect runs interactively:

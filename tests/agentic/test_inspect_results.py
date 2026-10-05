@@ -8,8 +8,9 @@ import pytest
 
 pytest.importorskip("inspect_ai")
 
+from inspect_ai.event import ModelEvent  # noqa: E402
 from inspect_ai.log import EvalError, EvalLog, EvalSample, EvalSampleLimit  # noqa: E402
-from inspect_ai.model import ModelUsage  # noqa: E402
+from inspect_ai.model import GenerateConfig, ModelCall, ModelOutput, ModelUsage  # noqa: E402
 
 from justatom.agentic.benchmark_data import BenchmarkCase
 from justatom.agentic.inspect_results import export_results
@@ -417,11 +418,188 @@ def test_react_partial_model_events_do_not_turn_observed_usage_into_complete_tot
     assert usage["total_tokens"] is None
     assert usage["cost_usd"] is None
     assert usage["observed_token_totals"]["total_tokens"] == 12
-    assert usage["observed_cost_usd"] == 0.001
+    assert usage["observed_cost_usd"] is None
     assert usage["token_usage_coverage"] == {"numerator": 1, "denominator": 2, "rate": 0.5}
     assert usage["token_coverage"]["total_tokens"] == {"numerator": 1, "denominator": 2, "rate": 0.5}
+    assert usage["cost_coverage"] == {"numerator": 0, "denominator": 2, "rate": 0.0}
+    assert usage["observed_only"] is True
+
+
+def test_react_uses_observed_openrouter_response_cost_without_estimating_missing_cost(tmp_path) -> None:
+    known_usage = ModelUsage(input_tokens=10, output_tokens=2, total_tokens=12, total_cost=1.25)
+    output = ModelOutput.from_content("openrouter/provider/model", "DONE")
+    output.usage = known_usage
+    response = {
+        "id": "generation-id",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "provider/model",
+        "provider": "Provider",
+        "choices": [
+            {
+                "index": 0,
+                "logprobs": None,
+                "finish_reason": "stop",
+                "native_finish_reason": "STOP",
+                "message": {"role": "assistant", "content": "DONE", "refusal": None},
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12,
+            "cost": 0.0025,
+            "is_byok": False,
+        },
+    }
+    event = ModelEvent(
+        model="openrouter/provider/model",
+        input=[],
+        tools=[],
+        tool_choice="auto",
+        config=GenerateConfig(),
+        output=output,
+        call=ModelCall(request={}, response=response),
+    )
+    record = _record("q", "question", "react", context_ids=["a"])
+    record["model_calls"] = 2
+    sample = _sample(
+        "q",
+        "question",
+        record,
+        events=[event, SimpleNamespace(event="model", output=SimpleNamespace(usage=known_usage), call=None)],
+    )
+
+    export_results(
+        [_log("react", ["q"], [sample])],
+        tmp_path,
+        cases=[BenchmarkCase("q", "question", ("a",), {})],
+        methods=["react"],
+    )
+
+    usage = json.loads((tmp_path / "results.jsonl").read_text())["usage"]
+    assert usage["cost_usd"] is None
+    assert usage["observed_cost_usd"] == 0.0025
     assert usage["cost_coverage"] == {"numerator": 1, "denominator": 2, "rate": 0.5}
     assert usage["observed_only"] is True
+
+
+def test_react_does_not_export_inspect_cost_when_raw_provider_cost_is_absent(tmp_path) -> None:
+    inspect_usage = ModelUsage(input_tokens=10, output_tokens=2, total_tokens=12, total_cost=1.25)
+    output = ModelOutput.from_content("openrouter/provider/model", "DONE")
+    output.usage = inspect_usage
+    event = ModelEvent(
+        model="openrouter/provider/model",
+        input=[],
+        tools=[],
+        tool_choice="auto",
+        config=GenerateConfig(),
+        output=output,
+        call=ModelCall(
+            request={},
+            response={
+                "id": "generation-id",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "provider/model",
+                "provider": "Provider",
+                "choices": [
+                    {
+                        "index": 0,
+                        "logprobs": None,
+                        "finish_reason": "stop",
+                        "native_finish_reason": "STOP",
+                        "message": {"role": "assistant", "content": "DONE", "refusal": None},
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+            },
+        ),
+    )
+    record = _record("q", "question", "react", context_ids=["a"])
+    record["model_calls"] = 1
+
+    export_results(
+        [_log("react", ["q"], [_sample("q", "question", record, events=[event])])],
+        tmp_path,
+        cases=[BenchmarkCase("q", "question", ("a",), {})],
+        methods=["react"],
+    )
+
+    usage = json.loads((tmp_path / "results.jsonl").read_text())["usage"]
+    assert usage["cost_usd"] is None
+    assert usage["observed_cost_usd"] is None
+    assert usage["cost_coverage"] == {"numerator": 0, "denominator": 1, "rate": 0.0}
+
+
+def test_react_model_usage_fallback_does_not_export_estimated_cost(tmp_path) -> None:
+    record = _record("q", "question", "react", context_ids=["a"])
+    sample = _sample(
+        "q",
+        "question",
+        record,
+        usage={"openrouter/provider/model": ModelUsage(input_tokens=10, output_tokens=2, total_tokens=12, total_cost=1.25)},
+    )
+
+    export_results(
+        [_log("react", ["q"], [sample])],
+        tmp_path,
+        cases=[BenchmarkCase("q", "question", ("a",), {})],
+        methods=["react"],
+    )
+
+    usage = json.loads((tmp_path / "results.jsonl").read_text())["usage"]
+    assert usage["cost_usd"] is None
+    assert usage["observed_cost_usd"] is None
+
+
+def test_react_exposes_complete_openrouter_response_cost(tmp_path) -> None:
+    usage = ModelUsage(input_tokens=10, output_tokens=2, total_tokens=12)
+    output = ModelOutput.from_content("openrouter/provider/model", "DONE")
+    output.usage = usage
+    event = ModelEvent(
+        model="openrouter/provider/model",
+        input=[],
+        tools=[],
+        tool_choice="auto",
+        config=GenerateConfig(),
+        output=output,
+        call=ModelCall(
+            request={},
+            response={
+                "id": "generation-id",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "provider/model",
+                "provider": "Provider",
+                "choices": [
+                    {
+                        "index": 0,
+                        "logprobs": None,
+                        "finish_reason": "stop",
+                        "native_finish_reason": "STOP",
+                        "message": {"role": "assistant", "content": "DONE", "refusal": None},
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12, "cost": 0.0025},
+            },
+        ),
+    )
+    record = _record("q", "question", "react", context_ids=["a"])
+    record["model_calls"] = 1
+
+    export_results(
+        [_log("react", ["q"], [_sample("q", "question", record, events=[event])])],
+        tmp_path,
+        cases=[BenchmarkCase("q", "question", ("a",), {})],
+        methods=["react"],
+    )
+
+    exported = json.loads((tmp_path / "results.jsonl").read_text())["usage"]
+    assert exported["cost_usd"] == 0.0025
+    assert exported["observed_cost_usd"] == 0.0025
+    assert exported["cost_coverage"] == {"numerator": 1, "denominator": 1, "rate": 1.0}
+    assert exported["observed_only"] is False
 
 
 @pytest.mark.parametrize("existing_name", ["results.jsonl", "summary.json"])
