@@ -228,19 +228,17 @@ def test_context_objective_posts_search_stop_schema_and_accepts_stop() -> None:
         body = json.loads(request.content)
         schema = body["response_format"]["json_schema"]["schema"]
         assert body["response_format"]["json_schema"]["name"] == "agentic_context_planner_decision"
-        assert [branch["properties"]["action"]["const"] for branch in schema["oneOf"]] == [
-            "search",
-            "stop",
-        ]
-        stop_schema = schema["oneOf"][1]
-        assert stop_schema["properties"]["query"] == {"type": "null"}
-        assert stop_schema["properties"]["answer"] == {"type": "null"}
-        assert stop_schema["properties"]["reason"] == {"type": ["string", "null"]}
-        assert stop_schema["properties"]["cited_document_ids"]["items"] == {
+        assert schema["additionalProperties"] is False
+        assert schema["properties"]["action"] == {"type": "string", "enum": ["search", "stop"]}
+        assert schema["properties"]["query"] == {"type": ["string", "null"], "minLength": 1}
+        assert schema["properties"]["answer"] == {"type": "null"}
+        assert schema["properties"]["reason"] == {"type": ["string", "null"], "minLength": 1}
+        assert schema["properties"]["cited_document_ids"]["items"] == {
             "type": "string",
             "minLength": 1,
         }
-        assert stop_schema["properties"]["cited_document_ids"]["maxItems"] == 0
+        assert schema["properties"]["cited_document_ids"]["maxItems"] == 0
+        assert schema["required"] == ["action", "query", "answer", "reason", "cited_document_ids"]
         assert json.loads(body["messages"][1]["content"])["objective"] == "context"
         assert "Do not generate a final answer" in body["messages"][0]["content"]
         return httpx.Response(
@@ -407,6 +405,234 @@ def test_chat_backend_rejects_invalid_or_non_strict_decisions(content: str):
     assert attempt.provider_request_id == "request-invalid"
     assert attempt.error is not None
     assert attempt.error.category is ErrorCategory.VALIDATION
+
+
+def test_invalid_decision_preserves_provider_telemetry_without_retry() -> None:
+    request_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "request-invalid-telemetry"},
+            json={
+                "model": "served-model",
+                "choices": [
+                    {
+                        "message": {"content": '{"action":"stop"'},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1535,
+                    "completion_tokens": 183,
+                    "total_tokens": 1718,
+                    "cost": 0.00065825,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                    "completion_tokens_details": {"reasoning_tokens": 0},
+                },
+            },
+        )
+
+    backend = OpenAICompatibleChatBackend(
+        "http://chat.test",
+        "planner-model",
+        transport=httpx.MockTransport(handler),
+        objective=AgentObjective.CONTEXT,
+    )
+    with pytest.raises(OpenAICompatibleResponseError) as exc_info:
+        asyncio.run(backend.plan(_planner_request(objective=AgentObjective.CONTEXT)))
+    asyncio.run(backend.close())
+
+    error = exc_info.value
+    assert request_count == 1
+    assert error.model == "served-model"
+    assert error.finish_reason == "stop"
+    assert error.usage is not None
+    assert error.usage.input_tokens == 1535
+    assert error.usage.output_tokens == 183
+    assert error.usage.total_tokens == 1718
+    assert error.usage.cached_input_tokens == 0
+    assert error.usage.reasoning_tokens == 0
+    assert error.cost is not None
+    assert error.cost.usd == 0.00065825
+    assert error.cache_hit is False
+    assert error.attempts[0].error is not None
+    assert error.attempts[0].error.code == "invalid_response"
+
+
+def test_length_finish_reason_is_truncation_even_when_decision_json_is_valid() -> None:
+    request_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(
+            200,
+            json={
+                "model": "served-model",
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"action":"stop","query":null,"answer":null,'
+                                '"reason":"context is sufficient","cited_document_ids":[]}'
+                            )
+                        },
+                        "finish_reason": "length",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 2919,
+                    "completion_tokens": 497,
+                    "total_tokens": 3416,
+                    "cost": 0.004053,
+                    "completion_tokens_details": {"reasoning_tokens": 410},
+                },
+            },
+        )
+
+    backend = OpenAICompatibleChatBackend(
+        "http://chat.test",
+        "planner-model",
+        transport=httpx.MockTransport(handler),
+        objective=AgentObjective.CONTEXT,
+    )
+    with pytest.raises(OpenAICompatibleResponseError, match="truncated") as exc_info:
+        asyncio.run(backend.plan(_planner_request(objective=AgentObjective.CONTEXT)))
+    asyncio.run(backend.close())
+
+    error = exc_info.value
+    assert request_count == 1
+    assert error.finish_reason == "length"
+    assert error.usage is not None
+    assert error.usage.total_tokens == 3416
+    assert error.usage.reasoning_tokens == 410
+    assert error.cost is not None
+    assert error.cost.usd == 0.004053
+    assert len(error.attempts) == 1
+    assert error.attempts[0].status is CallStatus.ERROR
+    assert error.attempts[0].error is not None
+    assert error.attempts[0].error.category is ErrorCategory.PARSE
+    assert error.attempts[0].error.code == "response_truncated"
+
+
+@pytest.mark.parametrize(
+    "choices",
+    [
+        [],
+        [
+            {
+                "message": {
+                    "content": ('{"action":"search","query":"next","answer":null,' '"reason":null,"cited_document_ids":[]}')
+                },
+                "finish_reason": 7,
+            }
+        ],
+    ],
+)
+def test_invalid_completion_envelope_preserves_already_parsed_provider_telemetry(choices: list[object]) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "served-model",
+                "choices": choices,
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 3,
+                    "total_tokens": 15,
+                    "cost": 0.0004,
+                },
+            },
+        )
+
+    backend = OpenAICompatibleChatBackend(
+        "http://chat.test",
+        "planner-model",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(OpenAICompatibleResponseError) as exc_info:
+        asyncio.run(backend.plan(_planner_request()))
+    asyncio.run(backend.close())
+
+    error = exc_info.value
+    assert error.model == "served-model"
+    assert error.usage is not None
+    assert error.usage.total_tokens == 15
+    assert error.cost is not None
+    assert error.cost.usd == 0.0004
+
+
+@pytest.mark.parametrize("finish_reason", ["content_filter", "tool_calls", "provider_specific_end"])
+def test_explicit_non_stop_finish_reason_rejects_valid_decision_and_preserves_telemetry(finish_reason: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": ('{"action":"search","query":"next","answer":null,' '"reason":null,"cited_document_ids":[]}')
+                        },
+                        "finish_reason": finish_reason,
+                    }
+                ],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+            },
+        )
+
+    backend = OpenAICompatibleChatBackend(
+        "http://chat.test",
+        "planner-model",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(OpenAICompatibleResponseError) as exc_info:
+        asyncio.run(backend.plan(_planner_request()))
+    asyncio.run(backend.close())
+
+    error = exc_info.value
+    assert error.finish_reason == finish_reason
+    assert error.usage is not None
+    assert error.usage.total_tokens == 15
+    assert error.attempts[0].error is not None
+    assert error.attempts[0].error.code == "unexpected_finish_reason"
+
+
+def test_context_stop_with_answer_remains_invalid_instead_of_being_coerced() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action": "stop",
+                                    "query": None,
+                                    "answer": "A provider-generated answer must not become a valid stop.",
+                                    "reason": "context is sufficient",
+                                    "cited_document_ids": [],
+                                }
+                            )
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        )
+
+    backend = OpenAICompatibleChatBackend(
+        "http://chat.test",
+        "planner-model",
+        transport=httpx.MockTransport(handler),
+        objective=AgentObjective.CONTEXT,
+    )
+    with pytest.raises(OpenAICompatibleResponseError):
+        asyncio.run(backend.plan(_planner_request(objective=AgentObjective.CONTEXT)))
+    asyncio.run(backend.close())
 
 
 def test_chat_backend_does_not_retry_or_leak_secrets_on_http_failure():

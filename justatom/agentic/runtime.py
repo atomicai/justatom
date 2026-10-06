@@ -20,6 +20,7 @@ from justatom.agentic.schemas import (
     CallKind,
     CallStatus,
     CallTrace,
+    CostUsage,
     DecisionTrace,
     DocumentTrace,
     ErrorCategory,
@@ -840,7 +841,25 @@ class AgenticRAGRuntime:
                     error=None if backend_succeeded else error_trace,
                 ),
             )
-        usage = reply.usage if reply is not None else None
+        if reply is not None:
+            usage = reply.usage
+            cost = reply.cost
+            response_model = reply.model
+            finish_reason = reply.finish_reason
+            cache_hit = reply.cache_hit
+            time_to_first_token_ms = reply.time_to_first_token_ms
+        else:
+            error_usage = getattr(caught, "usage", None)
+            error_cost = getattr(caught, "cost", None)
+            error_model = getattr(caught, "model", None)
+            error_finish_reason = getattr(caught, "finish_reason", None)
+            error_cache_hit = getattr(caught, "cache_hit", None)
+            usage = error_usage if isinstance(error_usage, TokenUsage) else None
+            cost = error_cost if isinstance(error_cost, CostUsage) else None
+            response_model = error_model if isinstance(error_model, str) and error_model.strip() else None
+            finish_reason = error_finish_reason if isinstance(error_finish_reason, str) else None
+            cache_hit = error_cache_hit if isinstance(error_cache_hit, bool) else None
+            time_to_first_token_ms = None
         observed_tokens = _observed_total_tokens(usage)
         if observed_tokens is not None:
             state.observed_total_tokens += observed_tokens
@@ -850,17 +869,17 @@ class AgenticRAGRuntime:
                 call_index=call_index,
                 kind=CallKind.PLANNER,
                 backend=self.chat_backend.backend_name,
-                model=reply.model if reply is not None else self.chat_backend.model_name,
+                model=response_model or self.chat_backend.model_name,
                 started_offset_ms=started_offset_ms,
                 latency_ms=latency_ms,
                 status=status,
                 attempts=attempts,
                 queue_latency_ms=queue_latency_ms,
-                time_to_first_token_ms=reply.time_to_first_token_ms if reply is not None else None,
-                finish_reason=reply.finish_reason if reply is not None else None,
-                cache_hit=reply.cache_hit if reply is not None else None,
+                time_to_first_token_ms=time_to_first_token_ms,
+                finish_reason=finish_reason,
+                cache_hit=cache_hit,
                 tokens=usage,
-                cost=reply.cost if reply is not None else None,
+                cost=cost,
                 error=error_trace,
             )
         )

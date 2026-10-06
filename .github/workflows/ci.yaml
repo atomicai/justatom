@@ -72,6 +72,24 @@ jobs:
         python -m pip install ".[torch,serve,lm-embeddings,test]"
     - name: Run tests
       run: python -m pytest tests -m "not integration and not network"
+  pytest-inspect:
+    name: Optional Inspect search harness (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.13']
+    env:
+      INSPECT_DISPLAY: none
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install optional harness and test dependencies
+      run: python -m pip install ".[inspect,test]"
+    - name: Exercise real Inspect with mock model (no paid API calls)
+      run: python -m pytest tests/agentic -q
+
   pytest-windows:
     name: Tests (Windows)
     runs-on: windows-latest

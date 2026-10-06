@@ -11,6 +11,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+inspect = [
+  "inspect-ai==0.3.258",
+  "openai>=2.45,<3",
+  "numpy>=1.26,<3",
+  "polars==1.38.1",
+  "simplejson==3.19.2",
+  "mmh3==4.1.0",
+  "fastnumbers==5.1.0",
+  "lazy-imports==0.3.1",
+  "pyarrow>=12,<24",
+]
 lm-embeddings = [
   "transformers>=5.15,<6",
   "peft>=0.20,<1",

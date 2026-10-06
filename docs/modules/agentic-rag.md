@@ -1,5 +1,9 @@
 # Agentic RAG
 
+For optional side-by-side evaluation against an external ReAct agent, see the
+[Inspect search harness](inspect-search.md). The production runtime below stays
+independent of Inspect.
+
 Agentic RAG adds a planner-controlled retrieval loop on top of the retrieval
 runtime. The configured `objective` determines what the loop produces:
 

@@ -94,25 +94,21 @@ _DECISION_SCHEMA: dict[str, Any] = {
 
 _CONTEXT_DECISION_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "oneOf": [
-        deepcopy(_DECISION_SCHEMA["oneOf"][0]),
-        {
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "const": AgentAction.STOP.value},
-                "query": {"type": "null"},
-                "answer": {"type": "null"},
-                "reason": {"type": ["string", "null"]},
-                "cited_document_ids": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                    "maxItems": 0,
-                },
-            },
-            "required": ["action", "query", "answer", "reason", "cited_document_ids"],
-            "additionalProperties": False,
+    "properties": {
+        "action": {"type": "string", "enum": [AgentAction.SEARCH.value, AgentAction.STOP.value]},
+        "query": {"type": ["string", "null"], "minLength": 1},
+        # Both context-planner actions prohibit answers, so this invariant can
+        # be expressed without the less reliably enforced nested oneOf.
+        "answer": {"type": "null"},
+        "reason": {"type": ["string", "null"], "minLength": 1},
+        "cited_document_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "maxItems": 0,
         },
-    ],
+    },
+    "required": ["action", "query", "answer", "reason", "cited_document_ids"],
+    "additionalProperties": False,
 }
 
 _RESPONSE_FORMAT: dict[str, Any] = {
@@ -139,9 +135,24 @@ _MISSING = object()
 class OpenAICompatibleChatError(RuntimeError):
     """A sanitized failure while calling an OpenAI-compatible chat endpoint."""
 
-    def __init__(self, message: str, *, attempts: tuple[AttemptTrace, ...]) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempts: tuple[AttemptTrace, ...],
+        model: str | None = None,
+        usage: TokenUsage | None = None,
+        cost: CostUsage | None = None,
+        cache_hit: bool | None = None,
+        finish_reason: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.attempts = attempts
+        self.model = model
+        self.usage = usage
+        self.cost = cost
+        self.cache_hit = cache_hit
+        self.finish_reason = finish_reason
 
 
 class OpenAICompatibleResponseError(OpenAICompatibleChatError):
@@ -149,6 +160,29 @@ class OpenAICompatibleResponseError(OpenAICompatibleChatError):
 
 
 class _InvalidResponse(ValueError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        model: str | None = None,
+        usage: TokenUsage | None = None,
+        cost: CostUsage | None = None,
+        cache_hit: bool | None = None,
+        finish_reason: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.model = model
+        self.usage = usage
+        self.cost = cost
+        self.cache_hit = cache_hit
+        self.finish_reason = finish_reason
+
+
+class _TruncatedResponse(_InvalidResponse):
+    pass
+
+
+class _UnexpectedFinishReason(_InvalidResponse):
     pass
 
 
@@ -447,6 +481,52 @@ class OpenAICompatibleChatBackend:
                 self.model,
                 self.objective,
             )
+        except _TruncatedResponse as exc:
+            error = ErrorTrace(
+                component=self.backend_name,
+                category=ErrorCategory.PARSE,
+                code="response_truncated",
+                exception_type=type(exc).__name__,
+                retryable=False,
+            )
+            attempt = self._attempt(
+                started,
+                status=CallStatus.ERROR,
+                provider_request_id=provider_request_id,
+                error=error,
+            )
+            raise OpenAICompatibleResponseError(
+                "OpenAI-compatible chat response was truncated",
+                attempts=(attempt,),
+                model=exc.model,
+                usage=exc.usage,
+                cost=exc.cost,
+                cache_hit=exc.cache_hit,
+                finish_reason=exc.finish_reason,
+            ) from None
+        except _UnexpectedFinishReason as exc:
+            error = ErrorTrace(
+                component=self.backend_name,
+                category=ErrorCategory.VALIDATION,
+                code="unexpected_finish_reason",
+                exception_type=type(exc).__name__,
+                retryable=False,
+            )
+            attempt = self._attempt(
+                started,
+                status=CallStatus.ERROR,
+                provider_request_id=provider_request_id,
+                error=error,
+            )
+            raise OpenAICompatibleResponseError(
+                "OpenAI-compatible chat response did not finish normally",
+                attempts=(attempt,),
+                model=exc.model,
+                usage=exc.usage,
+                cost=exc.cost,
+                cache_hit=exc.cache_hit,
+                finish_reason=exc.finish_reason,
+            ) from None
         except (TypeError, ValueError, OverflowError) as exc:
             error = ErrorTrace(
                 component=self.backend_name,
@@ -464,6 +544,11 @@ class OpenAICompatibleChatBackend:
             raise OpenAICompatibleResponseError(
                 "OpenAI-compatible chat response did not match the planner schema",
                 attempts=(attempt,),
+                model=getattr(exc, "model", None),
+                usage=getattr(exc, "usage", None),
+                cost=getattr(exc, "cost", None),
+                cache_hit=getattr(exc, "cache_hit", None),
+                finish_reason=getattr(exc, "finish_reason", None),
             ) from None
 
         attempt = self._attempt(
@@ -595,29 +680,45 @@ def _parse_completion(
     if not isinstance(payload, Mapping):
         raise _InvalidResponse("completion must be an object")
 
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
-        raise _InvalidResponse("completion must contain a choice")
-    choice = choices[0]
-    message = choice.get("message")
-    if not isinstance(message, Mapping):
-        raise _InvalidResponse("choice must contain a message")
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise _InvalidResponse("message content must be a non-empty string")
-
-    finish_reason = choice.get("finish_reason")
-    if finish_reason is not None and not isinstance(finish_reason, str):
-        raise _InvalidResponse("finish_reason must be a string or null")
-
     response_model = payload.get("model", configured_model)
     if response_model is None:
         response_model = configured_model
     if not isinstance(response_model, str) or not response_model.strip():
         raise _InvalidResponse("model must be a non-empty string or null")
 
-    decision = _parse_decision(content, objective)
     usage, cost, cache_hit = _parse_usage(payload.get("usage", _MISSING))
+    telemetry = {
+        "model": response_model,
+        "usage": usage,
+        "cost": cost,
+        "cache_hit": cache_hit,
+        "finish_reason": None,
+    }
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+        raise _InvalidResponse("completion must contain a choice", **telemetry)
+    choice = choices[0]
+    finish_reason = choice.get("finish_reason")
+    if finish_reason is not None and not isinstance(finish_reason, str):
+        raise _InvalidResponse("finish_reason must be a string or null", **telemetry)
+    telemetry["finish_reason"] = finish_reason
+    if finish_reason == "length":
+        raise _TruncatedResponse("completion reached its output limit", **telemetry)
+    if finish_reason not in {None, "stop"}:
+        raise _UnexpectedFinishReason("completion finish_reason was not stop", **telemetry)
+
+    message = choice.get("message")
+    if not isinstance(message, Mapping):
+        raise _InvalidResponse("choice must contain a message", **telemetry)
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise _InvalidResponse("message content must be a non-empty string", **telemetry)
+
+    try:
+        decision = _parse_decision(content, objective)
+    except _InvalidResponse as exc:
+        raise _InvalidResponse("decision did not match planner semantics", **telemetry) from exc
     return decision, response_model, finish_reason, usage, cost, cache_hit
 
 
