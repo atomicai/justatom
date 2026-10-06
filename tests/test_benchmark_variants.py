@@ -108,6 +108,8 @@ class BenchmarkVariantTests(unittest.TestCase):
     def test_benchmark_forwards_train_config_and_auxiliary_gradient_controls(self):
         with TemporaryDirectory() as tmpdir:
             bench_root = Path(tmpdir) / "bench"
+            train_config = Path(tmpdir) / "train.yaml"
+            train_config.write_text("method: atom_gate\ndataset:\n  id: justatom\n")
             result = subprocess.run(
                 [
                     "bash",
@@ -119,7 +121,7 @@ class BenchmarkVariantTests(unittest.TestCase):
                     "--bench-root",
                     str(bench_root),
                     "--train-config",
-                    "configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml",
+                    str(train_config),
                     "--experiment-role",
                     "ablation",
                     "--aux-gradient-mode",
@@ -140,7 +142,7 @@ class BenchmarkVariantTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             commands = (bench_root / "COMMANDS.md").read_text()
             self.assertIn(
-                "--train-config configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml",
+                f"--train-config {train_config}",
                 commands,
             )
             self.assertIn("--aux-gradient-mode safe", commands)
@@ -152,6 +154,7 @@ class BenchmarkVariantTests(unittest.TestCase):
     def test_pipeline_rejects_missing_train_config_before_creating_run_root(self):
         with TemporaryDirectory() as tmpdir:
             output_root = Path(tmpdir) / "runs"
+            missing_config = Path(tmpdir) / "missing.yaml"
             result = subprocess.run(
                 [
                     "bash",
@@ -161,7 +164,7 @@ class BenchmarkVariantTests(unittest.TestCase):
                     "--output-root",
                     str(output_root),
                     "--train-config",
-                    "configs/experiments/missing.yaml",
+                    str(missing_config),
                     "--eval-only",
                 ],
                 cwd=REPO_ROOT,
