@@ -103,11 +103,12 @@ Use `observe` before a safe run to collect the compatibility distribution:
 
 ```bash
 bash scripts/run_pipeline.sh \
-  --train-config configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml \
+  --train-config configs/train.yaml \
   --method atom_gate \
   --experiment-role ablation \
   --dataset-ids justatom \
-  --model Qwen/Qwen3-Embedding-0.6B \
+  --model intfloat/multilingual-e5-small \
+  --auto-e5-prefixes \
   --batch-size 8 \
   --grad-acc-steps 4 \
   --epochs 1 \
@@ -309,17 +310,11 @@ supports it and otherwise FP16. MPS and CPU default to FP32 for compatibility;
 checkpointing is independent of LoRA and can be enabled when sequence length
 or batch size needs more memory.
 
-The reproducible Qwen3 0.6B vanilla-plus-bank control is available at
-`configs/experiments/qwen3-06b-lora-vanilla-bank.yaml`. It uses standard
-coupled InfoNCE, 3,000 sampled pairs, one epoch, and 12 random detached bank
-negatives per query. Override `dataset.id` and `artifacts.save_dir` on the
-command line to reuse the recipe.
-
-The matching gradient-safe `atom_gate` ablation is
-`configs/experiments/qwen3-06b-lora-alpha-gradient-safe.yaml`. It keeps the
-same Qwen3 LoRA, data, optimization, and runtime values, disables the memory
-bank, and fixes `tau=0.05`, `tau_simcse=0.2`, `tau_target=0.2`,
-`lambda_sc=0.03`, and the `safe` controller ratio at `0.25`.
+Save custom settings in a local YAML file and pass its path with
+`python -m justatom.api.train --config /path/to/train.yaml --dataset.id justatom`.
+For pipeline runs, use `--train-config /path/to/train.yaml`; explicit pipeline
+options and defaults take precedence as described above. Keep experiment-specific
+settings with the corresponding run artifacts rather than as shared defaults.
 
 ### Qwen3-VL-Embedding-2B: text retrieval
 

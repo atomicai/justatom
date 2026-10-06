@@ -6,7 +6,7 @@ from collections.abc import Sequence
 import httpx
 import pytest
 
-from justatom.api.embedding_server import EmbeddingServerSettings, create_embedding_app
+from justatom.api.serve_embeddings import EmbeddingServerSettings, create_embedding_app
 from justatom.retrieval.contracts import EmbeddingProfile
 from justatom.retrieval.embedders.openai_compatible import OpenAICompatibleEmbedder
 

@@ -38,23 +38,30 @@ def test_resolve_train_config_applies_dataset_preset_and_method_profile():
     assert config.memory_bank.enabled
 
 
-def test_qwen_lora_vanilla_bank_recipe_resolves():
-    config = train.resolve_train_config(
-        config_path="configs/experiments/qwen3-06b-lora-vanilla-bank.yaml",
+def test_train_yaml_resolves_dataset_and_method_profiles_with_overrides(tmp_path):
+    config_path = tmp_path / "train.yaml"
+    config_path.write_text(
+        """\
+method: atomic
+dataset:
+  id: justatom
+optimization:
+  epochs: 2
+"""
     )
 
-    assert config.method.value == "vanilla"
-    assert config.experiment.role.value == "ablation"
-    assert config.model.lora.enabled
-    assert config.optimization.lr_encoder == pytest.approx(2e-5)
-    assert config.optimization.epochs == 1
-    assert config.optimization.num_samples == 3000
-    assert not config.objective.decoupled
+    config = train.resolve_train_config(
+        config_path=config_path,
+        overrides={"optimization": {"num_samples": 75}, "memory_bank": {"size": 256}},
+    )
+
+    assert config.method.value == "atomic"
+    assert config.dataset.name_or_path == "justatom/universe-retrieval-benchmark"
+    assert config.dataset.config == "benchmark"
+    assert config.dataset.split == "full"
+    assert config.optimization.epochs == 2
+    assert config.optimization.num_samples == 75
     assert config.memory_bank.enabled
+    assert config.memory_bank.size == 256
     assert config.memory_bank.mining == "random"
-    assert config.memory_bank.hard_negatives == 0
-    assert config.memory_bank.random_negatives == 12
-    assert config.memory_bank.mass_ratio == pytest.approx(0.5)
-    assert config.memory_bank.mass_ramp_steps == 20
-    assert not config.memory_bank.adaptive.enabled
-    assert config.memory_bank.margin.mode.value == "off"
+    assert config.gradient_projection.enabled
