@@ -11,6 +11,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+lm-embeddings = [
+  "transformers>=5.15,<6",
+  "peft>=0.20,<1",
+]
 torch = [
   "torch>=2.8.0",
   "pytorch-lightning==2.2.1",

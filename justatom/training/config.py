@@ -52,11 +52,20 @@ class ModelConfig:
     name_or_path: str = "intfloat/multilingual-e5-small"
     revision: str | None = None
     dtype: str | None = None
-    query_prefix: str = "query:"
-    content_prefix: str = "passage:"
+    query_prefix: str | None = None
+    content_prefix: str | None = None
     max_query_seq_len: int | None = None
     max_seq_len: int = 512
     lora: LoraAdapterConfig = field(default_factory=LoraAdapterConfig)
+
+    def __post_init__(self):
+        from justatom.configuring.embeddings import native_embedding_prefixes
+
+        query, content = native_embedding_prefixes(self.name_or_path) or ("query:", "passage:")
+        if self.query_prefix is None:
+            object.__setattr__(self, "query_prefix", query)
+        if self.content_prefix is None:
+            object.__setattr__(self, "content_prefix", content)
 
 
 @dataclass(frozen=True)
@@ -310,6 +319,9 @@ def _normalize_model(raw: Any) -> Any:
     if not isinstance(raw, Mapping):
         return raw
     normalized = dict(raw)
+    if "name_or_path" in normalized:
+        normalized.setdefault("query_prefix", None)
+        normalized.setdefault("content_prefix", None)
     lora = normalized.get("lora")
     if isinstance(lora, Mapping):
         lora = dict(lora)

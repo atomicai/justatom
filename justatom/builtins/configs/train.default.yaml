@@ -6,8 +6,8 @@ experiment:
 
 model:
   name_or_path: intfloat/multilingual-e5-small
-  query_prefix: "query:"
-  content_prefix: "passage:"
+  query_prefix: null  # use the encoder's native retrieval prompt
+  content_prefix: null
   max_query_seq_len: null
   max_seq_len: 512
   lora:
