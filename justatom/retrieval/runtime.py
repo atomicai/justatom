@@ -194,9 +194,13 @@ def _validate_config(
 
 
 def _build_embedder(embedding: Mapping[str, Any]) -> Embedder:
+    from justatom.configuring.embeddings import native_embedding_prefixes
+
+    native = native_embedding_prefixes(embedding.get("model")) if embedding["backend"] == "local" else None
+    native_query, native_document = native or ("", "")
     profile = EmbeddingProfile(
-        query_prefix=embedding.get("query_prefix") or "",
-        document_prefix=embedding.get("document_prefix") or "",
+        query_prefix=native_query if embedding.get("query_prefix") is None else embedding["query_prefix"],
+        document_prefix=native_document if embedding.get("document_prefix") is None else embedding["document_prefix"],
         batch_size=embedding.get("batch_size", 64),
         max_length=embedding.get("max_length", 512),
         skip_prefix_if_present=embedding.get("skip_prefix_if_present", True),

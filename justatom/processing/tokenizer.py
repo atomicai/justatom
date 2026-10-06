@@ -5,6 +5,7 @@ from loguru import logger
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from justatom.processing.qwen3_vl import Qwen3VLTextTokenizer
+from justatom.processing.wemm import WeMMTextTokenizer
 from justatom.tooling.stl import merge_in_order
 
 
@@ -44,10 +45,17 @@ class ITokenizer(PreTrainedTokenizer):
                 logger.error(msg)
                 raise ValueError(msg)  # noqa: B904
         is_vl = str(where) == "Qwen/Qwen3-VL-Embedding-2B"
+        is_wemm = str(where) == "tencent/WeMM-Embedding-2B"
         model_config_path = where_path / "config.json"
         if model_config_path.is_file():
             with open(model_config_path) as fp:
-                is_vl = json.load(fp).get("model_type") == "qwen3_vl"
+                model_config = json.load(fp)
+                is_vl = model_config.get("model_type") == "qwen3_vl"
+                is_wemm = model_config.get("klass") == "WeMMEmbeddingModel" or (
+                    model_config.get("model_type") == "qwen3_5" and bool(model_config.get("matryoshka_dimensions"))
+                )
+        if is_wemm or tokenizer.init_kwargs.get("justatom_text_format") == "wemm":
+            return WeMMTextTokenizer(tokenizer)
         if is_vl or tokenizer.init_kwargs.get("justatom_text_format") == "qwen3_vl":
             return Qwen3VLTextTokenizer(tokenizer)
         return tokenizer

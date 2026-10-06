@@ -1,3 +1,5 @@
+import pytest
+
 from justatom.api import serve_embeddings as module
 
 
@@ -17,13 +19,14 @@ def test_build_embedding_app_passes_environment_settings(monkeypatch):
     assert calls[0].device == "cuda:0"
 
 
-def test_embedding_server_port_is_8000(monkeypatch):
+@pytest.mark.parametrize("options, bind", [({}, "0.0.0.0:8000"), ({"host": "127.0.0.1", "port": 7777}, "127.0.0.1:7777")])
+def test_embedding_server_starts_hypercorn(monkeypatch, options, bind):
     calls = []
     monkeypatch.setattr(module, "build_embedding_app", lambda: "app")
 
-    async def fake_serve(app, *, host, port):
-        calls.append((app, host, port))
+    async def fake_serve(app, config):
+        calls.append((app, config.bind, config.workers, config.accesslog, config.errorlog))
 
-    monkeypatch.setattr(module, "serve_app", fake_serve)
-    module.main()
-    assert calls == [("app", "0.0.0.0", 8000)]
+    monkeypatch.setattr(module, "serve", fake_serve)
+    module.main(**options)
+    assert calls == [("app", [bind], 1, "-", "-")]

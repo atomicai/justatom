@@ -4,7 +4,7 @@ from types import ModuleType
 
 import pytest
 
-from justatom.api.run import create_app
+from justatom.api.serve import create_app
 from justatom.etc.schema import Document
 from justatom.retrieval.errors import ConfigurationError, EmbeddingBackendError
 
@@ -46,16 +46,24 @@ class FakeRuntime:
             raise self.close_error
 
 
-def test_app_reuses_one_runtime_for_search_index_and_shutdown():
+def test_app_reuses_one_runtime_without_starting_mq_by_default(monkeypatch):
+    rabbitmq = ModuleType("justatom.mq.clients.rabbitmq")
+    rabbitmq.RabbitMQClient = lambda *args, **kwargs: pytest.fail("MQ must be opt-in")
+    settings = ModuleType("justatom.mq.settings.rabbitmq")
+    settings.SettingsRabbitMQ = object
+    monkeypatch.setitem(sys.modules, "justatom.mq.clients.rabbitmq", rabbitmq)
+    monkeypatch.setitem(sys.modules, "justatom.mq.settings.rabbitmq", settings)
+
     async def scenario():
         runtime = FakeRuntime()
-        app = create_app(runtime=runtime, start_mq=False)
+        app = create_app(runtime=runtime)
         async with app.test_app() as test_app:
             client = test_app.test_client()
             search = await client.post("/searching", json={"text": "cats", "top_k": 3})
             assert (await search.get_json())["docs"][0]["content"] == "result:cats"
             indexed = await client.post("/indexing", json={"dataset_name_or_docs": [{"content": "doc"}]})
             assert (await indexed.get_json())["total_docs"] == 7
+            assert "retrieval_mq_task" not in app.extensions
         assert runtime.closed == 1
 
     asyncio.run(scenario())
@@ -83,7 +91,7 @@ def test_app_builds_runtime_during_lifecycle_only(monkeypatch):
             calls.append(config)
             return runtime
 
-        monkeypatch.setattr("justatom.api.run.build_runtime", build)
+        monkeypatch.setattr("justatom.api.serve.build_runtime", build)
         app = create_app(start_mq=False)
         assert calls == []
         async with app.test_app():
@@ -108,7 +116,7 @@ def test_mq_construction_failure_closes_runtime_and_preserves_startup_error(monk
         settings.SettingsRabbitMQ = object
         monkeypatch.setitem(sys.modules, "justatom.mq.clients.rabbitmq", rabbitmq)
         monkeypatch.setitem(sys.modules, "justatom.mq.settings.rabbitmq", settings)
-        app = create_app(runtime=runtime)
+        app = create_app(runtime=runtime, start_mq=True)
         start = app.before_serving_funcs[0]
 
         with pytest.raises(RuntimeError, match="mq unavailable") as raised:
@@ -138,7 +146,7 @@ def test_startup_failure_finishes_close_when_caller_is_cancelled(monkeypatch):
         settings.SettingsRabbitMQ = object
         monkeypatch.setitem(sys.modules, "justatom.mq.clients.rabbitmq", rabbitmq)
         monkeypatch.setitem(sys.modules, "justatom.mq.settings.rabbitmq", settings)
-        app = create_app(runtime=runtime)
+        app = create_app(runtime=runtime, start_mq=True)
         start_task = asyncio.create_task(app.before_serving_funcs[0]())
         await close_started.wait()
         start_task.cancel()

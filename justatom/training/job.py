@@ -235,10 +235,14 @@ def apply_lora_adapter(language_model: ILanguageModel, config: LoraAdapterConfig
     target_modules = list(config.target_modules) if isinstance(config.target_modules, tuple) else config.target_modules
     if hasattr(language_model, "resolve_lora_targets"):
         if config.bias != "none":
-            raise ValueError("Qwen3-VL text LoRA requires bias=none to keep the base and visual tower frozen")
+            raise ValueError("Text-tower LoRA requires bias=none to keep the base and visual tower frozen")
         target_modules = language_model.resolve_lora_targets(config.target_modules)
     revision = getattr(getattr(language_model.model, "config", None), "_commit_hash", None)
     adapter_kwargs = {} if revision is None else {"revision": revision}
+    # Freeze pretrained layers outside the HF backbone too (Gemma projections).
+    # Otherwise disabling LoRA would no longer recover the frozen AnchorBank base.
+    if isinstance(language_model, torch.nn.Module):
+        language_model.requires_grad_(False)
     language_model.model = get_peft_model(
         language_model.model,
         LoraConfig(
@@ -257,9 +261,19 @@ def apply_lora_adapter(language_model: ILanguageModel, config: LoraAdapterConfig
 
 
 def load_encoder(config: TrainConfig, processor: TrainWithContrastiveProcessor) -> EncoderRunner:
+    from justatom.modeling.prime import EmbeddingGemmaModel
+
     model_kwargs = {} if config.model.revision is None else {"revision": config.model.revision}
-    language_model = ILanguageModel.load(model_name_or_path=config.model.name_or_path, **model_kwargs)
     device = resolve_torch_device(config.runtime)
+    if config.model.dtype is not None:
+        model_kwargs["dtype"] = getattr(torch, config.model.dtype) if device.startswith("cuda") else torch.float32
+    language_model = ILanguageModel.load(model_name_or_path=config.model.name_or_path, **model_kwargs)
+    if isinstance(language_model, EmbeddingGemmaModel) and resolve_training_precision(config.runtime) in {
+        "16-mixed",
+        "16-true",
+        "16",
+    }:
+        raise ValueError("EmbeddingGemma requires runtime.precision=bf16-mixed or 32-true")
     if config.model.dtype is not None:
         # CPU/MPS remain float32; frozen CUDA weights may use a lower-precision dtype.
         dtype = getattr(torch, config.model.dtype) if device.startswith("cuda") else torch.float32

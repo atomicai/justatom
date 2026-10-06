@@ -130,7 +130,12 @@ class HuggingFaceEmbedder:
         if not model.strip():
             raise ConfigurationError("model must be non-empty")
         self.model = model
-        self.profile = profile or EmbeddingProfile()
+        if profile is None:
+            from justatom.configuring.embeddings import native_embedding_prefixes
+
+            query, document = native_embedding_prefixes(model) or ("", "")
+            profile = EmbeddingProfile(query_prefix=query, document_prefix=document)
+        self.profile = profile
         self.device = resolve_device(device)
         self._encoder: _LocalEncoder | None = _build_local_encoder(model, self.device, self.profile.max_length)
         self._lifecycle_lock = asyncio.Lock()
