@@ -11,21 +11,25 @@
       
       
       
+        <link rel="prev" href="../training/">
       
       
-      <link rel="icon" href="/Logo.png">
+        <link rel="next" href="../architecture/">
+      
+      
+      <link rel="icon" href="../Logo.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.7">
     
     
       
-        <title>justatom</title>
+        <title>LM Embeddings - justatom</title>
       
     
     
-      <link rel="stylesheet" href="/assets/stylesheets/main.8608ea7d.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.8608ea7d.min.css">
       
         
-        <link rel="stylesheet" href="/assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -44,9 +48,9 @@
       
     
     
-      <link rel="stylesheet" href="/stylesheets/extra.css">
+      <link rel="stylesheet" href="../stylesheets/extra.css">
     
-    <script>__md_scope=new URL("/",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -71,6 +75,11 @@
     <label class="md-overlay" for="__drawer"></label>
     <div data-md-component="skip">
       
+        
+        <a href="#_1" class="md-skip">
+          Skip to content
+        </a>
+      
     </div>
     <div data-md-component="announce">
       
@@ -83,9 +92,9 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="/." title="justatom" class="md-header__button md-logo" aria-label="justatom" data-md-component="logo">
+    <a href=".." title="justatom" class="md-header__button md-logo" aria-label="justatom" data-md-component="logo">
       
-  <img src="/Logo.png" alt="logo">
+  <img src="../Logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -102,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              
+              LM Embeddings
             
           </span>
         </div>
@@ -205,9 +214,9 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="/." title="justatom" class="md-nav__button md-logo" aria-label="justatom" data-md-component="logo">
+    <a href=".." title="justatom" class="md-nav__button md-logo" aria-label="justatom" data-md-component="logo">
       
-  <img src="/Logo.png" alt="logo">
+  <img src="../Logo.png" alt="logo">
 
     </a>
     justatom
@@ -222,7 +231,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/." class="md-nav__link">
+      <a href=".." class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -243,7 +252,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/getting-started/" class="md-nav__link">
+      <a href="../getting-started/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -264,7 +273,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/launch-guide/" class="md-nav__link">
+      <a href="../launch-guide/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -285,7 +294,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/training/" class="md-nav__link">
+      <a href="../training/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -303,10 +312,31 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="/lm-embeddings/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    LM Embeddings
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -316,6 +346,44 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Тесты
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Обучение и оценка
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -327,7 +395,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/architecture/" class="md-nav__link">
+      <a href="../architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -389,7 +457,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/modules/" class="md-nav__link">
+      <a href="../modules/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -411,7 +479,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/modules/agentic-rag/" class="md-nav__link">
+      <a href="../modules/agentic-rag/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -433,7 +501,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/modules/api-cli/" class="md-nav__link">
+      <a href="../modules/api-cli/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -455,7 +523,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/modules/runtime/" class="md-nav__link">
+      <a href="../modules/runtime/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -477,7 +545,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/modules/data-processing/" class="md-nav__link">
+      <a href="../modules/data-processing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -499,7 +567,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/modules/storage/" class="md-nav__link">
+      <a href="../modules/storage/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -521,7 +589,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/modules/modeling/" class="md-nav__link">
+      <a href="../modules/modeling/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -560,6 +628,34 @@
   
   
   
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Тесты
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Обучение и оценка
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
   
 </nav>
                   </div>
@@ -571,8 +667,115 @@
             <div class="md-content" data-md-component="content">
               <article class="md-content__inner md-typeset">
                 
-  <h1>404 - Not found</h1>
+                  
 
+
+
+<h1 id="_1">Эмбеддинги на основе языковых моделей<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
+<p>Четыре дополнительных энкодера подключены к общим путям обучения и локального
+поиска. Они поддерживают LoRA, InfoNCE и геометрическое ограничение AnchorBank.</p>
+<table>
+<thead>
+<tr>
+<th>Модель</th>
+<th>Семейство</th>
+<th style="text-align: right;">Размер вектора</th>
+<th>Получение вектора</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Qwen/Qwen3-Embedding-4B</code></td>
+<td>Qwen3</td>
+<td style="text-align: right;">2560</td>
+<td>Последний непустой токен</td>
+</tr>
+<tr>
+<td><code>nvidia/Nemotron-3-Embed-1B-BF16</code></td>
+<td>Ministral</td>
+<td style="text-align: right;">2048</td>
+<td>Двунаправленное внимание, среднее по непустым токенам</td>
+</tr>
+<tr>
+<td><code>google/embeddinggemma-300m</code></td>
+<td>Gemma3</td>
+<td style="text-align: right;">768</td>
+<td>Двунаправленное внимание, среднее и два обученных слоя проекции</td>
+</tr>
+<tr>
+<td><code>tencent/WeMM-Embedding-2B</code></td>
+<td>Qwen3.5</td>
+<td style="text-align: right;">2048</td>
+<td>Текстовый вход, вектор токена <code>&lt;embedding&gt;</code></td>
+</tr>
+</tbody>
+</table>
+<p>Для новых архитектур предусмотрены дополнительные зависимости <code>lm-embeddings</code>:
+Transformers ≥ 5.15 и PEFT ≥ 0.20. Они дополняют обычное окружение JustAtom с PyTorch.
+Установка из корня репозитория для обучения и локального поиска:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">".[torch,serve,lm-embeddings]"</span>
+</code></pre></div>
+<p>Для воспроизводимости задайте ревизию весов в <code>model.revision</code>.
+Формат запросов и документов
+выбирается автоматически при <code>query_prefix: null</code> и <code>content_prefix: null</code>;
+явное значение, в том числе пустая строка, сохраняется. При локальном поиске
+аналогично обрабатываются <code>query_prefix</code> и <code>document_prefix</code>. Сохранённый энкодер
+читает собственные префиксы из конфигурации процессора. На стороне удалённого
+сервера префиксы задаются явно, поскольку сервер может добавлять их самостоятельно.</p>
+<p>WeMM использует родной шаблон сообщения пользователя и завершающий токен из
+<code>tokenizer.json</code>. Токен остаётся после обрезки длинного текста. Изображения и видео
+в эту интеграцию не входят; библиотека для обработки изображений не требуется.
+Загружается встроенный <code>Qwen3_5Model</code>, без генерационной головы и выполнения
+удалённого Python-кода. Визуальная часть заморожена, LoRA подключается только к
+линейным слоям языковой части.</p>
+<p>Для Nemotron согласованы двунаправленная маска и флаг внимания в модулях
+Ministral: в Transformers 5.15 флаг модуля изначально причинный даже при
+<code>config.is_causal=false</code>. Проверка влияния последующих токенов и независимости
+результата от дополнения батча предотвращает случайное переключение внимания.
+Маска дополнения передаётся в модель и учитывается при усреднении токенов.</p>
+<p>EmbeddingGemma загружает оба слоя проекции из опубликованной последовательности
+модулей и сохраняет их вместе с энкодером. При обучении LoRA они заморожены,
+поэтому отключение адаптера восстанавливает исходную модель для AnchorBank.
+Поддерживаются float32 и bfloat16. Доступ к весам требует принятия условий на
+<a href="https://huggingface.co/google/embeddinggemma-300m">странице Google</a> и авторизации
+Hugging Face; без доступа библиотека не сможет загрузить эту модель.</p>
+<h2 id="_2">Тесты<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<p>Из корня репозитория с установленными зависимостями <code>test</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/test_lm_embeddings.py<span class="w"> </span>-q
+</code></pre></div>
+<p>Тесты используют уменьшенные экземпляры архитектур с локальными весами и работают
+на CPU без скачивания моделей. Они проверяют получение и нормализацию векторов,
+маскирование, градиенты LoRA и AnchorBank, неизменность базовых векторов при
+отключённых адаптерах, а также сохранение и повторную загрузку энкодера.</p>
+<h2 id="_3">Обучение и оценка<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<p>Модели используют общий интерфейс обучения, описанный в разделе
+<a href="../training/">Training</a>. В своей конфигурации укажите <code>model.name_or_path</code>
+из таблицы выше, <code>model.revision</code> и путь к подготовленным обучающим парам
+в <code>dataset.name_or_path</code>. Поля запросов и документов задаются через
+<code>dataset.labels_field</code> и <code>dataset.content_field</code>.</p>
+<p>LoRA включается через <code>model.lora.enabled</code>. Метод обучения и его ограничения
+настраиваются отдельно от выбора энкодера; поддержка модели не требует
+экспериментального YAML-рецепта. Длины текстов, размер батча, накопление градиентов
+и размер банка опорных векторов выбираются с учётом доступной памяти.
+Разделение данных и оценка качества задаются отдельно; для сравнения методов
+используются одинаковые данные и условия.</p>
+<p>Описание исходных моделей: <a href="https://huggingface.co/Qwen/Qwen3-Embedding-4B">Qwen</a>,
+<a href="https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16">NVIDIA</a>,
+<a href="https://huggingface.co/google/embeddinggemma-300m">Google</a>,
+<a href="https://huggingface.co/tencent/WeMM-Embedding-2B">Tencent</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
               </article>
             </div>
           
@@ -612,10 +815,10 @@
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "/", "features": ["navigation.instant", "navigation.sections", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "/assets/javascripts/workers/search.f8cc74c7.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "..", "features": ["navigation.instant", "navigation.sections", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.f8cc74c7.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="/assets/javascripts/bundle.c8b220af.min.js"></script>
+      <script src="../assets/javascripts/bundle.c8b220af.min.js"></script>
       
     
   </body>
