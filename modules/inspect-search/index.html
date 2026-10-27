@@ -736,13 +736,15 @@
 with the existing <code>AgenticRAGRuntime</code> in context-acquisition mode. It does not
 replace the production runtime, change <code>/searching/agentic</code>, index documents,
 or upload datasets. Inspect is pinned because its agent API evolves independently.
-The supported pin is <code>inspect-ai==0.3.258</code> with OpenAI SDK <code>&gt;=2.45,&lt;3</code>, compatible
-with the existing server extra. Newer Inspect releases requiring OpenAI SDK 3
-must be evaluated separately before upgrading.</p>
+The supported pin is <code>inspect-ai==0.3.283</code> with OpenAI SDK <code>&gt;=3.4,&lt;4</code>, compatible
+with the server, embedder, and test extras. This optional harness requires Python
+3.11 or newer; justatom without the Inspect extra still supports Python 3.10.</p>
 <h2 id="install-and-run">Install and run<a class="headerlink" href="#install-and-run" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'.[inspect]'</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>python<span class="w"> </span>-m<span class="w"> </span>justatom.agentic.inspect_cli<span class="w"> </span>--help
 </code></pre></div>
+<p>Use a separate environment from the legacy <code>requirements.txt</code>, which pins
+<code>langchain-openai==0.2.10</code> and requires OpenAI SDK <code>&lt;2</code>.</p>
 <p>Supply a local JSONL or Parquet query file. Each row requires <code>query_id</code>, <code>query</code>,
 and a nonempty unique <code>chunk_ids</code> list. Optional <code>domain</code>, <code>language</code>, <code>universe</code>,
 and <code>depth</code> are retained for reporting. <code>answer</code> and other fields are ignored.
