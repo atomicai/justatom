@@ -4,9 +4,9 @@ An optional experiment adapter compares Inspect AI's ready-made **ReAct** agent
 with the existing `AgenticRAGRuntime` in context-acquisition mode. It does not
 replace the production runtime, change `/searching/agentic`, index documents,
 or upload datasets. Inspect is pinned because its agent API evolves independently.
-The supported pin is `inspect-ai==0.3.258` with OpenAI SDK `>=2.45,<3`, compatible
-with the existing server extra. Newer Inspect releases requiring OpenAI SDK 3
-must be evaluated separately before upgrading.
+The supported pin is `inspect-ai==0.3.283` with OpenAI SDK `>=3.4,<4`, compatible
+with the server, embedder, and test extras. This optional harness requires Python
+3.11 or newer; justatom without the Inspect extra still supports Python 3.10.
 
 ## Install and run
 
@@ -14,6 +14,9 @@ must be evaluated separately before upgrading.
 pip install '.[inspect]'
 python -m justatom.agentic.inspect_cli --help
 ```
+
+Use a separate environment from the legacy `requirements.txt`, which pins
+`langchain-openai==0.2.10` and requires OpenAI SDK `<2`.
 
 Supply a local JSONL or Parquet query file. Each row requires `query_id`, `query`,
 and a nonempty unique `chunk_ids` list. Optional `domain`, `language`, `universe`,
