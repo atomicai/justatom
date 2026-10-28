@@ -299,14 +299,15 @@ def test_native_usage_falls_back_to_real_trace_instead_of_inspect_model_usage(tm
     }
 
 
-def test_time_limited_sample_is_an_error_with_partial_coverage_and_fairness_fields(tmp_path) -> None:
+@pytest.mark.parametrize("reason", [None, "deadline reached"])
+def test_time_limited_sample_is_an_error_with_partial_coverage_and_fairness_fields(tmp_path, reason) -> None:
     record = _record("q", "question", "react", context_ids=["a"])
     record.update({"duration_ms": 123.5, "model_calls": 2, "termination_reason": "max_time"})
     sample = _sample(
         "q",
         "question",
         record,
-        limit=EvalSampleLimit(type="time", limit=1.0, reason="deadline reached"),
+        limit=EvalSampleLimit(type="time", limit=1.0, reason=reason),
     )
 
     export_results(
@@ -322,7 +323,10 @@ def test_time_limited_sample_is_an_error_with_partial_coverage_and_fairness_fiel
     assert row["evaluation"]["final_context"]["recall"] == 0.5
     assert row["duration_ms"] == 123.5
     assert row["model_calls"] == 2
-    assert row["limit"] == {"type": "time", "limit": 1.0}
+    assert row["limit"]["type"] == "time"
+    assert row["limit"]["limit"] == 1.0
+    if hasattr(sample.limit, "reason"):
+        assert row["limit"]["reason"] == reason
 
 
 @pytest.mark.parametrize("native_status", ["failed", "timed_out", "cancelled"])
