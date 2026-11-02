@@ -36,7 +36,7 @@ This means `dataset.id` is just a short alias for a fuller dataset description.
 
 `dataset.name_or_path` can point to several source types.
 
-### 1. Private Hugging Face dataset preset
+### 1. Public Hugging Face dataset preset
 
 ```yaml
 id: justatom
@@ -48,8 +48,8 @@ This preset resolves to:
 - `config: benchmark`
 - `split: full`
 
-It sets `lazy: true` and requires `HF_TOKEN` with read access to the private
-dataset.
+It sets `lazy: true`. The dataset is public; no Hugging Face login or access
+token is required to read it.
 
 ### 2. Packaged built-in dataset
 
@@ -330,7 +330,7 @@ The output filename is assembled from the search pipeline, metric snapshot, mode
 
 ## Quick Start: Training
 
-### Option A. Train with the private `justatom` benchmark
+### Option A. Train with the public `justatom` benchmark
 
 ```bash
 python -m justatom.api.train --config configs/train.yaml --dataset.id justatom
@@ -461,9 +461,10 @@ Check that one of these files exists:
 
 ### `justatom` source cannot be loaded
 
-Confirm that `HF_TOKEN` is set, has read access to the private
-`justatom/universe-retrieval-benchmark` dataset, and that the Hugging Face
-account has available private-storage capacity.
+Confirm internet access, that the `datasets` package is installed, and that
+the preset resolves to `justatom/universe-retrieval-benchmark` with
+`config: benchmark` and `split: full`. The dataset is publicly readable;
+no Hugging Face account or access token is required.
 
 ### HF dataset fails to load
 

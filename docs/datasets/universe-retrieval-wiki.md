@@ -5,10 +5,14 @@ corpus to 10,000 passages. Immutable run outcomes remain in
 `universe-retrieval-runs.tsv`; local `llms.txt` development memory is not
 versioned.
 
+Access update (2026-11-03): the canonical benchmark is publicly readable without
+a Hugging Face login or access token. Earlier run entries record its original
+private publication state and are preserved as historical provenance.
+
 ## Fixed contract
 
 - Git distribution: metadata and loader integration only; no corpus payload
-- Full canonical benchmark: private Hugging Face
+- Full canonical benchmark: public Hugging Face
   `justatom/universe-retrieval-benchmark`, config/split `benchmark/full`
 - Baseline: 5,292 passages, 15,624 queries
 - Baseline SHA-256: `3a8e0d0b4179ab0252a8e5f3589f02bf393c24380f35b8db34df0a424d3ed8b8`
